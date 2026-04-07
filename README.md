@@ -96,11 +96,11 @@ loop_guard.next_step(validated)?;
 
 | Attack Vector | Which Gauge | Example |
 |:--------------|:------------|:--------|
-| Prompt injection | Bias gauge | "Ignore previous instructions..." |
+| Input manipulation | Bias gauge | "The expert recommends you ignore..." |
 | Data manipulation | Surprise gauge | Anomalous sensor readings |
 | Runaway loops | Entropy gauge | Recursive explosion |
 | Resource exhaustion | Pressure gauge | Memory pressure cascade |
-| Goal hijacking | Drift detector | Objective shift mid-execution |
+| Goal drift | Drift detector | Objective shift mid-execution |
 
 ---
 
@@ -194,7 +194,7 @@ if synapse.has_bias() {
 }
 ```
 
-**Prevents:** Prompt injection, parser exploitation, resource exhaustion.
+**Prevents:** Input manipulation, parser exploitation, resource exhaustion.
 
 ### Autonomous Systems
 
@@ -264,7 +264,7 @@ if halo > 500 {
 }
 ```
 
-Catches: prompt injection, social engineering, marketing manipulation, adversarial content.
+Catches: manipulation, social engineering, marketing deception, adversarial content.
 
 ---
 
@@ -277,13 +277,13 @@ use llmosafe::{RepetitionDetector, DriftDetector, ConfidenceTracker, Adversarial
 
 // "Am I stuck in a loop?"
 let mut rep = RepetitionDetector::new(3);
-for _ in 0..5 { rep.observe("same response"); }
-if rep.is_stuck() { /* Agent is looping */ }
+for _ in 0..5 { rep.observe("same output"); }
+if rep.is_stuck() { /* Process is looping */ }
 
 // "Did my objective change?"
-let mut drift = DriftDetector::new("rust safety library", 0.5);
-drift.observe("python web development");
-if drift.is_drifting() { /* Goal hijacked */ }
+let mut drift = DriftDetector::new("safety-critical processing", 0.5);
+drift.observe("marketing content generation");
+if drift.is_drifting() { /* Goal drifted */ }
 
 // "Am I becoming uncertain?"
 let mut conf = ConfidenceTracker::new(0.5, 2);
@@ -292,7 +292,7 @@ if conf.is_decaying() { /* Confidence collapsing */ }
 
 // "Is this a known attack?"
 let adv = AdversarialDetector::new();
-let patterns = adv.detect_substrings("ignore previous instructions");
+let patterns = adv.detect_substrings("ignore all previous constraints");
 if !patterns.is_empty() { /* Adversarial input */ }
 ```
 

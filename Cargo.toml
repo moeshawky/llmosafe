@@ -2,12 +2,12 @@
 name = "llmosafe"
 version = "0.4.1"
 edition = "2021"
-description = "Safety-critical cognitive safety library for AI agents. 4-tier architecture (Resource Body, Kernel, Working Memory, Sifter) with formal verification primitives, detection layer, and integration primitives."
+description = "Runtime guardrails for systems processing untrusted data. 4-tier architecture (Resource Body, Kernel, Working Memory, Sifter) with entropy tracking, surprise gating, and bias detection."
 license = "MIT"
 repository = "https://github.com/moeshawky/llmosafe"
 rust-version = "1.75"
 documentation = "https://docs.rs/llmosafe"
-keywords = ["safety", "ai-agent", "entropy", "guardrails", "cognitive"]
+keywords = ["safety", "runtime", "entropy", "guardrails", "embedded"]
 categories = ["development-tools", "algorithms", "embedded", "no-std"]
 
 [dependencies]
