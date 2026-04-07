@@ -1,0 +1,41 @@
+[package]
+name = "llmosafe"
+version = "0.4.1"
+edition = "2021"
+description = "Safety-critical cognitive safety library for AI agents. 4-tier architecture (Resource Body, Kernel, Working Memory, Sifter) with formal verification primitives, detection layer, and integration primitives."
+license = "MIT"
+repository = "https://github.com/moeshawky/llmosafe"
+rust-version = "1.75"
+documentation = "https://docs.rs/llmosafe"
+keywords = ["safety", "ai-agent", "entropy", "surprisal", "cognitive-kernel", "detection", "guardrails"]
+categories = ["development-tools", "algorithms", "embedded", "no-std"]
+
+[dependencies]
+modular-bitfield = "0.13.1"
+libc = { version = "0.2", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_System_ProcessStatus", "Win32_Foundation"], optional = true }
+
+[features]
+default = ["std"]
+std = ["libc", "dep:windows-sys"]
+ffi = ["std"]
+serde = ["dep:serde"]
+full = ["std", "serde", "ffi"]
+
+[dev-dependencies]
+proptest = "1.11.0"
+criterion = "0.5"
+
+[[bench]]
+name = "llmosafe_benchmarks"
+harness = false
+
+[lib]
+name = "llmosafe"
+crate-type = ["rlib", "cdylib"]
+
+[build-dependencies]
+cbindgen = "0.29.2"
