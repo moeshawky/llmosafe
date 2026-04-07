@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/moeshawky/llmosafe"
 rust-version = "1.75"
 documentation = "https://docs.rs/llmosafe"
-keywords = ["safety", "ai-agent", "entropy", "surprisal", "cognitive-kernel", "detection", "guardrails"]
+keywords = ["safety", "ai-agent", "entropy", "guardrails", "cognitive"]
 categories = ["development-tools", "algorithms", "embedded", "no-std"]
 
 [dependencies]
