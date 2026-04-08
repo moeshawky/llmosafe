@@ -328,8 +328,8 @@ pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
 
         let mut matched = false;
         // Check buffered objective words
-        for i in 0..obj_len {
-            if trimmed_a.eq_ignore_ascii_case(obj_words[i]) {
+        for &word in obj_words.iter().take(obj_len) {
+            if trimmed_a.eq_ignore_ascii_case(word) {
                 count += 1;
                 matched = true;
                 break;
