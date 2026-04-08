@@ -308,7 +308,7 @@ impl Synapse {
     }
 
     /// Creates a Synapse from a raw u64.
-    /// 
+    ///
     /// This is used for compatibility with C-ABI functions that only
     /// expect 64 bits. Higher 64 bits are zeroed.
     pub fn from_raw_u64(bits: u64) -> Self {
@@ -316,7 +316,6 @@ impl Synapse {
         bytes[..8].copy_from_slice(&bits.to_le_bytes());
         Self::from_bytes(bytes)
     }
-
 
     pub fn entropy(&self) -> CognitiveEntropy<28, 2> {
         CognitiveEntropy::new(self.raw_entropy() as i128)
