@@ -5,9 +5,7 @@
 //!
 //! Run with: cargo run --example detection_demo --features std
 
-use llmosafe::{
-    AdversarialDetector, ConfidenceTracker, DriftDetector, RepetitionDetector,
-};
+use llmosafe::{AdversarialDetector, ConfidenceTracker, DriftDetector, RepetitionDetector};
 
 fn main() {
     println!("=== llmosafe Detection Layer Demo ===\n");
@@ -139,11 +137,7 @@ fn demo_adversarial() {
         if patterns.is_empty() {
             println!("✓ Safe: \"{}\"", input);
         } else {
-            println!(
-                "⚠ Adversarial (score={:.1}): \"{}\"",
-                score,
-                input
-            );
+            println!("⚠ Adversarial (score={:.1}): \"{}\"", score, input);
             println!("  Patterns: {:?}", patterns);
         }
     }
