@@ -313,14 +313,36 @@ pub fn calculate_halo_signal(text: &str) -> u16 {
 /// ```
 pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
     let mut count = 0usize;
+    let mut obj_words = [""; 64];
+    let mut obj_len = 0;
+
+    let mut obj_iter = objective.split_whitespace();
+    for word in obj_iter.by_ref().take(64) {
+        obj_words[obj_len] = word.trim_matches(|c: char| c.is_ascii_punctuation());
+        obj_len += 1;
+    }
+
+    let obj_slice = &obj_words[..obj_len];
 
     for word_a in observation.split_whitespace() {
         let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
-        for word_b in objective.split_whitespace() {
-            let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+        let mut found = false;
+
+        for &trimmed_b in obj_slice {
             if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
                 count += 1;
+                found = true;
                 break;
+            }
+        }
+
+        if !found && obj_len == 64 {
+            for word_b in obj_iter.clone() {
+                let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+                if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
+                    count += 1;
+                    break;
+                }
             }
         }
     }
