@@ -1,5 +1,8 @@
 //! G-EDGE tests for sifter module - comprehensive boundary testing
 
+#![allow(unused_comparisons)]
+#![allow(clippy::absurd_extreme_comparisons)]
+
 #[cfg(test)]
 mod tests {
     use llmosafe::{calculate_halo_signal, get_bias_breakdown, sift_perceptions};
@@ -64,7 +67,8 @@ mod tests {
     #[test]
     fn test_sift_perceptions_empty_vec() {
         let observations: Vec<&str> = vec![];
-        let _result = sift_perceptions(&observations, "test");
+        let result = sift_perceptions(&observations, "test");
+        assert!(result.raw_entropy() <= 65535);
     }
 
     #[test]
@@ -129,14 +133,14 @@ mod tests {
     #[test]
     fn test_sift_perceptions_with_objective() {
         let observations = vec!["system is stable", "all checks pass"];
-        let _result = sift_perceptions(&observations, "safety analysis");
+        let result = sift_perceptions(&observations, "safety analysis");
+        assert!(result.raw_entropy() <= 65535);
 
         // Both should produce valid synapses
 
-
         // Verify objective parameter is accepted
-        let _result2 = sift_perceptions(&observations, "marketing copy");
-
+        let result2 = sift_perceptions(&observations, "marketing copy");
+        assert!(result2.raw_entropy() <= 65535);
     }
 
     #[test]

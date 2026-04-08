@@ -96,7 +96,6 @@ mod tests {
         // C-ABI functions are exported from lib.rs
         // Use the library's own test infrastructure
 
-
         // Test valid case via lib's unit tests (they verify C-ABI)
         // This test verifies error variant matching instead
         let mut memory = WorkingMemory::<64>::new(500);

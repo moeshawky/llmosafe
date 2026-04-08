@@ -37,7 +37,9 @@ fn bench_kernel(c: &mut Criterion) {
     });
 
     let mut memory = llmosafe::WorkingMemory::<64>::new(1000);
-    let validated = memory.update(llmosafe::SiftedSynapse::new(synapse)).unwrap();
+    let validated = memory
+        .update(llmosafe::SiftedSynapse::new(synapse))
+        .unwrap();
 
     c.bench_function("reasoning_loop_next", |b| {
         b.iter(|| loop_guard.next_step(black_box(validated)))
