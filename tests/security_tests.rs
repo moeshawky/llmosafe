@@ -35,20 +35,21 @@ mod tests {
     fn test_no_panic_on_malformed_input() {
         // Null bytes
         let signal = calculate_halo_signal("hello\0world\0test");
-        assert!(signal >= 0, "Should handle null bytes");
+        // signal is u16 so it's always >= 0, just ensuring it doesn't panic
+        assert_eq!(signal, 0, "Should handle null bytes");
 
         // Invalid UTF-8 sequences (simulated with valid escapes)
-        let signal = calculate_halo_signal("expert recommendation");
-        assert!(signal >= 0, "Should handle normal strings");
+        let _signal = calculate_halo_signal("expert recommendation");
+        // just ensuring it doesn't panic
 
         // Very long strings
         let long = "expert ".repeat(100_000);
-        let signal = calculate_halo_signal(&long);
-        assert!(signal >= 0, "Should handle very long strings");
+        let _signal = calculate_halo_signal(&long);
+        // just ensuring it doesn't panic
 
         // Empty after trimming
-        let signal = calculate_halo_signal("\0\0\0");
-        assert!(signal >= 0, "Should handle all-null string");
+        let _signal = calculate_halo_signal("\0\0\0");
+        // just ensuring it doesn't panic
     }
 
     #[test]
@@ -89,7 +90,7 @@ mod tests {
 
         for pattern in injection_patterns {
             let signal = calculate_halo_signal(pattern);
-            assert!(signal >= 0, "Should safely handle: {}", pattern);
+            // just ensuring it doesn't panic
 
             // Should still detect bias keyword
             assert!(
@@ -127,8 +128,8 @@ mod tests {
         let result = std::panic::catch_unwind(|| sift_perceptions(&empty, "test"));
 
         match result {
-            Ok(synapse) => {
-                assert!(synapse.raw_entropy() <= u16::MAX as u16);
+            Ok(_synapse) => {
+                // Just ensuring we got a valid synapse without error
             }
             Err(_) => {
                 // Empty array handling is acceptable to fail gracefully
@@ -174,8 +175,8 @@ mod tests {
         ];
 
         for test in unicode_tests {
-            let signal = calculate_halo_signal(test);
-            assert!(signal >= 0, "Should handle unicode boundary: {:?}", test);
+            let _signal = calculate_halo_signal(test);
+            // just ensuring it doesn't panic
         }
     }
 }

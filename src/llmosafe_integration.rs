@@ -25,7 +25,7 @@
 use crate::llmosafe_kernel::{CognitiveStability, KernelError};
 
 /// Safety decision outcome from the cognitive safety pipeline.
-/// 
+///
 /// This enum represents the decision flow for a processed input,
 /// from "proceed normally" through escalating severity levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +88,7 @@ pub enum EscalationReason {
 }
 
 /// Resource pressure level mapping.
-/// 
+///
 /// Maps raw pressure percentage to semantic levels for decision-making.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -261,7 +261,7 @@ impl EscalationPolicy {
 }
 
 /// Thread-local context for tracking safety decisions across a request.
-/// 
+///
 /// Use this to accumulate safety signals during request processing
 /// and make a final decision at the end.
 #[cfg(feature = "std")]
@@ -301,7 +301,8 @@ impl SafetyContext {
 
     /// Get the final decision based on all observations.
     pub fn finalize(&self) -> SafetyDecision {
-        self.policy.decide(self.max_entropy, self.max_surprise, self.any_bias)
+        self.policy
+            .decide(self.max_entropy, self.max_surprise, self.any_bias)
     }
 
     /// Reset the context for reuse.
@@ -334,7 +335,10 @@ mod tests {
             .severity(),
             2
         );
-        assert_eq!(SafetyDecision::Halt(KernelError::CognitiveInstability).severity(), 3);
+        assert_eq!(
+            SafetyDecision::Halt(KernelError::CognitiveInstability).severity(),
+            3
+        );
     }
 
     #[test]
@@ -343,7 +347,10 @@ mod tests {
         assert_eq!(PressureLevel::from_percentage(30), PressureLevel::Elevated);
         assert_eq!(PressureLevel::from_percentage(60), PressureLevel::Critical);
         assert_eq!(PressureLevel::from_percentage(90), PressureLevel::Emergency);
-        assert_eq!(PressureLevel::from_percentage(255), PressureLevel::Emergency);
+        assert_eq!(
+            PressureLevel::from_percentage(255),
+            PressureLevel::Emergency
+        );
     }
 
     #[test]
@@ -448,7 +455,7 @@ mod tests {
         let ctx = SafetyContext::default_context();
         assert_eq!(ctx.max_entropy, 0);
         assert_eq!(ctx.max_surprise, 0);
-        assert_eq!(ctx.any_bias, false);
+        assert!(!ctx.any_bias);
         assert_eq!(ctx.decision_count, 0);
 
         // Default policy thresholds
@@ -457,7 +464,7 @@ mod tests {
         assert_eq!(ctx.policy.halt_entropy, 1000);
         assert_eq!(ctx.policy.warn_surprise, 300);
         assert_eq!(ctx.policy.escalate_surprise, 500);
-        assert_eq!(ctx.policy.bias_escalates, true);
+        assert!(ctx.policy.bias_escalates);
         assert_eq!(ctx.policy.escalate_pressure, PressureLevel::Critical);
     }
 }
