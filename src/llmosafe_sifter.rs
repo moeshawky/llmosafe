@@ -238,24 +238,33 @@ fn word_in_list(word: &str, list: &[&str]) -> bool {
 pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
     let mut breakdown = BiasBreakdown::default();
 
-    let mut window: [&str; 4] = ["", "", "", ""];
+    // Performance optimization: Replace the 4-element sliding window and nested array
+    // traversal with a simple integer Time-To-Live (TTL) counter.
+    // This turns an O(N * window_size) scan into a strict O(N) evaluation,
+    // reducing redundant `trim_matches` and array lookups by ~3x on average.
+    let mut negation_ttl = 0;
 
     for raw_word in text.split_whitespace() {
-        window[0] = window[1];
-        window[1] = window[2];
-        window[2] = window[3];
-        window[3] = raw_word;
+        let trimmed = raw_word.trim_matches(|c: char| c.is_ascii_punctuation());
 
-        let negated = window[..3].iter().any(|w| {
-            let trimmed = w.trim_matches(|c: char| c.is_ascii_punctuation());
-            word_in_list(trimmed, NEGATION_WORDS)
-        });
+        // Check if the current word was negated by a previous word
+        let negated = negation_ttl > 0;
 
+        // If the current word is a negation word, reset the TTL to 3.
+        // We do this after checking `negated` so the negation word itself
+        // could technically be evaluated for biases if it wasn't previously negated
+        // (preserving exactly the original behavior edge-case).
+        if word_in_list(trimmed, NEGATION_WORDS) {
+            negation_ttl = 3;
+        } else if negation_ttl > 0 {
+            // Decrement TTL for non-negation words
+            negation_ttl -= 1;
+        }
+
+        // Skip bias checks if this word was caught in a negation window
         if negated {
             continue;
         }
-
-        let trimmed = raw_word.trim_matches(|c: char| c.is_ascii_punctuation());
 
         if word_in_list(trimmed, AUTHORITY_BIAS) {
             breakdown.authority = breakdown.authority.saturating_add(100);
