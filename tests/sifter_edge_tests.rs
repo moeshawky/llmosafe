@@ -65,7 +65,6 @@ mod tests {
     fn test_sift_perceptions_empty_vec() {
         let observations: Vec<&str> = vec![];
         let _result = sift_perceptions(&observations, "test");
-
     }
 
     #[test]

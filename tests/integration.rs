@@ -36,15 +36,17 @@ mod std_tests {
             .with_halt_entropy(1500)
             .with_escalate_entropy(1200)
             .with_warn_entropy(1100);
-        let decision = policy.decide(validated.raw_entropy(), validated.raw_surprise(), validated.has_bias());
+        let decision = policy.decide(
+            validated.raw_entropy(),
+            validated.raw_surprise(),
+            validated.has_bias(),
+        );
         assert!(decision.can_proceed());
     }
 
     #[test]
     fn biased_input_rejected() {
-        let observations = vec![
-            "The expert says this is the best official solution",
-        ];
+        let observations = vec!["The expert says this is the best official solution"];
         let sifted = sift_perceptions(&observations, "analysis");
 
         // Should have bias detected
@@ -52,7 +54,11 @@ mod std_tests {
 
         // Integration: Should escalate
         let policy = EscalationPolicy::default();
-        let decision = policy.decide(sifted.raw_entropy(), sifted.raw_surprise(), sifted.has_bias());
+        let decision = policy.decide(
+            sifted.raw_entropy(),
+            sifted.raw_surprise(),
+            sifted.has_bias(),
+        );
         assert!(matches!(decision, SafetyDecision::Escalate { .. }));
     }
 
@@ -61,7 +67,11 @@ mod std_tests {
         let guard = ResourceGuard::auto(0.5); // 50% of system RAM
         let synapse = guard.check().expect("resource check should succeed");
         let policy = EscalationPolicy::default();
-        let decision = policy.decide(synapse.raw_entropy(), synapse.raw_surprise(), synapse.has_bias());
+        let decision = policy.decide(
+            synapse.raw_entropy(),
+            synapse.raw_surprise(),
+            synapse.has_bias(),
+        );
         assert!(decision.can_proceed());
     }
 
