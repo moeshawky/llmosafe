@@ -313,14 +313,37 @@ pub fn calculate_halo_signal(text: &str) -> u16 {
 /// ```
 pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
     let mut count = 0usize;
+    const BUF_SIZE: usize = 64;
+    let mut obj_words = [""; BUF_SIZE];
+    let mut obj_len = 0;
+
+    let mut obj_iter = objective.split_whitespace();
+    for word_b in obj_iter.by_ref().take(BUF_SIZE) {
+        obj_words[obj_len] = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+        obj_len += 1;
+    }
 
     for word_a in observation.split_whitespace() {
         let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
-        for word_b in objective.split_whitespace() {
-            let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
-            if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
+
+        let mut matched = false;
+        // Check buffered objective words
+        for i in 0..obj_len {
+            if trimmed_a.eq_ignore_ascii_case(obj_words[i]) {
                 count += 1;
+                matched = true;
                 break;
+            }
+        }
+
+        // If not matched and objective is longer than BUF_SIZE words, we iterate the rest
+        if !matched {
+            for word_b in obj_iter.clone() {
+                let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+                if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
+                    count += 1;
+                    break;
+                }
             }
         }
     }
