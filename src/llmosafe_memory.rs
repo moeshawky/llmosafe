@@ -80,19 +80,14 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
 
     pub fn trend(&self) -> f64 {
         let n = SIZE as f64;
-        let mut sum_x = 0.0;
-        let mut sum_y = 0.0;
-        let mut sum_xy = 0.0;
-        let mut sum_xx = 0.0;
-
-        for (i, e) in self.state.iter().enumerate() {
-            let x = i as f64;
-            let y = e.mantissa() as f64;
-            sum_x += x;
-            sum_y += y;
-            sum_xy += x * y;
-            sum_xx += x * x;
-        }
+        let (sum_x, sum_y, sum_xy, sum_xx) = self.state.iter().enumerate().fold(
+            (0.0, 0.0, 0.0, 0.0),
+            |(sum_x, sum_y, sum_xy, sum_xx), (i, e)| {
+                let x = i as f64;
+                let y = e.mantissa() as f64;
+                (sum_x + x, sum_y + y, sum_xy + x * y, sum_xx + x * x)
+            },
+        );
 
         (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x)
     }
