@@ -39,3 +39,7 @@ crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
 cbindgen = "0.29.2"
+
+# Pin clap to < 4.6.0 because 4.6.0 requires Rust 2024 edition which is incompatible with Rust 1.70.0
+# (cbindgen and criterion use clap)
+clap = "=4.5.21"
