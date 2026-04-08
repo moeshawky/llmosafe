@@ -2,8 +2,8 @@
 //!
 //! These tests verify invariants hold across a wide range of inputs.
 use llmosafe::{
-    calculate_halo_signal, get_bias_breakdown, ConfidenceTracker, DriftDetector,
-    EscalationPolicy, PressureLevel, RepetitionDetector, Synapse, WorkingMemory,
+    calculate_halo_signal, get_bias_breakdown, ConfidenceTracker, DriftDetector, EscalationPolicy,
+    PressureLevel, RepetitionDetector, Synapse, WorkingMemory,
 };
 use proptest::prelude::*;
 
