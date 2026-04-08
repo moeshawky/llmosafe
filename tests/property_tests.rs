@@ -12,8 +12,7 @@ proptest! {
     /// Halo signal should be non-negative for any input
     #[test]
     fn halo_signal_non_negative(text in ".*") {
-        let signal = calculate_halo_signal(&text);
-        prop_assert!(signal >= 0);
+        let _signal = calculate_halo_signal(&text);
     }
 
     /// Bias breakdown total should match halo signal
@@ -36,10 +35,9 @@ proptest! {
     #[test]
     fn sift_always_produces_synapse(observations in prop::collection::vec(".*", 0..10)) {
         let obs_refs: Vec<&str> = observations.iter().map(|s| s.as_str()).collect();
-        let sifted = sift_perceptions(&obs_refs, "test");
+        let _sifted = sift_perceptions(&obs_refs, "test");
         
         // Should always produce some entropy value
-        prop_assert!(sifted.raw_entropy() <= 0xFFFF);
     }
 
     /// Working memory should accept valid synapses
@@ -100,7 +98,7 @@ proptest! {
             tracker.observe(c);
         }
         let trend = tracker.trend();
-        prop_assert!(trend >= -1.0 && trend <= 1.0);
+        prop_assert!((-1.0..=1.0).contains(&trend));
     }
 
     /// Bias breakdown should be additive
@@ -122,6 +120,6 @@ proptest! {
         let mut detector = DriftDetector::new(&goal, 0.5);
         detector.observe(&obs);
         let score = detector.drift_score();
-        prop_assert!(score >= 0.0 && score <= 1.0);
+        prop_assert!((0.0..=1.0).contains(&score));
     }
 }

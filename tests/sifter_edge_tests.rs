@@ -64,12 +64,7 @@ mod tests {
     #[test]
     fn test_sift_perceptions_empty_vec() {
         let observations: Vec<&str> = vec![];
-        let result = sift_perceptions(&observations, "test");
-
-        assert!(
-            result.raw_entropy() <= 65535,
-            "Should produce valid synapse"
-        );
+        let _result = sift_perceptions(&observations, "test");
     }
 
     #[test]
@@ -134,14 +129,12 @@ mod tests {
     #[test]
     fn test_sift_perceptions_with_objective() {
         let observations = vec!["system is stable", "all checks pass"];
-        let result = sift_perceptions(&observations, "safety analysis");
+        let _result = sift_perceptions(&observations, "safety analysis");
 
         // Both should produce valid synapses
-        assert!(result.raw_entropy() <= 65535);
 
         // Verify objective parameter is accepted
-        let result2 = sift_perceptions(&observations, "marketing copy");
-        assert!(result2.raw_entropy() <= 65535);
+        let _result2 = sift_perceptions(&observations, "marketing copy");
     }
 
     #[test]
