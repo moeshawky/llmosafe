@@ -6,8 +6,7 @@
 //! Run with: cargo run --example tower_middleware --features full
 
 use llmosafe::{
-    sift_perceptions, EscalationPolicy, PressureLevel, SafetyContext, SafetyDecision,
-    WorkingMemory,
+    sift_perceptions, EscalationPolicy, PressureLevel, SafetyContext, SafetyDecision, WorkingMemory,
 };
 
 /// A mock Tower Service for demonstration.
@@ -38,9 +37,7 @@ impl MockService {
                 eprintln!("Warning: {}", reason);
                 Ok(format!("Processed with warning: {}", request))
             }
-            SafetyDecision::Escalate { .. } => {
-                Err(llmosafe::KernelError::BiasHaloDetected)
-            }
+            SafetyDecision::Escalate { .. } => Err(llmosafe::KernelError::BiasHaloDetected),
             SafetyDecision::Halt(err) => Err(err),
         }
     }

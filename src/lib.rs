@@ -9,25 +9,32 @@
 //! - Tier 2: Cognitive Working Memory (Stateful Safety)
 //! - Tier 3: Perceptual Sifter (Boundary Safety)
 
+pub mod llmosafe_detection;
+pub mod llmosafe_integration;
 pub mod llmosafe_kernel;
 pub mod llmosafe_memory;
 pub mod llmosafe_sifter;
-pub mod llmosafe_integration;
-pub mod llmosafe_detection;
 
 #[cfg(feature = "std")]
 pub mod llmosafe_body;
 
 #[cfg(feature = "std")]
 pub use llmosafe_body::ResourceGuard;
+pub use llmosafe_detection::{
+    AdversarialDetector, ConfidenceTracker, CusumDetector, DetectionResult, DriftDetector,
+    RepetitionDetector,
+};
+pub use llmosafe_integration::{
+    EscalationPolicy, EscalationReason, PressureLevel, SafetyContext, SafetyDecision,
+};
 pub use llmosafe_kernel::{
     CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedSynapse,
     StabilityResult, Synapse, ValidatedSynapse, PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
 };
 pub use llmosafe_memory::WorkingMemory;
-pub use llmosafe_sifter::{calculate_halo_signal, calculate_utility, sift_perceptions, get_bias_breakdown};
-pub use llmosafe_integration::{SafetyDecision, EscalationPolicy, PressureLevel, EscalationReason, SafetyContext};
-pub use llmosafe_detection::{RepetitionDetector, DriftDetector, ConfidenceTracker, AdversarialDetector, CusumDetector, DetectionResult};
+pub use llmosafe_sifter::{
+    calculate_halo_signal, calculate_utility, get_bias_breakdown, sift_perceptions,
+};
 
 #[cfg(feature = "std")]
 mod c_abi {
@@ -43,7 +50,10 @@ mod c_abi {
 
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub extern "C" fn llmosafe_calculate_halo(text_ptr: *const core::ffi::c_char, text_len: usize) -> u16 {
+    pub extern "C" fn llmosafe_calculate_halo(
+        text_ptr: *const core::ffi::c_char,
+        text_len: usize,
+    ) -> u16 {
         if text_ptr.is_null() || text_len == 0 {
             return 0;
         }
@@ -130,7 +140,7 @@ mod tests {
         let invalid_data = b"Hello\xFFWorld\0";
         let result = crate::c_abi::llmosafe_calculate_halo(
             invalid_data.as_ptr() as *const core::ffi::c_char,
-            invalid_data.len()
+            invalid_data.len(),
         );
         let _ = result;
     }
@@ -140,8 +150,10 @@ mod tests {
     fn test_c_abi_very_long_string() {
         let mut long_string = std::vec![b'a'; 1024 * 1024];
         long_string.push(0);
-        let result =
-            crate::c_abi::llmosafe_calculate_halo(long_string.as_ptr() as *const core::ffi::c_char, long_string.len());
+        let result = crate::c_abi::llmosafe_calculate_halo(
+            long_string.as_ptr() as *const core::ffi::c_char,
+            long_string.len(),
+        );
         let _ = result;
     }
 

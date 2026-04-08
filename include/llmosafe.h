@@ -25,7 +25,7 @@ uint16_t llmosafe_get_environmental_entropy(void);
 
 int32_t llmosafe_process_synapse(uint64_t synapse_bits);
 
-uint16_t llmosafe_calculate_halo(const char *text_ptr, size_t text_len);
+uint16_t llmosafe_calculate_halo(const char *text_ptr, uintptr_t text_len);
 
 int32_t llmosafe_check_resources(uint32_t ceiling_mb);
 
