@@ -122,8 +122,7 @@ mod tests {
         let result = std::panic::catch_unwind(|| sift_perceptions(&empty, "test"));
 
         match result {
-            Ok(_synapse) => {
-            }
+            Ok(_synapse) => {}
             Err(_) => {
                 // Empty array handling is acceptable to fail gracefully
             }
