@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rust: [stable, 1.70.0] # 1.70.0 as a sample MSRV
+        rust: [stable, 1.75.0] # 1.75.0 as specified in rust-version
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@master
