@@ -1,12 +1,11 @@
 //! Property-based tests using proptest
 //!
 //! These tests verify invariants hold across a wide range of inputs.
-use proptest::prelude::*;
 use llmosafe::{
-    calculate_halo_signal, get_bias_breakdown, sift_perceptions, Synapse,
-    WorkingMemory, EscalationPolicy, PressureLevel, RepetitionDetector,
-    DriftDetector, ConfidenceTracker,
+    calculate_halo_signal, get_bias_breakdown, sift_perceptions, ConfidenceTracker, DriftDetector,
+    EscalationPolicy, PressureLevel, RepetitionDetector, Synapse, WorkingMemory,
 };
+use proptest::prelude::*;
 
 proptest! {
     /// Halo signal should be non-negative for any input
@@ -36,7 +35,7 @@ proptest! {
     fn sift_always_produces_synapse(observations in prop::collection::vec(".*", 0..10)) {
         let obs_refs: Vec<&str> = observations.iter().map(|s| s.as_str()).collect();
         let _sifted = sift_perceptions(&obs_refs, "test");
-        
+
         // Should always produce some entropy value
     }
 
@@ -56,7 +55,7 @@ proptest! {
     #[test]
     fn pressure_level_monotonic(pct in 0u8..=100u8) {
         let level = PressureLevel::from_percentage(pct);
-        
+
         // Verify ordering
         if pct <= 25 {
             prop_assert!(level == PressureLevel::Nominal);
