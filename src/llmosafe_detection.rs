@@ -400,8 +400,9 @@ impl CusumDetector {
 
     /// Update with a new value. Returns true if anomaly detected.
     pub fn update(&mut self, val: f64) -> bool {
-        self.s_high = (0.0f64).max(self.s_high + (val - self.mu_ref) - self.k);
-        self.s_low = (0.0f64).max(self.s_low - (val - self.mu_ref) - self.k);
+        let diff = val - self.mu_ref;
+        self.s_high = (0.0f64).max(self.s_high + diff - self.k);
+        self.s_low = (0.0f64).max(self.s_low - diff - self.k);
         self.s_high > self.h || self.s_low > self.h
     }
 
