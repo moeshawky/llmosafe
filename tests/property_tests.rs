@@ -11,7 +11,7 @@ proptest! {
     /// Halo signal should be non-negative for any input
     #[test]
     fn halo_signal_non_negative(text in ".*") {
-        let signal = calculate_halo_signal(&text);
+        let _signal = calculate_halo_signal(&text);
     }
 
     /// Bias breakdown total should match halo signal
@@ -34,7 +34,7 @@ proptest! {
     #[test]
     fn sift_always_produces_synapse(observations in prop::collection::vec(".*", 0..10)) {
         let obs_refs: Vec<&str> = observations.iter().map(|s| s.as_str()).collect();
-        let sifted = sift_perceptions(&obs_refs, "test");
+        let _sifted = sift_perceptions(&obs_refs, "test");
 
         // Should always produce some entropy value
     }
