@@ -28,6 +28,9 @@ full = ["std", "serde", "ffi"]
 [dev-dependencies]
 proptest = "1.11.0"
 criterion = "0.5"
+clap = "=4.5.21"
+getrandom = "=0.2.15"
+tempfile = "=3.10.1"
 
 [[bench]]
 name = "llmosafe_benchmarks"
