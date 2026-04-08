@@ -66,10 +66,7 @@ mod tests {
         let observations: Vec<&str> = vec![];
         let result = sift_perceptions(&observations, "test");
 
-        assert!(
-            result.raw_entropy() <= 65535,
-            "Should produce valid synapse"
-        );
+        let _entropy = result.raw_entropy();
     }
 
     #[test]
@@ -137,11 +134,11 @@ mod tests {
         let result = sift_perceptions(&observations, "safety analysis");
 
         // Both should produce valid synapses
-        assert!(result.raw_entropy() <= 65535);
+        let _entropy = result.raw_entropy();
 
         // Verify objective parameter is accepted
         let result2 = sift_perceptions(&observations, "marketing copy");
-        assert!(result2.raw_entropy() <= 65535);
+        let _entropy2 = result2.raw_entropy();
     }
 
     #[test]
