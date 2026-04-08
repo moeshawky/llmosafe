@@ -31,13 +31,22 @@ fn bench_kernel(c: &mut Criterion) {
     synapse.set_raw_entropy(500);
     synapse.set_raw_surprise(100);
     let mut loop_guard = ReasoningLoop::<100>::new();
+    let mut memory = WorkingMemory::<64>::new(1000);
+    let mut synapse_for_loop = Synapse::new();
+    synapse_for_loop.set_raw_entropy(500);
+    synapse_for_loop.set_raw_surprise(100);
+    let sifted = llmosafe::SiftedSynapse::new(synapse_for_loop);
+    let validated = memory.update(sifted).unwrap();
 
     c.bench_function("synapse_validate", |b| {
         b.iter(|| black_box(synapse).validate())
     });
 
     c.bench_function("reasoning_loop_next", |b| {
-        b.iter(|| loop_guard.next_step(black_box(synapse)))
+        b.iter(|| {
+            loop_guard.next_step(black_box(validated)).unwrap();
+            black_box(());
+        })
     });
 }
 
