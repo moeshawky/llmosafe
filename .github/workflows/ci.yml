@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rust: [stable, 1.70.0] # 1.70.0 as a sample MSRV
+        rust: [stable, 1.76.0] # 1.76.0 is the minimum rust-version from Cargo.toml
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@master
