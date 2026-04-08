@@ -75,32 +75,20 @@ impl DynamicStabilityMonitor {
         let high_unstable = idx > self.hi_idx.wrapping_add(self.k);
         let low_unstable = idx < self.lo_idx.saturating_sub(self.k);
 
-        if high_unstable || low_unstable {
-            // Adapt envelopes even on instability to prevent lockout
-            if idx > self.hi_idx {
-                self.hi_idx = idx;
-            }
-            if idx < self.lo_idx {
-                self.lo_idx = idx;
-            }
-            return if high_unstable && low_unstable {
-                StabilityResult::Both
-            } else if high_unstable {
-                StabilityResult::High
-            } else {
-                StabilityResult::Low
-            };
-        }
-
         // Adapt envelopes (self-calibrating)
-        if idx > self.hi_idx {
-            self.hi_idx = idx;
-        }
-        if idx < self.lo_idx {
-            self.lo_idx = idx;
-        }
+        // Adapt envelopes even on instability to prevent lockout
+        self.hi_idx = core::cmp::max(self.hi_idx, idx);
+        self.lo_idx = core::cmp::min(self.lo_idx, idx);
 
-        StabilityResult::Stable
+        if high_unstable && low_unstable {
+            StabilityResult::Both
+        } else if high_unstable {
+            StabilityResult::High
+        } else if low_unstable {
+            StabilityResult::Low
+        } else {
+            StabilityResult::Stable
+        }
     }
 
     /// Get current adaptive thresholds based on observed envelopes.
