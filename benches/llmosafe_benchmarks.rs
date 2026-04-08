@@ -1,8 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use llmosafe::{
-    calculate_halo_signal, get_bias_breakdown, sift_perceptions, Synapse,
-    WorkingMemory, ReasoningLoop, EscalationPolicy, CusumDetector,
-    RepetitionDetector, DriftDetector, ConfidenceTracker, AdversarialDetector,
+    calculate_halo_signal, get_bias_breakdown, sift_perceptions, AdversarialDetector,
+    ConfidenceTracker, CusumDetector, DriftDetector, EscalationPolicy, ReasoningLoop,
+    RepetitionDetector, Synapse, WorkingMemory,
 };
 
 fn bench_sifter(c: &mut Criterion) {
@@ -36,8 +36,11 @@ fn bench_kernel(c: &mut Criterion) {
         b.iter(|| black_box(synapse).validate())
     });
 
+    let mut memory = WorkingMemory::<64>::new(1000);
+    let sifted = llmosafe::SiftedSynapse::new(synapse);
+    let validated = memory.update(sifted).unwrap();
     c.bench_function("reasoning_loop_next", |b| {
-        b.iter(|| loop_guard.next_step(black_box(synapse)))
+        b.iter(|| loop_guard.next_step(black_box(validated)))
     });
 }
 
