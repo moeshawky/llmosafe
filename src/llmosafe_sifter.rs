@@ -316,12 +316,11 @@ pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
 
     for word_a in observation.split_whitespace() {
         let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
-        for word_b in objective.split_whitespace() {
+        if objective.split_whitespace().any(|word_b| {
             let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
-            if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
-                count += 1;
-                break;
-            }
+            trimmed_a.eq_ignore_ascii_case(trimmed_b)
+        }) {
+            count += 1;
         }
     }
 
