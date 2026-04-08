@@ -66,10 +66,9 @@ mod tests {
         let observations: Vec<&str> = vec![];
         let result = sift_perceptions(&observations, "test");
 
-        assert!(
-            result.raw_entropy() <= 65535,
-            "Should produce valid synapse"
-        );
+        // result.raw_entropy() is u16, so it's always <= u16::MAX.
+        // It's a valid synapse.
+        let _ = result.raw_entropy();
     }
 
     #[test]
@@ -78,7 +77,7 @@ mod tests {
         let result = sift_perceptions(&observations, "test");
 
         assert!(
-            result.raw_entropy() < 65535,
+            result.raw_entropy() < u16::MAX,
             "Single element should have reasonable entropy"
         );
     }
@@ -137,11 +136,11 @@ mod tests {
         let result = sift_perceptions(&observations, "safety analysis");
 
         // Both should produce valid synapses
-        assert!(result.raw_entropy() <= 65535);
+        let _ = result.raw_entropy();
 
         // Verify objective parameter is accepted
         let result2 = sift_perceptions(&observations, "marketing copy");
-        assert!(result2.raw_entropy() <= 65535);
+        let _ = result2.raw_entropy();
     }
 
     #[test]
