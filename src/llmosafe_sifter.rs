@@ -399,6 +399,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_adler32_empty() {
+        assert_eq!(adler32::adler32(b""), 1);
+    }
+
+    #[test]
+    fn test_adler32_simple() {
+        // "Wikipedia" adler32 is 0x11E60398 (300286872)
+        assert_eq!(adler32::adler32(b"Wikipedia"), 0x11E60398);
+    }
+
+    #[test]
+    fn test_adler32_single_char() {
+        // "a" -> a = 98, b = 98 -> (98 << 16) | 98 = 6422626
+        assert_eq!(adler32::adler32(b"a"), 6422626);
+    }
+
+    #[test]
     fn test_negation_awareness() {
         let text = "The agent is not an expert.";
         let breakdown = get_bias_breakdown(text);
