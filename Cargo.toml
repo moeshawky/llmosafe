@@ -28,6 +28,8 @@ full = ["std", "serde", "ffi"]
 [dev-dependencies]
 proptest = "1.11.0"
 criterion = "0.5"
+# Force clap to 4.5.31 to avoid Rust 1.70 incompatible 4.6.0 (2024 edition)
+clap = "=4.5.31"
 
 [[bench]]
 name = "llmosafe_benchmarks"
@@ -39,3 +41,5 @@ crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
 cbindgen = "0.29.2"
+# Force clap to 4.5.31 to avoid Rust 1.70 incompatible 4.6.0 (2024 edition)
+clap = "=4.5.31"
