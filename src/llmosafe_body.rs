@@ -245,6 +245,12 @@ impl ResourceGuard {
     fn parse_proc_stat() -> Option<(u64, u64)> {
         let stat = fs::read_to_string("/proc/stat").ok()?;
         let line = stat.lines().next()?;
+        Self::parse_proc_stat_line(line)
+    }
+
+    /// Parses a single line matching the "cpu " line from /proc/stat.
+    #[cfg(target_os = "linux")]
+    fn parse_proc_stat_line(line: &str) -> Option<(u64, u64)> {
         let parts: Vec<&str> = line.split_whitespace().skip(1).collect();
         if parts.len() >= 5 {
             let user: u64 = parts[0].parse().unwrap_or(0);
@@ -280,6 +286,17 @@ impl ResourceGuard {
         }
     }
 
+    /// Calculates CPU load percentage from two /proc/stat readings.
+    pub fn calculate_cpu_load(active1: u64, total1: u64, active2: u64, total2: u64) -> u8 {
+        let d_active = active2.saturating_sub(active1);
+        let d_total = total2.saturating_sub(total1);
+        if d_total == 0 {
+            return 0;
+        }
+        let load = (d_active as f64 / d_total as f64) * 100.0;
+        load.clamp(0.0, 100.0) as u8
+    }
+
     /// Returns the current CPU load percentage (0-100) using delta measurement.
     /// Reads /proc/stat twice with a 100ms sleep to compute instantaneous load.
     pub fn system_cpu_load() -> u8 {
@@ -288,12 +305,7 @@ impl ResourceGuard {
             if let Some((active1, total1)) = Self::parse_proc_stat() {
                 thread::sleep(Duration::from_millis(100));
                 if let Some((active2, total2)) = Self::parse_proc_stat() {
-                    let d_active = active2.saturating_sub(active1);
-                    let d_total = total2.saturating_sub(total1);
-                    if d_total == 0 {
-                        return 0;
-                    }
-                    return ((d_active as f64 / d_total as f64) * 100.0) as u8;
+                    return Self::calculate_cpu_load(active1, total1, active2, total2);
                 }
             }
             0
@@ -350,6 +362,36 @@ mod tests {
         assert!(load2 <= 100);
     }
 
+    #[test]
+    fn test_calculate_cpu_load_zero_delta() {
+        assert_eq!(ResourceGuard::calculate_cpu_load(100, 200, 100, 200), 0);
+    }
+
+    #[test]
+    fn test_calculate_cpu_load_half_load() {
+        // Active increased by 50, total increased by 100 -> 50%
+        assert_eq!(ResourceGuard::calculate_cpu_load(100, 200, 150, 300), 50);
+    }
+
+    #[test]
+    fn test_calculate_cpu_load_full_load() {
+        // Active increased by 100, total increased by 100 -> 100%
+        assert_eq!(ResourceGuard::calculate_cpu_load(100, 200, 200, 300), 100);
+    }
+
+    #[test]
+    fn test_calculate_cpu_load_backwards_counters() {
+        // Time traveled backwards or counters reset - should use saturating_sub and return 0
+        assert_eq!(ResourceGuard::calculate_cpu_load(200, 300, 100, 200), 0);
+    }
+
+    #[test]
+    fn test_calculate_cpu_load_exceeds_bounds() {
+        // Normally active delta <= total delta. If for some reason active delta > total delta,
+        // it should be clamped to 100%.
+        assert_eq!(ResourceGuard::calculate_cpu_load(100, 200, 250, 300), 100);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn test_parse_proc_stat_returns_some() {
@@ -370,5 +412,48 @@ mod tests {
             "iowait ratio {} should be in [0.0, 1.0]",
             ratio
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_proc_stat_line_valid() {
+        let line = "cpu  1000 0 2000 7000 0 0 0 0 0 0";
+        let result = ResourceGuard::parse_proc_stat_line(line);
+        assert!(result.is_some());
+        let (active, total) = result.unwrap();
+        // user(1000) + nice(0) + system(2000) = 3000
+        assert_eq!(active, 3000);
+        // active(3000) + idle(7000) + iowait(0) = 10000
+        assert_eq!(total, 10000);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_proc_stat_line_incomplete() {
+        let line = "cpu  1000 0 2000";
+        let result = ResourceGuard::parse_proc_stat_line(line);
+        assert!(result.is_none(), "Should fail gracefully on incomplete lines");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_proc_stat_line_invalid_numbers() {
+        let line = "cpu  invalid 0 system 7000 0";
+        let result = ResourceGuard::parse_proc_stat_line(line);
+        assert!(result.is_some());
+        let (active, total) = result.unwrap();
+        // Unparseable should become 0
+        // user(0) + nice(0) + system(0) = 0
+        assert_eq!(active, 0);
+        // active(0) + idle(7000) + iowait(0) = 7000
+        assert_eq!(total, 7000);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_proc_stat_line_empty() {
+        let line = "";
+        let result = ResourceGuard::parse_proc_stat_line(line);
+        assert!(result.is_none());
     }
 }
