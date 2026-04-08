@@ -1,8 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use llmosafe::{
-    calculate_halo_signal, get_bias_breakdown, sift_perceptions, Synapse,
-    WorkingMemory, ReasoningLoop, EscalationPolicy, CusumDetector,
-    RepetitionDetector, DriftDetector, ConfidenceTracker, AdversarialDetector,
+    calculate_halo_signal, get_bias_breakdown, sift_perceptions, AdversarialDetector,
+    ConfidenceTracker, CusumDetector, DriftDetector, EscalationPolicy, ReasoningLoop,
+    RepetitionDetector, Synapse, WorkingMemory,
 };
 
 fn bench_sifter(c: &mut Criterion) {
@@ -32,12 +32,20 @@ fn bench_kernel(c: &mut Criterion) {
     synapse.set_raw_surprise(100);
     let mut loop_guard = ReasoningLoop::<100>::new();
 
+    // We must validate after converting to a SiftedSynapse and memory update normally,
+    // but here we just manually create one for benchmarking if we can, or bypass.
+    // Actually `synapse.validate()` returns Result<(), KernelError>, it doesn't return ValidatedSynapse!
+    // Let's create a ValidatedSynapse properly via WorkingMemory.
+    let sifted = llmosafe::SiftedSynapse::new(synapse);
+    let mut memory = llmosafe::WorkingMemory::<64>::new(1000);
+    let validated = memory.update(sifted).unwrap();
+
     c.bench_function("synapse_validate", |b| {
         b.iter(|| black_box(synapse).validate())
     });
 
     c.bench_function("reasoning_loop_next", |b| {
-        b.iter(|| loop_guard.next_step(black_box(synapse)))
+        b.iter(|| loop_guard.next_step(black_box(validated)))
     });
 }
 

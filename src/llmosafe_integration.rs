@@ -25,7 +25,7 @@
 use crate::llmosafe_kernel::{CognitiveStability, KernelError};
 
 /// Safety decision outcome from the cognitive safety pipeline.
-/// 
+///
 /// This enum represents the decision flow for a processed input,
 /// from "proceed normally" through escalating severity levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +88,7 @@ pub enum EscalationReason {
 }
 
 /// Resource pressure level mapping.
-/// 
+///
 /// Maps raw pressure percentage to semantic levels for decision-making.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -261,7 +261,7 @@ impl EscalationPolicy {
 }
 
 /// Thread-local context for tracking safety decisions across a request.
-/// 
+///
 /// Use this to accumulate safety signals during request processing
 /// and make a final decision at the end.
 #[cfg(feature = "std")]
@@ -301,7 +301,8 @@ impl SafetyContext {
 
     /// Get the final decision based on all observations.
     pub fn finalize(&self) -> SafetyDecision {
-        self.policy.decide(self.max_entropy, self.max_surprise, self.any_bias)
+        self.policy
+            .decide(self.max_entropy, self.max_surprise, self.any_bias)
     }
 
     /// Reset the context for reuse.
@@ -334,7 +335,10 @@ mod tests {
             .severity(),
             2
         );
-        assert_eq!(SafetyDecision::Halt(KernelError::CognitiveInstability).severity(), 3);
+        assert_eq!(
+            SafetyDecision::Halt(KernelError::CognitiveInstability).severity(),
+            3
+        );
     }
 
     #[test]
@@ -343,7 +347,10 @@ mod tests {
         assert_eq!(PressureLevel::from_percentage(30), PressureLevel::Elevated);
         assert_eq!(PressureLevel::from_percentage(60), PressureLevel::Critical);
         assert_eq!(PressureLevel::from_percentage(90), PressureLevel::Emergency);
-        assert_eq!(PressureLevel::from_percentage(255), PressureLevel::Emergency);
+        assert_eq!(
+            PressureLevel::from_percentage(255),
+            PressureLevel::Emergency
+        );
     }
 
     #[test]
