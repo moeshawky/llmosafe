@@ -442,4 +442,22 @@ mod tests {
         let decision = policy.decide_with_pressure(400, 100, false, PressureLevel::Critical);
         assert!(matches!(decision, SafetyDecision::Escalate { .. }));
     }
+
+    #[test]
+    fn test_safety_context_default_context() {
+        let ctx = SafetyContext::default_context();
+        assert_eq!(ctx.max_entropy, 0);
+        assert_eq!(ctx.max_surprise, 0);
+        assert_eq!(ctx.any_bias, false);
+        assert_eq!(ctx.decision_count, 0);
+
+        // Default policy thresholds
+        assert_eq!(ctx.policy.warn_entropy, 600);
+        assert_eq!(ctx.policy.escalate_entropy, 800);
+        assert_eq!(ctx.policy.halt_entropy, 1000);
+        assert_eq!(ctx.policy.warn_surprise, 300);
+        assert_eq!(ctx.policy.escalate_surprise, 500);
+        assert_eq!(ctx.policy.bias_escalates, true);
+        assert_eq!(ctx.policy.escalate_pressure, PressureLevel::Critical);
+    }
 }
