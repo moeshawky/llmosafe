@@ -5,7 +5,7 @@ edition = "2021"
 description = "Runtime guardrails for systems processing untrusted data. 4-tier architecture (Resource Body, Kernel, Working Memory, Sifter) with entropy tracking, surprise gating, and bias detection."
 license = "MIT"
 repository = "https://github.com/moeshawky/llmosafe"
-rust-version = "1.75"
+rust-version = "1.76"
 documentation = "https://docs.rs/llmosafe"
 keywords = ["safety", "runtime", "entropy", "guardrails", "embedded"]
 categories = ["development-tools", "algorithms", "embedded", "no-std"]
@@ -26,7 +26,7 @@ serde = ["dep:serde"]
 full = ["std", "serde", "ffi"]
 
 [dev-dependencies]
-proptest = "1.11.0"
+proptest = "1.4"
 criterion = "0.5"
 
 [[bench]]
@@ -38,4 +38,4 @@ name = "llmosafe"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-cbindgen = "0.29.2"
+cbindgen = "0.26"
