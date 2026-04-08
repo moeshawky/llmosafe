@@ -38,4 +38,4 @@ name = "llmosafe"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-cbindgen = "0.29.2"
+cbindgen = "=0.26.0"
