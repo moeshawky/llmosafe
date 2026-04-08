@@ -262,4 +262,47 @@ pub mod cognitive_memory {
             Err(KernelError::ResourceExhaustion) => -5,
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::llmosafe_kernel::Synapse;
+
+        #[test]
+        fn test_process_state_update() {
+            // Test Ok (0)
+            let mut synapse = Synapse::new();
+            synapse.set_raw_entropy(400);
+            synapse.set_raw_surprise(100);
+            synapse.set_has_bias(false);
+            let bits = u128::from_le_bytes(synapse.into_bytes());
+            assert_eq!(process_state_update(bits), 0);
+
+            // Test BiasHaloDetected (-3)
+            let mut synapse = Synapse::new();
+            synapse.set_raw_entropy(400);
+            synapse.set_raw_surprise(100);
+            synapse.set_has_bias(true);
+            let bits = u128::from_le_bytes(synapse.into_bytes());
+            assert_eq!(process_state_update(bits), -3);
+
+            // Test HallucinationDetected (-4)
+            // GLOBAL_MEMORY is initialized with surprise_threshold of 500
+            let mut synapse = Synapse::new();
+            synapse.set_raw_entropy(400);
+            synapse.set_raw_surprise(600);
+            synapse.set_has_bias(false);
+            let bits = u128::from_le_bytes(synapse.into_bytes());
+            assert_eq!(process_state_update(bits), -4);
+
+            // Test CognitiveInstability (-2)
+            // Entropy >= 1000 is unstable
+            let mut synapse = Synapse::new();
+            synapse.set_raw_entropy(1100);
+            synapse.set_raw_surprise(100);
+            synapse.set_has_bias(false);
+            let bits = u128::from_le_bytes(synapse.into_bytes());
+            assert_eq!(process_state_update(bits), -2);
+        }
+    }
 }
