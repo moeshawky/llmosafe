@@ -786,6 +786,14 @@ mod tests {
         assert_eq!(result, StabilityResult::Stable);
         assert!(monitor.seen);
     }
+
+    #[test]
+    fn test_execute_reasoning_flow() {
+        assert_eq!(
+            super::cognitive_kernel::execute_reasoning_flow(),
+            Ok(true)
+        );
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
