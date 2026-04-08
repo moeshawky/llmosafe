@@ -32,12 +32,18 @@ fn bench_kernel(c: &mut Criterion) {
     synapse.set_raw_surprise(100);
     let mut loop_guard = ReasoningLoop::<100>::new();
 
+    // ValidatedSynapse is only constructible via WorkingMemory.
+    // So we use WorkingMemory to construct one.
+    let sifted = llmosafe::SiftedSynapse::new(synapse);
+    let mut memory = WorkingMemory::<64>::new(1000);
+    let validated = memory.update(sifted).unwrap();
+
     c.bench_function("synapse_validate", |b| {
         b.iter(|| black_box(synapse).validate())
     });
 
     c.bench_function("reasoning_loop_next", |b| {
-        b.iter(|| loop_guard.next_step(black_box(synapse)))
+        b.iter(|| loop_guard.next_step(black_box(validated)))
     });
 }
 

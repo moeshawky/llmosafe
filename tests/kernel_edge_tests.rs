@@ -19,9 +19,9 @@ mod tests {
         let mut memory = llmosafe::WorkingMemory::<64>::new(1000);
         let validated = memory.update(sifted).unwrap();
 
-        assert!(loop_guard.next_step(validated.clone()).is_ok());
-        assert!(loop_guard.next_step(validated.clone()).is_ok());
-        assert!(loop_guard.next_step(validated.clone()).is_ok());
+        assert!(loop_guard.next_step(validated).is_ok());
+        assert!(loop_guard.next_step(validated).is_ok());
+        assert!(loop_guard.next_step(validated).is_ok());
 
         let result = loop_guard.next_step(validated);
         assert_eq!(result, Err(KernelError::DepthExceeded));
@@ -38,7 +38,7 @@ mod tests {
 
         for i in 0..5 {
             assert!(
-                loop_guard.next_step(validated.clone()).is_ok(),
+                loop_guard.next_step(validated).is_ok(),
                 "Step {} should succeed",
                 i
             );
@@ -149,7 +149,7 @@ mod tests {
         let mut memory = llmosafe::WorkingMemory::<64>::new(1000);
         let validated = memory.update(sifted).unwrap();
 
-        assert!(loop_guard.next_step(validated.clone()).is_ok());
+        assert!(loop_guard.next_step(validated).is_ok());
         assert_eq!(
             loop_guard.next_step(validated),
             Err(KernelError::DepthExceeded)
