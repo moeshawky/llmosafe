@@ -39,3 +39,10 @@ crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
 cbindgen = "0.29.2"
+
+# Pin clap versions to avoid pulling in clap 4.6+ which requires Rust 2024
+# Since this project requires Rust 1.70/1.75 in CI, we must prevent newer clap
+[patch.crates-io]
+clap = "=4.5.23"
+clap_builder = "=4.5.23"
+clap_lex = "=0.7.7"
