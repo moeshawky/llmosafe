@@ -432,7 +432,10 @@ mod tests {
     fn test_parse_proc_stat_line_incomplete() {
         let line = "cpu  1000 0 2000";
         let result = ResourceGuard::parse_proc_stat_line(line);
-        assert!(result.is_none(), "Should fail gracefully on incomplete lines");
+        assert!(
+            result.is_none(),
+            "Should fail gracefully on incomplete lines"
+        );
     }
 
     #[cfg(target_os = "linux")]

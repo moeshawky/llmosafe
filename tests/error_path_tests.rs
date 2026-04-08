@@ -17,8 +17,8 @@ mod tests {
         let mut memory = WorkingMemory::<64>::new(1000);
         let validated = memory.update(sifted).unwrap();
 
-        loop_guard.next_step(validated.clone()).unwrap();
-        loop_guard.next_step(validated.clone()).unwrap();
+        loop_guard.next_step(validated).unwrap();
+        loop_guard.next_step(validated).unwrap();
 
         let result = loop_guard.next_step(validated);
         match result {
@@ -95,7 +95,7 @@ mod tests {
     fn test_c_abi_error_codes_match() {
         // C-ABI functions are exported from lib.rs
         // Use the library's own test infrastructure
-        use std::ffi::c_char;
+
 
         // Test valid case via lib's unit tests (they verify C-ABI)
         // This test verifies error variant matching instead

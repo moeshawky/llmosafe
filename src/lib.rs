@@ -9,25 +9,32 @@
 //! - Tier 2: Cognitive Working Memory (Stateful Safety)
 //! - Tier 3: Perceptual Sifter (Boundary Safety)
 
+pub mod llmosafe_detection;
+pub mod llmosafe_integration;
 pub mod llmosafe_kernel;
 pub mod llmosafe_memory;
 pub mod llmosafe_sifter;
-pub mod llmosafe_integration;
-pub mod llmosafe_detection;
 
 #[cfg(feature = "std")]
 pub mod llmosafe_body;
 
 #[cfg(feature = "std")]
 pub use llmosafe_body::ResourceGuard;
+pub use llmosafe_detection::{
+    AdversarialDetector, ConfidenceTracker, CusumDetector, DetectionResult, DriftDetector,
+    RepetitionDetector,
+};
+pub use llmosafe_integration::{
+    EscalationPolicy, EscalationReason, PressureLevel, SafetyContext, SafetyDecision,
+};
 pub use llmosafe_kernel::{
     CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedSynapse,
     StabilityResult, Synapse, ValidatedSynapse, PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
 };
 pub use llmosafe_memory::WorkingMemory;
-pub use llmosafe_sifter::{calculate_halo_signal, calculate_utility, sift_perceptions, get_bias_breakdown};
-pub use llmosafe_integration::{SafetyDecision, EscalationPolicy, PressureLevel, EscalationReason, SafetyContext};
-pub use llmosafe_detection::{RepetitionDetector, DriftDetector, ConfidenceTracker, AdversarialDetector, CusumDetector, DetectionResult};
+pub use llmosafe_sifter::{
+    calculate_halo_signal, calculate_utility, get_bias_breakdown, sift_perceptions,
+};
 
 #[cfg(feature = "std")]
 mod c_abi {
