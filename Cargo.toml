@@ -26,7 +26,7 @@ serde = ["dep:serde"]
 full = ["std", "serde", "ffi"]
 
 [dev-dependencies]
-proptest = "1.11.0"
+proptest = "1.4.0"
 criterion = "0.5"
 
 [[bench]]
@@ -39,3 +39,6 @@ crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
 cbindgen = "0.29.2"
+
+# Pin transitives that use Edition 2024 to an older version that works on 1.70.0
+# since they break the CI checks.
