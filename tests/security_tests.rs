@@ -123,7 +123,7 @@ mod tests {
 
         match result {
             Ok(synapse) => {
-                assert!(synapse.raw_entropy() <= u16::MAX);
+                let _entropy = synapse.raw_entropy();
             }
             Err(_) => {
                 // Empty array handling is acceptable to fail gracefully
