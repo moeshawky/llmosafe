@@ -9,6 +9,8 @@
 //! - Titans (Neural Memory): Surprise-based gating.
 //! - Focal Attention (Livšic Equation): Flow stability.
 
+#![allow(unused_parens)]
+
 /// Repurposed FixedDecimal from SCRUST for Cognitive Entropy tracking.
 /// Precision 28, Scale 2 ensures COBOL-level deterministic arithmetic
 /// for Agent Surprise metrics, preventing "Floating Point Hallucinations."
@@ -295,6 +297,7 @@ impl CusumDetector {
 #[bitfield(bits = 128)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[allow(unused_parens)]
 pub struct Synapse {
     pub raw_entropy: B16,
     pub raw_surprise: B16,
@@ -304,6 +307,12 @@ pub struct Synapse {
     pub cascade_depth: B8,
     pub anchor_hash: B31,
     pub reserved: B28,
+}
+
+impl Default for Synapse {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Synapse {
