@@ -15,7 +15,7 @@
 
 // C-ABI declarations
 extern int32_t llmosafe_process_synapse(uint64_t synapse_bits);
-extern uint16_t llmosafe_calculate_halo(const char* text);
+extern uint16_t llmosafe_calculate_halo(const char* text, size_t len);
 extern int32_t llmosafe_check_resources(uint32_t ceiling_mb);
 extern uint8_t llmosafe_get_resource_pressure(uint32_t ceiling_mb);
 extern int32_t llmosafe_get_stability(uint64_t synapse_bits);
@@ -33,12 +33,12 @@ int main() {
     print_separator("Halo Signal Calculation");
     
     const char* safe_text = "This is a normal sentence.";
-    uint16_t halo1 = llmosafe_calculate_halo(safe_text);
+    uint16_t halo1 = llmosafe_calculate_halo(safe_text, strlen(safe_text));
     printf("Safe text: \"%s\"\n", safe_text);
     printf("Halo signal: %u\n\n", halo1);
 
     const char* biased_text = "The expert provided an official recommendation.";
-    uint16_t halo2 = llmosafe_calculate_halo(biased_text);
+    uint16_t halo2 = llmosafe_calculate_halo(biased_text, strlen(biased_text));
     printf("Biased text: \"%s\"\n", biased_text);
     printf("Halo signal: %u\n", halo2);
     printf("(Higher = more bias detected)\n");
@@ -87,7 +87,7 @@ int main() {
     print_separator("Edge Cases");
     
     // Null pointer handling
-    uint16_t null_halo = llmosafe_calculate_halo(NULL);
+    uint16_t null_halo = llmosafe_calculate_halo(NULL, 0);
     printf("Halo with NULL pointer: %u (should be 0)\n", null_halo);
 
     // Zero ceiling
