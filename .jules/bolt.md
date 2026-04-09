@@ -1,0 +1,3 @@
+## 2024-06-25 - Sliding window vs TTL pattern in iterative text processing
+**Learning:** For text processing tasks that require state to be maintained for a fixed number of subsequent tokens (like "negate the next 3 words"), shifting elements in a fixed-size array window causes redundant string manipulations and operations on every loop iteration, resulting in O(M*N) complexity where M is window size.
+**Action:** Use an integer Time-To-Live (TTL) counter that decrements. Set it when the trigger condition (e.g., negation) occurs. Check if TTL > 0 to determine state. This provides strict O(N) performance and eliminates array shifting overhead.
