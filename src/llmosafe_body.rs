@@ -421,7 +421,7 @@ mod tests {
         // On Linux, /proc/stat should be readable
         let result = ResourceGuard::parse_proc_stat();
         assert!(result.is_some(), "/proc/stat should be parseable on Linux");
-        let (active, total) = result.unwrap();
+        let (active, total) = result.expect("checked above");
         assert!(total >= active, "total must be >= active");
         assert!(total > 0, "total should be positive on a running system");
     }

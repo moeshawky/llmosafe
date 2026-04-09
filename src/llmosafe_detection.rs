@@ -283,7 +283,7 @@ impl ConfidenceTracker {
         let mut sum = 0.0;
         let mut count = 0;
         let mut it = self.scores.iter();
-        let mut prev = *it.next().unwrap();
+        let mut prev = *it.next().expect("scores.len() >= 2 checked above");
         for &curr in it {
             sum += curr - prev;
             prev = curr;
