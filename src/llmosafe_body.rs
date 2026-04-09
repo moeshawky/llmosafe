@@ -143,6 +143,71 @@ impl ResourceGuard {
         Ok(synapse)
     }
 
+    /// Blocks until resources are safe, automatically honoring Escalate/Halt cooldowns.
+    ///
+    /// ⚠ BLOCKING: Reads /proc/stat multiple times with sleeps.
+    /// Do NOT call in async contexts without spawn_blocking.
+    #[cfg(feature = "std")]
+    pub fn check_blocking(&self) -> Result<Synapse, KernelError> {
+        use crate::llmosafe_integration::{EscalationPolicy, SafetyDecision};
+        use std::thread;
+        use std::time::Duration;
+
+        let policy = EscalationPolicy::default();
+        loop {
+            let entropy = self.raw_entropy();
+            let decision = policy.decide(entropy, 0, false);
+            match decision {
+                SafetyDecision::Proceed | SafetyDecision::Warn(_) => {
+                    return self.check();
+                }
+                SafetyDecision::Escalate { cooldown_ms, .. } => {
+                    thread::sleep(Duration::from_millis(cooldown_ms as u64));
+                }
+                SafetyDecision::Halt(_, cooldown_ms) => {
+                    thread::sleep(Duration::from_millis(cooldown_ms as u64));
+                }
+                SafetyDecision::Exit(err) => {
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    /// Same as check_blocking() but with deadline.
+    #[cfg(feature = "std")]
+    pub fn check_with_deadline(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<Synapse, KernelError> {
+        use crate::llmosafe_integration::{EscalationPolicy, SafetyDecision};
+        use std::thread;
+        use std::time::Duration;
+
+        let policy = EscalationPolicy::default();
+        loop {
+            if std::time::Instant::now() >= deadline {
+                return Err(KernelError::DeadlineExceeded);
+            }
+            let entropy = self.raw_entropy();
+            let decision = policy.decide(entropy, 0, false);
+            match decision {
+                SafetyDecision::Proceed | SafetyDecision::Warn(_) => {
+                    return self.check();
+                }
+                SafetyDecision::Escalate { cooldown_ms, .. } => {
+                    thread::sleep(Duration::from_millis(cooldown_ms as u64));
+                }
+                SafetyDecision::Halt(_, cooldown_ms) => {
+                    thread::sleep(Duration::from_millis(cooldown_ms as u64));
+                }
+                SafetyDecision::Exit(err) => {
+                    return Err(err);
+                }
+            }
+        }
+    }
+
     /// Returns current RSS memory usage in bytes.
     #[cfg(unix)]
     pub fn current_rss_bytes() -> usize {

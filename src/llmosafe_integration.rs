@@ -41,10 +41,14 @@ pub enum SafetyDecision {
     Escalate {
         entropy: u16,
         reason: EscalationReason,
+        cooldown_ms: u32,
     },
     /// Input must be rejected. Halt processing immediately.
     /// Contains the kernel error that triggered the halt.
-    Halt(KernelError),
+    Halt(KernelError, u32),
+    /// Unrecoverable error - must terminate immediately.
+    /// Contains the kernel error that triggered the exit.
+    Exit(KernelError),
 }
 
 impl SafetyDecision {
@@ -55,7 +59,7 @@ impl SafetyDecision {
 
     /// Returns true if processing must stop.
     pub fn must_halt(&self) -> bool {
-        matches!(self, Self::Halt(_))
+        matches!(self, Self::Halt(..))
     }
 
     /// Returns the severity level (0=Proceed, 1=Warn, 2=Escalate, 3=Halt).
@@ -64,7 +68,38 @@ impl SafetyDecision {
             Self::Proceed => 0,
             Self::Warn(_) => 1,
             Self::Escalate { .. } => 2,
-            Self::Halt(_) => 3,
+            Self::Halt(..) => 3,
+            Self::Exit(_) => 4,
+        }
+    }
+
+    /// Returns true if this decision requires blocking/throttling.
+    pub fn is_blocking(&self) -> bool {
+        matches!(self, Self::Escalate { .. } | Self::Halt(..) | Self::Exit(_))
+    }
+
+    /// Returns true if process must terminate immediately.
+    pub fn should_exit(&self) -> bool {
+        matches!(self, Self::Exit(_))
+    }
+
+    /// Returns recommended cooldown in milliseconds.
+    pub fn recommended_cooldown_ms(&self) -> u32 {
+        match self {
+            Self::Proceed | Self::Warn(_) | Self::Exit(_) => 0,
+            Self::Escalate { cooldown_ms, .. } => *cooldown_ms,
+            Self::Halt(_, cooldown_ms) => *cooldown_ms,
+        }
+    }
+
+    /// Returns machine-readable status label.
+    pub fn status_label(&self) -> &'static str {
+        match self {
+            Self::Proceed => "safe",
+            Self::Warn(_) => "warning",
+            Self::Escalate { .. } => "escalate",
+            Self::Halt(..) => "halt",
+            Self::Exit(_) => "exit",
         }
     }
 }
@@ -201,17 +236,19 @@ impl EscalationPolicy {
             return SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::BiasDetected,
+                cooldown_ms: 0,
             };
         }
 
         // Entropy-based decisions
         if entropy >= self.halt_entropy {
-            return SafetyDecision::Halt(KernelError::CognitiveInstability);
+            return SafetyDecision::Halt(KernelError::CognitiveInstability, 0);
         }
         if entropy >= self.escalate_entropy {
             return SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::EntropyApproachingLimit,
+                cooldown_ms: 0,
             };
         }
         if entropy >= self.warn_entropy {
@@ -223,6 +260,7 @@ impl EscalationPolicy {
             return SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::SurpriseElevated,
+                cooldown_ms: 0,
             };
         }
         if surprise >= self.warn_surprise {
@@ -245,6 +283,7 @@ impl EscalationPolicy {
             return SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::ResourcePressure,
+                cooldown_ms: 0,
             };
         }
         self.decide(entropy, surprise, has_bias)
@@ -255,7 +294,9 @@ impl EscalationPolicy {
         match stability {
             CognitiveStability::Stable => SafetyDecision::Proceed,
             CognitiveStability::Pressure => SafetyDecision::Warn("cognitive pressure detected"),
-            CognitiveStability::Unstable => SafetyDecision::Halt(KernelError::CognitiveInstability),
+            CognitiveStability::Unstable => {
+                SafetyDecision::Halt(KernelError::CognitiveInstability, 0)
+            }
         }
     }
 }
@@ -330,14 +371,19 @@ mod tests {
         assert_eq!(
             SafetyDecision::Escalate {
                 entropy: 500,
-                reason: EscalationReason::BiasDetected
+                reason: EscalationReason::BiasDetected,
+                cooldown_ms: 0,
             }
             .severity(),
             2
         );
         assert_eq!(
-            SafetyDecision::Halt(KernelError::CognitiveInstability).severity(),
+            SafetyDecision::Halt(KernelError::CognitiveInstability, 0).severity(),
             3
+        );
+        assert_eq!(
+            SafetyDecision::Exit(KernelError::CognitiveInstability).severity(),
+            4
         );
     }
 
@@ -367,7 +413,7 @@ mod tests {
         assert!(matches!(decision, SafetyDecision::Escalate { .. }));
         // Halt entropy
         let decision = policy.decide(1100, 100, false);
-        assert!(matches!(decision, SafetyDecision::Halt(_)));
+        assert!(matches!(decision, SafetyDecision::Halt(..)));
         // Bias escalation
         let decision = policy.decide(400, 100, true);
         assert!(matches!(decision, SafetyDecision::Escalate { .. }));
@@ -425,7 +471,7 @@ mod tests {
         let decision = policy.decide_from_stability(CognitiveStability::Pressure);
         assert!(matches!(decision, SafetyDecision::Warn(_)));
         let decision = policy.decide_from_stability(CognitiveStability::Unstable);
-        assert!(matches!(decision, SafetyDecision::Halt(_)));
+        assert!(matches!(decision, SafetyDecision::Halt(..)));
     }
 
     #[test]

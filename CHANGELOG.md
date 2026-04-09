@@ -2,6 +2,63 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-04-09
+
+### Breaking Changes
+- `SafetyDecision::Halt` now has signature `Halt(KernelError, u32)` - second parameter is cooldown_ms
+- C-ABI error codes: new codes `-6` (SelfMemoryExceeded), `-7` (DeadlineExceeded)
+- Match statements on `SafetyDecision::Halt` must now handle 2-tuple
+
+### Added
+- **SafetyDecision::Exit(KernelError)**: Unrecoverable error requiring immediate termination
+  - Distinct from Halt (pause+retry) - Exit means abort
+  - `should_exit()` helper returns true for Exit variant
+
+- **check_blocking()**: Blocks until resources are safe, honoring cooldowns
+  - Automatically respects Escalate/Halt cooldown periods
+  - Returns `Err(Exit)` on termination, `Ok(Synapse)` when safe
+  - ⚠ BLOCKING: Do not call in async contexts without spawn_blocking
+
+- **check_with_deadline(Instant)**: Same as check_blocking with timeout
+  - Returns `Err(DeadlineExceeded)` if deadline passes
+
+- **SafetyDecision helper methods**:
+  - `is_blocking()`: Returns true for Escalate, Halt, Exit
+  - `should_exit()`: Returns true for Exit only
+  - `recommended_cooldown_ms()`: Returns cooldown value (0 for Proceed/Warn/Exit)
+  - `status_label()`: Returns machine-readable string ("safe", "warning", "escalate", "halt", "exit")
+
+- **KernelError variants**:
+  - `SelfMemoryExceeded`: Daemon's RSS exceeded self-imposed ceiling
+  - `DeadlineExceeded`: Timeout while waiting for safe state
+
+- **Escalate variant now has cooldown_ms field**:
+  - `Escalate { entropy, reason, cooldown_ms }`
+  - Method `recommended_cooldown_ms()` returns this value
+
+### Changed
+- All `EscalationPolicy::decide()` methods now populate `cooldown_ms` field
+- Default cooldown is `0` (can be tuned per policy)
+
+### Fixed
+- C-ABI bindings updated for new KernelError variants
+- All pattern matches updated for Halt(KernelError, u32) signature
+- Tower middleware example updated for Exit variant
+
+### Migration Guide
+```rust
+// Before v0.5.0
+match decision {
+    SafetyDecision::Halt(err) => Err(err),
+}
+
+// After v0.5.0
+match decision {
+    SafetyDecision::Halt(err, _cooldown) => Err(err),
+    SafetyDecision::Exit(err) => Err(err),
+}
+```
+
 ## [0.4.9] - 2026-04-09
 
 ### Changed

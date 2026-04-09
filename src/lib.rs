@@ -81,6 +81,8 @@ mod c_abi {
             Err(KernelError::CognitiveInstability) => -2,
             Err(KernelError::BiasHaloDetected) => -3,
             Err(KernelError::HallucinationDetected) => -4,
+            Err(KernelError::SelfMemoryExceeded) => -6,
+            Err(KernelError::DeadlineExceeded) => -7,
         }
     }
 
@@ -104,6 +106,8 @@ mod c_abi {
             Err(KernelError::DepthExceeded) => -1,
             Err(KernelError::HallucinationDetected) => -4,
             Err(KernelError::ResourceExhaustion) => -5,
+            Err(KernelError::SelfMemoryExceeded) => -6,
+            Err(KernelError::DeadlineExceeded) => -7,
         }
     }
 

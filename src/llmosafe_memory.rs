@@ -259,6 +259,8 @@ pub mod cognitive_memory {
             Err(KernelError::BiasHaloDetected) => -3,
             Err(KernelError::HallucinationDetected) => -4,
             Err(KernelError::ResourceExhaustion) => -5,
+            Err(KernelError::SelfMemoryExceeded) => -6,
+            Err(KernelError::DeadlineExceeded) => -7,
         }
     }
 }

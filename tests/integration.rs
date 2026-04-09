@@ -189,7 +189,7 @@ mod std_tests {
         let d2 = policy.decide(750, 100, false);
         assert!(matches!(d2, SafetyDecision::Escalate { .. }));
         let d3 = policy.decide(950, 100, false);
-        assert!(matches!(d3, SafetyDecision::Halt(_)));
+        assert!(matches!(d3, SafetyDecision::Halt(..)));
         // Bias should not escalate with this policy
         let d4 = policy.decide(400, 100, true);
         assert!(matches!(d4, SafetyDecision::Proceed));

@@ -38,7 +38,8 @@ impl MockService {
                 Ok(format!("Processed with warning: {}", request))
             }
             SafetyDecision::Escalate { .. } => Err(llmosafe::KernelError::BiasHaloDetected),
-            SafetyDecision::Halt(err) => Err(err),
+            SafetyDecision::Halt(err, _) => Err(err),
+            SafetyDecision::Exit(err) => Err(err),
         }
     }
 }
