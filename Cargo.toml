@@ -7,8 +7,11 @@ license = "MIT"
 repository = "https://github.com/moeshawky/llmosafe"
 rust-version = "1.75"
 documentation = "https://docs.rs/llmosafe"
+readme = "README.md"
+homepage = "https://github.com/moeshawky/llmosafe"
 keywords = ["safety", "ai-agent", "entropy", "detection", "guardrails"]
 categories = ["development-tools", "algorithms", "embedded", "no-std"]
+exclude = [".github/", ".sniper/", "target/", "tests/"]
 
 [dependencies]
 modular-bitfield = "0.13.1"

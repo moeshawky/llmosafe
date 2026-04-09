@@ -4,6 +4,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/llmosafe.svg)](https://crates.io/crates/llmosafe)
 [![Documentation](https://docs.rs/llmosafe/badge.svg)](https://docs.rs/llmosafe)
+[![GitHub Pages](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://moeshawky.github.io/llmosafe)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
