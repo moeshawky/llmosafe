@@ -22,3 +22,27 @@ Thumbs.db
 
 # Test artifacts
 *.log
+
+# ML Training Artifacts - NOT PART OF RUST LIBRARY
+*.pt
+*.onnx
+*.onnx.data
+*.zip
+checkpoints/
+training/
+kaggle_dataset/
+kaggle_upload/
+llmosafe_new/
+
+# Python - NOT PART OF RUST LIBRARY
+*.py
+*.pyc
+__pycache__/
+*.ipynb
+.ipynb_checkpoints/
+
+# Data files - NOT PART OF RUST LIBRARY
+*.jsonl
+*.json
+*.txt
+!README.txt
