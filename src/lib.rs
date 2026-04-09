@@ -9,6 +9,15 @@
 //! - Tier 2: Cognitive Working Memory (Stateful Safety)
 //! - Tier 3: Perceptual Sifter (Boundary Safety)
 
+#[cfg(not(feature = "std"))]
+use core::panic::PanicInfo;
+
+#[cfg(not(feature = "std"))]
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! {
+    loop {}
+}
+
 pub mod llmosafe_detection;
 pub mod llmosafe_integration;
 pub mod llmosafe_kernel;
@@ -20,13 +29,14 @@ pub mod llmosafe_body;
 
 #[cfg(feature = "std")]
 pub use llmosafe_body::ResourceGuard;
+#[cfg(feature = "std")]
+pub use llmosafe_detection::DetectionResult;
 pub use llmosafe_detection::{
-    AdversarialDetector, ConfidenceTracker, CusumDetector, DetectionResult, DriftDetector,
-    RepetitionDetector,
+    AdversarialDetector, ConfidenceTracker, CusumDetector, DriftDetector, RepetitionDetector,
 };
-pub use llmosafe_integration::{
-    EscalationPolicy, EscalationReason, PressureLevel, SafetyContext, SafetyDecision,
-};
+#[cfg(feature = "std")]
+pub use llmosafe_integration::SafetyContext;
+pub use llmosafe_integration::{EscalationPolicy, EscalationReason, PressureLevel, SafetyDecision};
 pub use llmosafe_kernel::{
     CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedSynapse,
     StabilityResult, Synapse, ValidatedSynapse, PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
