@@ -30,7 +30,7 @@ full = ["std", "serde", "ffi"]
 
 [dev-dependencies]
 proptest = "1.11.0"
-criterion = "0.5"
+criterion = "0.4"
 
 [[bench]]
 name = "llmosafe_benchmarks"

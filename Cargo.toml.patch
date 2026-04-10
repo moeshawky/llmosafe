@@ -1,7 +1,0 @@
---- Cargo.toml
-+++ Cargo.toml
-@@ -35,5 +35,5 @@
-
- [build-dependencies]
--cbindgen = "0.29.2"
-+cbindgen = "0.24"
