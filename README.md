@@ -305,7 +305,7 @@ if !patterns.is_empty() { /* Adversarial input */ }
 #include "llmosafe.h"
 
 // The three gauges via FFI
-uint16_t halo = llmosafe_calculate_halo("The expert recommended this", 27);
+uint16_t halo = llmosafe_calculate_halo("The expert recommended this");
 uint8_t pressure = llmosafe_get_resource_pressure(1024);
 int32_t stability = llmosafe_get_stability(synapse_bits);
 ```

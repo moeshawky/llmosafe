@@ -47,4 +47,4 @@ panic = "abort"
 panic = "abort"
 
 [build-dependencies]
-cbindgen = "0.24"
+cbindgen = "0.29.2"

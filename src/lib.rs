@@ -60,15 +60,12 @@ mod c_abi {
 
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub extern "C" fn llmosafe_calculate_halo(
-        text_ptr: *const core::ffi::c_char,
-        text_len: usize,
-    ) -> u16 {
-        if text_ptr.is_null() || text_len == 0 {
+    pub extern "C" fn llmosafe_calculate_halo(text_ptr: *const core::ffi::c_char) -> u16 {
+        if text_ptr.is_null() {
             return 0;
         }
-        let slice = unsafe { core::slice::from_raw_parts(text_ptr as *const u8, text_len) };
-        let text = String::from_utf8_lossy(slice);
+        let c_str = unsafe { core::ffi::CStr::from_ptr(text_ptr) };
+        let text = c_str.to_string_lossy();
         crate::llmosafe_sifter::calculate_halo_signal(&text)
     }
 
@@ -137,7 +134,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn test_c_abi_calculate_halo_null_pointer() {
-        let result = crate::c_abi::llmosafe_calculate_halo(std::ptr::null(), 0);
+        let result = crate::c_abi::llmosafe_calculate_halo(std::ptr::null());
         assert_eq!(result, 0);
     }
 
@@ -153,8 +150,7 @@ mod tests {
     fn test_c_abi_invalid_utf8() {
         let invalid_data = b"Hello\xFFWorld\0";
         let result = crate::c_abi::llmosafe_calculate_halo(
-            invalid_data.as_ptr() as *const core::ffi::c_char,
-            invalid_data.len(),
+            invalid_data.as_ptr() as *const core::ffi::c_char
         );
         let _ = result;
     }
@@ -164,10 +160,8 @@ mod tests {
     fn test_c_abi_very_long_string() {
         let mut long_string = std::vec![b'a'; 1024 * 1024];
         long_string.push(0);
-        let result = crate::c_abi::llmosafe_calculate_halo(
-            long_string.as_ptr() as *const core::ffi::c_char,
-            long_string.len(),
-        );
+        let result =
+            crate::c_abi::llmosafe_calculate_halo(long_string.as_ptr() as *const core::ffi::c_char);
         let _ = result;
     }
 
