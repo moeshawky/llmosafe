@@ -314,13 +314,41 @@ pub fn calculate_halo_signal(text: &str) -> u16 {
 pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
     let mut count = 0usize;
 
-    for word_a in observation.split_whitespace() {
-        let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
-        for word_b in objective.split_whitespace() {
-            let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
-            if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
-                count += 1;
-                break;
+    let mut obj_cache = [""; 64];
+    let mut obj_len = 0;
+
+    // Parse objective once and cache up to 64 words to avoid inner loop allocation/iteration overhead
+    for word_b in objective.split_whitespace() {
+        if obj_len < 64 {
+            obj_cache[obj_len] = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+            obj_len += 1;
+        } else {
+            break; // Stop at 64 to avoid heap allocation in no_std
+        }
+    }
+
+    // Fast path: objective is small enough to fit entirely in our stack cache
+    if objective.split_whitespace().count() <= 64 {
+        for word_a in observation.split_whitespace() {
+            let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
+
+            for cached_word in obj_cache.iter().take(obj_len) {
+                if trimmed_a.eq_ignore_ascii_case(cached_word) {
+                    count += 1;
+                    break;
+                }
+            }
+        }
+    } else {
+        // Slow path: objective has more than 64 words, fall back to full original behavior
+        for word_a in observation.split_whitespace() {
+            let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
+            for word_b in objective.split_whitespace() {
+                let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+                if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
+                    count += 1;
+                    break;
+                }
             }
         }
     }
