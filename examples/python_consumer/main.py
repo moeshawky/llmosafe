@@ -24,7 +24,7 @@ llmosafe = ctypes.CDLL(lib_path)
 llmosafe.llmosafe_process_synapse.argtypes = [ctypes.c_uint64]
 llmosafe.llmosafe_process_synapse.restype = ctypes.c_int32
 
-llmosafe.llmosafe_calculate_halo.argtypes = [ctypes.c_char_p]
+llmosafe.llmosafe_calculate_halo.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
 llmosafe.llmosafe_calculate_halo.restype = ctypes.c_uint16
 
 llmosafe.llmosafe_check_resources.argtypes = [ctypes.c_uint32]
@@ -44,7 +44,8 @@ llmosafe.llmosafe_get_environmental_entropy.restype = ctypes.c_uint16
 
 def calculate_halo(text: str) -> int:
     """Calculate halo signal for text."""
-    return llmosafe.llmosafe_calculate_halo(text.encode('utf-8'))
+    encoded = text.encode('utf-8')
+    return llmosafe.llmosafe_calculate_halo(encoded, len(encoded))
 
 def check_resources(ceiling_mb: int) -> int:
     """Check resources against ceiling."""
