@@ -314,9 +314,37 @@ pub fn calculate_halo_signal(text: &str) -> u16 {
 pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
     let mut count = 0usize;
 
+    // Fast path: cache up to 64 trimmed words from the objective on the stack.
+    // This reduces O(N*M) redundant string splitting and trimming for shorter objectives
+    // while maintaining no_std compatibility and zero heap allocation.
+    let mut obj_words = [""; 64];
+    let mut obj_len = 0;
+    let mut obj_iter = objective.split_whitespace();
+
+    for word in obj_iter.by_ref().take(64) {
+        obj_words[obj_len] = word.trim_matches(|c: char| c.is_ascii_punctuation());
+        obj_len += 1;
+    }
+
     for word_a in observation.split_whitespace() {
         let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
-        for word_b in objective.split_whitespace() {
+
+        let mut found = false;
+        // Check against the cached words first
+        for word_b in obj_words.iter().take(obj_len) {
+            if trimmed_a.eq_ignore_ascii_case(word_b) {
+                count += 1;
+                found = true;
+                break;
+            }
+        }
+
+        if found {
+            continue;
+        }
+
+        // Slow path fallback: if the objective has >64 words, iterate over the rest
+        for word_b in obj_iter.clone() {
             let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
             if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
                 count += 1;
