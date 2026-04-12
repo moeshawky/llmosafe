@@ -314,11 +314,40 @@ pub fn calculate_halo_signal(text: &str) -> u16 {
 pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
     let mut count = 0usize;
 
+    // Cache the objective words to avoid O(N*M) split and trim operations.
+    let mut obj_words: [&str; 64] = [""; 64];
+    let mut obj_words_len = 0;
+    let mut excess_objective = false;
+
+    for word_b in objective.split_whitespace() {
+        if obj_words_len < 64 {
+            obj_words[obj_words_len] = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+            obj_words_len += 1;
+        } else {
+            excess_objective = true;
+            break; // Exceeded cache limit
+        }
+    }
+
+    if excess_objective {
+        // Fallback to original behavior if objective exceeds cache limits (rare)
+        for word_a in observation.split_whitespace() {
+            let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
+            for word_b in objective.split_whitespace() {
+                let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+                if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
+                    count += 1;
+                    break;
+                }
+            }
+        }
+        return count.saturating_mul(100).min(u16::MAX as usize) as u16;
+    }
+
     for word_a in observation.split_whitespace() {
         let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
-        for word_b in objective.split_whitespace() {
-            let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
-            if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
+        for word_b in obj_words.iter().take(obj_words_len) {
+            if trimmed_a.eq_ignore_ascii_case(word_b) {
                 count += 1;
                 break;
             }
