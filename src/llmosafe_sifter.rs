@@ -238,48 +238,38 @@ fn word_in_list(word: &str, list: &[&str]) -> bool {
 pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
     let mut breakdown = BiasBreakdown::default();
 
-    let mut window: [&str; 4] = ["", "", "", ""];
+    let mut negation_ttl = 0;
 
     for raw_word in text.split_whitespace() {
-        window[0] = window[1];
-        window[1] = window[2];
-        window[2] = window[3];
-        window[3] = raw_word;
+        let trimmed = raw_word.trim_matches(|c: char| c.is_ascii_punctuation());
 
-        let negated = window[..3].iter().any(|w| {
-            let trimmed = w.trim_matches(|c: char| c.is_ascii_punctuation());
-            word_in_list(trimmed, NEGATION_WORDS)
-        });
+        let negated = negation_ttl > 0;
+
+        if word_in_list(trimmed, NEGATION_WORDS) {
+            negation_ttl = 3;
+        } else if negation_ttl > 0 {
+            negation_ttl -= 1;
+        }
 
         if negated {
             continue;
         }
 
-        let trimmed = raw_word.trim_matches(|c: char| c.is_ascii_punctuation());
+        let checks: [(&[&str], &mut u16); 8] = [
+            (AUTHORITY_BIAS, &mut breakdown.authority),
+            (SOCIAL_PROOF, &mut breakdown.social_proof),
+            (SCARCITY, &mut breakdown.scarcity),
+            (URGENCY, &mut breakdown.urgency),
+            (EMOTIONAL_APPEAL, &mut breakdown.emotional_appeal),
+            (EXPERTISE_SIGNALING, &mut breakdown.expertise_signaling),
+            (SEMANTIC_TRAPS, &mut breakdown.semantic_traps),
+            (TEMPLATE_FITTING, &mut breakdown.template_fitting),
+        ];
 
-        if word_in_list(trimmed, AUTHORITY_BIAS) {
-            breakdown.authority = breakdown.authority.saturating_add(100);
-        }
-        if word_in_list(trimmed, SOCIAL_PROOF) {
-            breakdown.social_proof = breakdown.social_proof.saturating_add(100);
-        }
-        if word_in_list(trimmed, SCARCITY) {
-            breakdown.scarcity = breakdown.scarcity.saturating_add(100);
-        }
-        if word_in_list(trimmed, URGENCY) {
-            breakdown.urgency = breakdown.urgency.saturating_add(100);
-        }
-        if word_in_list(trimmed, EMOTIONAL_APPEAL) {
-            breakdown.emotional_appeal = breakdown.emotional_appeal.saturating_add(100);
-        }
-        if word_in_list(trimmed, EXPERTISE_SIGNALING) {
-            breakdown.expertise_signaling = breakdown.expertise_signaling.saturating_add(100);
-        }
-        if word_in_list(trimmed, SEMANTIC_TRAPS) {
-            breakdown.semantic_traps = breakdown.semantic_traps.saturating_add(100);
-        }
-        if word_in_list(trimmed, TEMPLATE_FITTING) {
-            breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
+        for (list, field) in checks {
+            if word_in_list(trimmed, list) {
+                *field = field.saturating_add(100);
+            }
         }
     }
 

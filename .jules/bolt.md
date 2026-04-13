@@ -1,0 +1,3 @@
+## 2024-04-13 - Replace sliding window string processing with simple integer state (TTL)
+**Learning:** In text stream processing (like `get_bias_breakdown`), tracking recent state (like preceding negation words) using string arrays and repeated trims is an O(N*W) operation that causes unnecessary allocations/cycles. This can be heavily optimized down to O(N) by replacing the sliding string window with an integer Time-To-Live (TTL) counter (`negation_ttl`) that simply decrements per word.
+**Action:** Whenever I see sequential string lookbacks or sliding windows in performance-critical text processing, I will look to replace them with simple integer state counters/TTLs to avoid redundant parsing and array shuffling.
