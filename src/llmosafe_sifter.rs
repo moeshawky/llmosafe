@@ -248,8 +248,8 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
 
         if is_negation {
             negation_ttl = 3;
-        } else if negation_ttl > 0 {
-            negation_ttl -= 1;
+        } else {
+            negation_ttl = negation_ttl.saturating_sub(1);
         }
 
         if negated {
@@ -330,8 +330,8 @@ pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
         let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
 
         let mut found = false;
-        for i in 0..obj_len {
-            if trimmed_a.eq_ignore_ascii_case(obj_words[i]) {
+        for word_b in obj_words.iter().take(obj_len) {
+            if trimmed_a.eq_ignore_ascii_case(word_b) {
                 count += 1;
                 found = true;
                 break;
