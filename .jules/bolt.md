@@ -1,3 +1,0 @@
-## 2024-05-24 - Stack Cache Optimization in No-Std Environments
-**Learning:** In a `#![no_std]` environment where heap allocations (like `Vec` or `String`) are prohibited, O(N * M) nested loops that repeatedly parse and process strings (such as `split_whitespace` and `trim_matches` in `calculate_utility`) can become a severe performance bottleneck.
-**Action:** Use fixed-size, stack-allocated arrays (e.g., `[""; 64]`) to cache parsed results from the outer loop. Iterate over the cache for the inner loop, and provide a slow-path fallback to original behavior for inputs that exceed the cache size to maintain absolute semantic correctness without sacrificing performance for the vast majority of cases.
