@@ -9,9 +9,7 @@
 //! - TransformerFAM: Feedback-loop working memory.
 //! - Infini-attention: Compressive associative memory.
 
-use crate::llmosafe_kernel::{
-    CognitiveEntropy, KernelError, SiftedSynapse, Synapse, ValidatedSynapse,
-};
+use crate::llmosafe_kernel::{CognitiveEntropy, KernelError, SiftedSynapse, ValidatedSynapse};
 
 /// The "Working Memory" container (The Sekel of State).
 /// Ratio: 64 "Palms" (anchors) for persistent reasoning.
@@ -243,6 +241,7 @@ mod proptests {
 #[cfg(feature = "std")]
 pub mod cognitive_memory {
     use super::*;
+    use crate::llmosafe_kernel::Synapse;
     use std::sync::Mutex;
 
     static GLOBAL_MEMORY: Mutex<WorkingMemory<64>> = Mutex::new(WorkingMemory::<64>::new(500));
@@ -251,7 +250,7 @@ pub mod cognitive_memory {
         let synapse = Synapse::from_raw_u128(synapse_bits);
         let sifted = SiftedSynapse::new(synapse);
 
-        let mut memory = GLOBAL_MEMORY.lock().unwrap();
+        let mut memory = GLOBAL_MEMORY.lock().expect("memory lock poisoned");
 
         match memory.update(sifted) {
             Ok(_) => 0,
@@ -260,6 +259,8 @@ pub mod cognitive_memory {
             Err(KernelError::BiasHaloDetected) => -3,
             Err(KernelError::HallucinationDetected) => -4,
             Err(KernelError::ResourceExhaustion) => -5,
+            Err(KernelError::SelfMemoryExceeded) => -6,
+            Err(KernelError::DeadlineExceeded) => -7,
         }
     }
 }

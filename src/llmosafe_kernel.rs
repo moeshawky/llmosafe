@@ -795,6 +795,10 @@ pub enum KernelError {
     BiasHaloDetected,
     HallucinationDetected,
     ResourceExhaustion,
+    /// Daemon's own RSS exceeded self-imposed limit.
+    SelfMemoryExceeded,
+    /// Deadline exceeded while waiting for safe state.
+    DeadlineExceeded,
 }
 
 impl core::fmt::Display for KernelError {
@@ -809,6 +813,8 @@ impl core::fmt::Display for KernelError {
                 write!(f, "surprise level exceeds hallucination threshold")
             }
             Self::ResourceExhaustion => write!(f, "RSS memory exceeds configured safety ceiling"),
+            Self::SelfMemoryExceeded => write!(f, "self memory exceeded"),
+            Self::DeadlineExceeded => write!(f, "deadline exceeded"),
         }
     }
 }

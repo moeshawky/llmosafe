@@ -64,11 +64,20 @@ jobs:
       - name: Cargo bench smoke test
         run: cargo bench --no-run
 
+  no_std:
+    name: no_std Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build no_std
+        run: cargo build --no-default-features --release
+
   publish_dry_run:
     name: Publish Dry Run
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Cargo publish --dry-run
         run: cargo publish --dry-run

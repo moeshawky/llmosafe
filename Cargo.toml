@@ -1,14 +1,17 @@
 [package]
 name = "llmosafe"
-version = "0.4.2"
+version = "0.5.1"
 edition = "2021"
-description = "Runtime guardrails for systems processing untrusted data. 4-tier architecture (Resource Body, Kernel, Working Memory, Sifter) with entropy tracking, surprise gating, and bias detection."
+description = "Safety-critical cognitive safety library for AI agents. 4-tier architecture (Resource Body, Kernel, Working Memory, Sifter) with formal verification primitives, detection layer, and integration primitives."
 license = "MIT"
 repository = "https://github.com/moeshawky/llmosafe"
 rust-version = "1.75"
 documentation = "https://docs.rs/llmosafe"
-keywords = ["safety", "runtime", "entropy", "guardrails", "embedded"]
+readme = "README.md"
+homepage = "https://github.com/moeshawky/llmosafe"
+keywords = ["safety", "ai-agent", "entropy", "detection", "guardrails"]
 categories = ["development-tools", "algorithms", "embedded", "no-std"]
+exclude = [".github/", ".sniper/", "target/", "tests/"]
 
 [dependencies]
 modular-bitfield = "0.13.1"
@@ -36,6 +39,12 @@ harness = false
 [lib]
 name = "llmosafe"
 crate-type = ["rlib", "cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
 
 [build-dependencies]
 cbindgen = "0.29.2"

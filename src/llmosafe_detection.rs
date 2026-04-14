@@ -283,7 +283,7 @@ impl ConfidenceTracker {
         let mut sum = 0.0;
         let mut count = 0;
         let mut it = self.scores.iter();
-        let mut prev = *it.next().unwrap();
+        let mut prev = *it.next().expect("scores.len() >= 2 checked above");
         for &curr in it {
             sum += curr - prev;
             prev = curr;
@@ -336,6 +336,7 @@ impl AdversarialDetector {
     }
 
     /// Check for common adversarial substrings.
+    #[cfg(feature = "std")]
     pub fn detect_substrings(&self, input: &str) -> Vec<&'static str> {
         let lower = input.to_ascii_lowercase();
         let mut found = Vec::new();
@@ -361,6 +362,7 @@ impl AdversarialDetector {
     }
 
     /// Get an overall adversarial score (0.0-1.0).
+    #[cfg(feature = "std")]
     pub fn adversarial_score(&self, input: &str) -> f32 {
         let substrings = self.detect_substrings(input);
         substrings.len() as f32 / 10.0 // Normalize by max patterns
@@ -443,6 +445,7 @@ impl CusumDetector {
 }
 
 /// Detection result aggregating all detectors.
+#[cfg(feature = "std")]
 #[derive(Debug, Clone)]
 pub struct DetectionResult {
     /// Repetition detected.
@@ -459,6 +462,7 @@ pub struct DetectionResult {
     pub risk_score: f32,
 }
 
+#[cfg(feature = "std")]
 impl DetectionResult {
     /// Returns true if any detection fired.
     pub fn any_detected(&self) -> bool {
@@ -567,6 +571,7 @@ mod tests {
         assert!(!det.is_adversarial("normal input"));
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn test_adversarial_detector_substrings() {
         let det = AdversarialDetector::new();
@@ -578,6 +583,7 @@ mod tests {
         assert!(found.contains(&"simulate"));
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn test_adversarial_score() {
         let det = AdversarialDetector::new();
@@ -605,6 +611,7 @@ mod tests {
         assert_eq!(tracker.current(), Some(0.8));
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn test_detection_result_aggregation() {
         let result = DetectionResult {

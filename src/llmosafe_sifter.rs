@@ -238,20 +238,21 @@ fn word_in_list(word: &str, list: &[&str]) -> bool {
 pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
     let mut breakdown = BiasBreakdown::default();
 
-    let mut negation_ttl = 0;
+    let mut negation_ttl = 0u8;
 
     for raw_word in text.split_whitespace() {
         let trimmed = raw_word.trim_matches(|c: char| c.is_ascii_punctuation());
+        let is_negation = word_in_list(trimmed, NEGATION_WORDS);
 
-        let is_negated = negation_ttl > 0;
+        let negated = negation_ttl > 0;
 
-        if word_in_list(trimmed, NEGATION_WORDS) {
+        if is_negation {
             negation_ttl = 3;
-        } else if negation_ttl > 0 {
-            negation_ttl -= 1;
+        } else {
+            negation_ttl = negation_ttl.saturating_sub(1);
         }
 
-        if is_negated {
+        if negated {
             continue;
         }
 
@@ -312,13 +313,39 @@ pub fn calculate_halo_signal(text: &str) -> u16 {
 pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
     let mut count = 0usize;
 
+    // Cache the trimmed objective words to avoid repeated trimming
+    let mut obj_words = [""; 64];
+    let mut obj_len = 0;
+
+    for word_b in objective.split_whitespace() {
+        if obj_len < 64 {
+            obj_words[obj_len] = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+            obj_len += 1;
+        } else {
+            break; // O(N*M) is acceptable for elements beyond the cache
+        }
+    }
+
     for word_a in observation.split_whitespace() {
         let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
-        for word_b in objective.split_whitespace() {
-            let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
-            if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
+
+        let mut found = false;
+        for word_b in obj_words.iter().take(obj_len) {
+            if trimmed_a.eq_ignore_ascii_case(word_b) {
                 count += 1;
+                found = true;
                 break;
+            }
+        }
+
+        // Fallback for excess elements
+        if !found && obj_len == 64 {
+            for word_b in objective.split_whitespace().skip(64) {
+                let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+                if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
+                    count += 1;
+                    break;
+                }
             }
         }
     }

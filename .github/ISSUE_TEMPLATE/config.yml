@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📚 Documentation
+    url: https://docs.rs/llmosafe
+    about: Check the official documentation for usage examples and API reference
+  - name: 💬 Discussions
+    url: https://github.com/moeshawky/llmosafe/discussions
+    about: Ask questions and discuss llmosafe with the community
+  - name: 🔒 Security Policy
+    url: https://github.com/moeshawky/llmosafe/security/policy
+    about: View our security policy and responsible disclosure guidelines

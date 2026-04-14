@@ -1,0 +1,9 @@
+[package]
+name = "llmosafe"
+
+[document]
+output-format = "html"
+
+[html]
+playground = true
+empty-header = false
