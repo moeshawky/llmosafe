@@ -73,7 +73,7 @@ match decision {
 
 ```toml
 [dependencies]
-llmosafe = "0.4"
+llmosafe = "0.5"
 ```
 
 ### Basic Usage
@@ -305,7 +305,7 @@ if !patterns.is_empty() { /* Adversarial input */ }
 #include "llmosafe.h"
 
 // The three gauges via FFI
-uint16_t halo = llmosafe_calculate_halo("The expert recommended this");
+uint16_t halo = llmosafe_calculate_halo("The expert recommended this", 28);
 uint8_t pressure = llmosafe_get_resource_pressure(1024);
 int32_t stability = llmosafe_get_stability(synapse_bits);
 ```
@@ -375,10 +375,10 @@ Bias detection categories borrowed from email spam filters — the same patterns
 
 ```toml
 # Embedded / no_std
-llmosafe = { version = "0.4", default-features = false }
+llmosafe = { version = "0.5", default-features = false }
 
 # Full integration
-llmosafe = { version = "0.4", features = ["full"] }
+llmosafe = { version = "0.5", features = ["full"] }
 ```
 
 ---
@@ -425,4 +425,4 @@ When any gauge redlines, execution halts. Simple.
 
 ---
 
-*llmosafe v0.4.0 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*
+*llmosafe v0.5.2 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*
