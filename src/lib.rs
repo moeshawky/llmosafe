@@ -157,9 +157,18 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn test_c_abi_invalid_utf8() {
-        let invalid_data = b"Hello\\xFFWorld\\0";
+        let invalid_data = b"Hello\xFFWorld\0";
         let result =
             crate::c_abi::llmosafe_calculate_halo(invalid_data.as_ptr(), invalid_data.len());
+        let _ = result;
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_very_long_string() {
+        let mut long_string = std::vec![b'a'; 1024 * 1024];
+        long_string.push(0);
+        let result = crate::c_abi::llmosafe_calculate_halo(long_string.as_ptr(), long_string.len());
         let _ = result;
     }
 

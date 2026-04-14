@@ -87,7 +87,7 @@ int main() {
     print_separator("Edge Cases");
     
     // Null pointer handling
-uint16_t null_halo = llmosafe_calculate_halo(NULL, 10);
+    uint16_t null_halo = llmosafe_calculate_halo(NULL, 10);
     printf("Halo with NULL pointer: %u (should be 0)\n", null_halo);
 
     // Zero ceiling
