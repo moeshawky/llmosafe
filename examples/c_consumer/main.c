@@ -15,7 +15,7 @@
 
 // C-ABI declarations
 extern int32_t llmosafe_process_synapse(uint64_t synapse_bits);
-extern uint16_t llmosafe_calculate_halo(const char* text, size_t len);
+extern uint16_t llmosafe_calculate_halo(const char* text, size_t text_len);
 extern int32_t llmosafe_check_resources(uint32_t ceiling_mb);
 extern uint8_t llmosafe_get_resource_pressure(uint32_t ceiling_mb);
 extern int32_t llmosafe_get_stability(uint64_t synapse_bits);
@@ -87,7 +87,7 @@ int main() {
     print_separator("Edge Cases");
     
     // Null pointer handling
-    uint16_t null_halo = llmosafe_calculate_halo(NULL, 0);
+uint16_t null_halo = llmosafe_calculate_halo(NULL, 10);
     printf("Halo with NULL pointer: %u (should be 0)\n", null_halo);
 
     // Zero ceiling

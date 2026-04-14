@@ -6,6 +6,8 @@ tab_width = 4
 line_length = 100
 pragma_once = true
 
+usize_is_size_t = true
+
 [export]
 include = ["Synapse"]
 
