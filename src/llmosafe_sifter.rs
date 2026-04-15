@@ -311,9 +311,6 @@ pub fn calculate_halo_signal(text: &str) -> u16 {
 /// assert!(utility > 0);
 /// ```
 pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
-    let mut count = 0usize;
-
-    // Cache the trimmed objective words to avoid repeated trimming
     let mut obj_words = [""; 64];
     let mut obj_len = 0;
 
@@ -325,6 +322,17 @@ pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
             break; // O(N*M) is acceptable for elements beyond the cache
         }
     }
+
+    calculate_utility_with_cache(observation, objective, &obj_words, obj_len)
+}
+
+fn calculate_utility_with_cache(
+    observation: &str,
+    objective: &str,
+    obj_words: &[&str],
+    obj_len: usize,
+) -> u16 {
+    let mut count = 0usize;
 
     for word_a in observation.split_whitespace() {
         let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
@@ -375,12 +383,24 @@ pub fn sift_perceptions(observations: &[&str], objective: &str) -> SiftedSynapse
         return SiftedSynapse::new(synapse);
     }
 
+    let mut obj_words = [""; 64];
+    let mut obj_len = 0;
+
+    for word_b in objective.split_whitespace() {
+        if obj_len < 64 {
+            obj_words[obj_len] = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+            obj_len += 1;
+        } else {
+            break; // O(N*M) is acceptable for elements beyond the cache
+        }
+    }
+
     let mut best_obs: &str = "";
     let mut best_score: i32 = i32::MIN;
     let mut total_score: i64 = 0;
 
     for obs in observations {
-        let utility = calculate_utility(obs, objective);
+        let utility = calculate_utility_with_cache(obs, objective, &obj_words, obj_len);
         let halo = calculate_halo_signal(obs);
         let score = (utility as i32) - (halo as i32);
         total_score += score as i64;
