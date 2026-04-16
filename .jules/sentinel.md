@@ -12,3 +12,7 @@
 **Vulnerability:** Unbounded C-string reads in FFI (e.g., `llmosafe_calculate_halo` using `CStr::from_ptr`) allow out-of-bounds memory reads or segmentation faults if the string is not properly null-terminated by the caller or if the string contains invalid UTF-8 bytes mixed with no null terminator.
 **Learning:** In C-ABI boundaries, relying on implicit null-terminators `\0` is unsafe and prone to memory-safety bugs, especially when strings are passed from higher-level languages (like Python) or constructed manually.
 **Prevention:** Always require explicitly passed length bounds (`text_len: usize`) alongside pointers in C-ABI functions and use `core::slice::from_raw_parts` to guarantee bounded, safe memory reads. Ensure `usize` correctly maps to `size_t` via `cbindgen.toml`.
+## 2024-05-24 - DoS Vulnerability via Mutex Poisoning in FFI
+**Vulnerability:** A `Mutex::lock().expect(...)` in `process_state_update` could panic if the lock was poisoned, leading to a crash across the FFI boundary (C-ABI) when called by host applications.
+**Learning:** Panics across FFI boundaries cause undefined behavior and can trivially crash host applications, creating a Denial of Service. Rust's Mutex poisoning mechanism is a safety feature but must be handled gracefully in FFI layers.
+**Prevention:** Always match on `Mutex::lock()` results in FFI exports and return appropriate C-ABI error codes (like `-6`) instead of unwrapping or expecting.
