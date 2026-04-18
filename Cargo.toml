@@ -14,7 +14,7 @@ categories = ["development-tools", "algorithms", "embedded", "no-std"]
 exclude = [".github/", ".sniper/", "target/", "tests/"]
 
 [dependencies]
-modular-bitfield = "0.13.1"
+modular-bitfield = "0.11.2"
 libc = { version = "0.2", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 
@@ -29,7 +29,7 @@ serde = ["dep:serde"]
 full = ["std", "serde", "ffi"]
 
 [dev-dependencies]
-proptest = "1.11.0"
+proptest = "1.5.0"
 criterion = "0.5"
 
 [[bench]]
