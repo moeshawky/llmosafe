@@ -4,3 +4,6 @@
 ## 2025-04-15 - [Hoist invariant array building in sift_perceptions]
 **Learning:** In `sift_perceptions`, calling `calculate_utility(obs, objective)` inside a loop over observations unnecessarily repeats the parsing and caching of the `objective` string into a fixed-size `[&str; 64]` array on every iteration. This redundant string parsing is a significant bottleneck in a `#![no_std]` codebase processing untrusted data.
 **Action:** Always inspect loops containing functions that build localized caches or parse invariant data. Extract the cache-building logic to run exactly once before the loop, and pass the populated stack array to an inner helper function by reference.
+## 2025-04-16 - [Cache expensive derived properties computed during loop]
+**Learning:** In `sift_perceptions`, the `halo` signal was correctly calculated for every observation in a loop to determine the `best_obs`, but then `calculate_halo_signal(best_obs)` was redundantly called *again* after the loop to set the `has_bias` flag on the resulting Synapse. This caused an unnecessary O(N) string processing operation.
+**Action:** When searching for a "best" element based on expensive derived properties computed inside a loop, always cache those properties alongside the "best" element pointer/reference so they don't need to be redundantly recomputed after the loop.
