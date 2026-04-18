@@ -12,3 +12,8 @@
 **Vulnerability:** Unbounded C-string reads in FFI (e.g., `llmosafe_calculate_halo` using `CStr::from_ptr`) allow out-of-bounds memory reads or segmentation faults if the string is not properly null-terminated by the caller or if the string contains invalid UTF-8 bytes mixed with no null terminator.
 **Learning:** In C-ABI boundaries, relying on implicit null-terminators `\0` is unsafe and prone to memory-safety bugs, especially when strings are passed from higher-level languages (like Python) or constructed manually.
 **Prevention:** Always require explicitly passed length bounds (`text_len: usize`) alongside pointers in C-ABI functions and use `core::slice::from_raw_parts` to guarantee bounded, safe memory reads. Ensure `usize` correctly maps to `size_t` via `cbindgen.toml`.
+
+## 2024-07-15 - [CRITICAL] Prevent Denial of Service (DoS) Across FFI Boundaries via Panic
+**Vulnerability:** Unhandled panics from fallible operations (e.g., `.expect("memory lock poisoned")` when acquiring a `Mutex`) in C-ABI exposed functions cause undefined behavior and instantly crash the host application.
+**Learning:** Rust's panic mechanism unwinds the stack. If a panic crosses an FFI boundary (into C, Python, etc.), it causes undefined behavior, typically terminating the host process outright and resulting in a Denial of Service.
+**Prevention:** Never use `.expect()` or `.unwrap()` in FFI-exposed functions. Instead, explicitly handle fallible operations using `match` and return appropriate integer error codes (e.g., `-6` for `PoisonedLock`) to allow the host application to recover safely.
