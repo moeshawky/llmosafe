@@ -12,3 +12,8 @@
 **Vulnerability:** Unbounded C-string reads in FFI (e.g., `llmosafe_calculate_halo` using `CStr::from_ptr`) allow out-of-bounds memory reads or segmentation faults if the string is not properly null-terminated by the caller or if the string contains invalid UTF-8 bytes mixed with no null terminator.
 **Learning:** In C-ABI boundaries, relying on implicit null-terminators `\0` is unsafe and prone to memory-safety bugs, especially when strings are passed from higher-level languages (like Python) or constructed manually.
 **Prevention:** Always require explicitly passed length bounds (`text_len: usize`) alongside pointers in C-ABI functions and use `core::slice::from_raw_parts` to guarantee bounded, safe memory reads. Ensure `usize` correctly maps to `size_t` via `cbindgen.toml`.
+
+## 2024-05-28 - [Panic on Poisoned Mutex at FFI Boundary]
+**Vulnerability:** The `GLOBAL_MEMORY.lock().expect("memory lock poisoned")` call in `src/llmosafe_memory.rs` could panic if the lock is poisoned, leading to a Denial of Service.
+**Learning:** Panics across the FFI boundary are undefined behavior and can crash the host application.
+**Prevention:** Always use explicit matches or safe fallbacks on fallible operations like `Mutex::lock()` instead of `.expect()` or `.unwrap()` at the FFI boundary, returning appropriate error codes.
