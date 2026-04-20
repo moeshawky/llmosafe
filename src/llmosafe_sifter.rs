@@ -397,6 +397,7 @@ pub fn sift_perceptions(observations: &[&str], objective: &str) -> SiftedSynapse
 
     let mut best_obs: &str = "";
     let mut best_score: i32 = i32::MIN;
+    let mut best_halo: u16 = 0;
     let mut total_score: i64 = 0;
 
     for obs in observations {
@@ -406,6 +407,7 @@ pub fn sift_perceptions(observations: &[&str], objective: &str) -> SiftedSynapse
         total_score += score as i64;
         if score > best_score {
             best_score = score;
+            best_halo = halo;
             best_obs = obs;
         }
     }
@@ -414,7 +416,7 @@ pub fn sift_perceptions(observations: &[&str], objective: &str) -> SiftedSynapse
 
     let entropy = 1000i32.saturating_sub(best_score);
     let surprise = (best_score as i64 - mean_score).unsigned_abs() as u16;
-    let has_bias = calculate_halo_signal(best_obs) > 0;
+    let has_bias = best_halo > 0;
 
     let mut synapse = Synapse::new();
     synapse.set_raw_entropy(entropy.clamp(0, 0xFFFF) as u16);
