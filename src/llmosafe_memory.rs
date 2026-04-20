@@ -357,15 +357,12 @@ pub mod cognitive_memory {
     pub fn process_state_update(synapse_bits: u128) -> i32 {
         let synapse = Synapse::from_raw_u128(synapse_bits);
         let sifted = SiftedSynapse::new(synapse);
-        // C-ABI callers bypass the Rust-side sifter; the caller is responsible
-        // for pre-sifting on their side. We mint the proof via the explicit
-        // bypass path — this is a documented FFI boundary exception, not a
-        // proof-system violation.
         let proof = SiftedProof::from_raw_bits_bypass();
 
-        let mut memory = GLOBAL_MEMORY
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut memory = match GLOBAL_MEMORY.lock() {
+            Ok(guard) => guard,
+            Err(_) => return -6,
+        };
 
         match memory.update(sifted, proof) {
             Ok(_) => 0,
@@ -379,9 +376,6 @@ pub mod cognitive_memory {
         }
     }
 
-    /// Returns (mean_entropy, entropy_variance, trend, is_drifting) from the global WorkingMemory.
-    ///
-    /// `is_drifting` uses a fixed threshold of 10.0.
     pub fn get_memory_stats() -> (f64, f64, f64, bool) {
         let memory = GLOBAL_MEMORY
             .lock()
