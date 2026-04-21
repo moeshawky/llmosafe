@@ -250,7 +250,10 @@ pub mod cognitive_memory {
         let synapse = Synapse::from_raw_u128(synapse_bits);
         let sifted = SiftedSynapse::new(synapse);
 
-        let mut memory = GLOBAL_MEMORY.lock().expect("memory lock poisoned");
+        let mut memory = match GLOBAL_MEMORY.lock() {
+            Ok(guard) => guard,
+            Err(_) => return -6, // Poisoned lock returns error code -6
+        };
 
         match memory.update(sifted) {
             Ok(_) => 0,
