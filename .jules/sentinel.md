@@ -12,3 +12,8 @@
 **Vulnerability:** Unbounded C-string reads in FFI (e.g., `llmosafe_calculate_halo` using `CStr::from_ptr`) allow out-of-bounds memory reads or segmentation faults if the string is not properly null-terminated by the caller or if the string contains invalid UTF-8 bytes mixed with no null terminator.
 **Learning:** In C-ABI boundaries, relying on implicit null-terminators `\0` is unsafe and prone to memory-safety bugs, especially when strings are passed from higher-level languages (like Python) or constructed manually.
 **Prevention:** Always require explicitly passed length bounds (`text_len: usize`) alongside pointers in C-ABI functions and use `core::slice::from_raw_parts` to guarantee bounded, safe memory reads. Ensure `usize` correctly maps to `size_t` via `cbindgen.toml`.
+
+## 2024-04-22 - [FFI Panic Vulnerability on Mutex Poisoning]
+**Vulnerability:** The FFI-exported function `process_state_update` used `GLOBAL_MEMORY.lock().expect("memory lock poisoned")`. If the mutex was poisoned, the function would panic. Panics across the FFI boundary lead to Undefined Behavior and can crash the host application (Denial of Service).
+**Learning:** Rust's standard library `Mutex` becomes poisoned if a thread panics while holding the lock. Using `.expect()` or `.unwrap()` on lock acquisition is unsafe in C-ABI exports, where exceptions cannot be properly caught by the host.
+**Prevention:** Always use explicit pattern matching (`match`) on fallible operations like `Mutex::lock()` in FFI boundary code. Return a predefined C-ABI error code (e.g., `-6`) instead of allowing a panic to propagate to the caller.
