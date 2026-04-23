@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-04-23
+
+### 🔒 Security
+
+#### HIGH: FFI Panic DoS via Mutex Poisoning (CWE-388)
+
+**Problem:** The `process_state_update` FFI function used `.expect()` on `GLOBAL_MEMORY.lock()`. If a thread previously panicked while holding the lock, subsequent FFI calls would panic, causing the host application to crash (Denial of Service).
+
+**Solution:** Replaced `.expect()` with explicit `match` to return error code `-6` (SelfMemoryExceeded) when the mutex is poisoned.
+
+```rust
+// Before (vulnerable)
+let mut memory = GLOBAL_MEMORY.lock().expect("memory lock poisoned");
+
+// After (safe)
+let mut memory = match GLOBAL_MEMORY.lock() {
+    Ok(guard) => guard,
+    Err(_) => return -6, // Return error code instead of panicking
+};
+```
+
+### ⚡ Performance
+
+#### Bolt: Cache halo signal in sift_perceptions
+
+**Problem:** `calculate_halo_signal(best_obs)` was called again after the search loop to determine `has_bias`, despite having been computed for every observation inside the loop.
+
+**Solution:** Cache the `halo` value alongside `best_obs` when it updates, avoiding redundant O(N) recalculation.
+
 ## [0.5.2] - 2026-04-14
 
 ### 🔒 Security

@@ -1,6 +1,6 @@
 [package]
 name = "llmosafe"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 description = "Safety-critical cognitive safety library for AI agents. 4-tier architecture (Resource Body, Kernel, Working Memory, Sifter) with formal verification primitives, detection layer, and integration primitives."
 license = "MIT"
