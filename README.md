@@ -73,7 +73,7 @@ match decision {
 
 ```toml
 [dependencies]
-llmosafe = "0.5"
+llmosafe = "0.5.3"
 ```
 
 ### Basic Usage
@@ -425,4 +425,4 @@ When any gauge redlines, execution halts. Simple.
 
 ---
 
-*llmosafe v0.5.2 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*
+*llmosafe v0.5.3 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*
