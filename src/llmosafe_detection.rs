@@ -100,10 +100,10 @@ impl RepetitionDetector {
 
     /// Simple FNV-1a hash for pattern matching.
     pub fn hash_str(s: &str) -> u32 {
-        let mut hash: u32 = 2166136261;
+        let mut hash: u32 = 2_166_136_261;
         for byte in s.bytes() {
             hash ^= byte as u32;
-            hash = hash.wrapping_mul(16777619);
+            hash = hash.wrapping_mul(16_777_619);
         }
         hash
     }
