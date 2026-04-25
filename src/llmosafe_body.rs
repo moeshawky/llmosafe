@@ -8,6 +8,7 @@
 
 use crate::llmosafe_kernel::{KernelError, Synapse};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::thread;
 use std::time::Duration;
 
@@ -29,8 +30,8 @@ impl EnvironmentalVitals {
 
     #[cfg(target_os = "linux")]
     fn read_iowait() -> u64 {
-        if let Ok(stat) = fs::read_to_string("/proc/stat") {
-            if let Some(line) = stat.lines().next() {
+        if let Ok(file) = fs::File::open("/proc/stat") {
+            if let Some(Ok(line)) = BufReader::new(file).lines().next() {
                 let parts: Vec<&str> = line.split_whitespace().skip(1).collect();
                 if parts.len() >= 5 {
                     return parts[4].parse().unwrap_or(0);
@@ -47,9 +48,11 @@ impl EnvironmentalVitals {
 
     #[cfg(target_os = "linux")]
     fn read_loadavg() -> f64 {
-        if let Ok(loadavg) = fs::read_to_string("/proc/loadavg") {
-            if let Some(first_part) = loadavg.split_whitespace().next() {
-                return first_part.parse().unwrap_or(0.0);
+        if let Ok(file) = fs::File::open("/proc/loadavg") {
+            if let Some(Ok(line)) = BufReader::new(file).lines().next() {
+                if let Some(first_part) = line.split_whitespace().next() {
+                    return first_part.parse().unwrap_or(0.0);
+                }
             }
         }
         0.0
@@ -252,8 +255,8 @@ impl ResourceGuard {
     /// Helper: parse RSS from /proc/self/status (Linux fallback)
     #[cfg(target_os = "linux")]
     fn read_rss_from_proc() -> usize {
-        if let Ok(status) = fs::read_to_string("/proc/self/status") {
-            for line in status.lines() {
+        if let Ok(file) = fs::File::open("/proc/self/status") {
+            for line in BufReader::new(file).lines().map_while(Result::ok) {
                 if line.starts_with("VmRSS:") {
                     if let Some(size_str) = line.split_whitespace().nth(1) {
                         if let Ok(kb) = size_str.parse::<usize>() {
@@ -274,8 +277,8 @@ impl ResourceGuard {
     /// Returns system memory in bytes.
     #[cfg(target_os = "linux")]
     pub fn system_memory_bytes() -> usize {
-        if let Ok(meminfo) = fs::read_to_string("/proc/meminfo") {
-            for line in meminfo.lines() {
+        if let Ok(file) = fs::File::open("/proc/meminfo") {
+            for line in BufReader::new(file).lines().map_while(Result::ok) {
                 if line.starts_with("MemTotal:") {
                     if let Some(size_str) = line.split_whitespace().nth(1) {
                         if let Ok(kb) = size_str.parse::<usize>() {
@@ -308,8 +311,8 @@ impl ResourceGuard {
     /// active = user + nice + system, total = active + idle + iowait.
     #[cfg(target_os = "linux")]
     fn parse_proc_stat() -> Option<(u64, u64)> {
-        let stat = fs::read_to_string("/proc/stat").ok()?;
-        let line = stat.lines().next()?;
+        let file = fs::File::open("/proc/stat").ok()?;
+        let line = BufReader::new(file).lines().next()?.ok()?;
         let parts: Vec<&str> = line.split_whitespace().skip(1).collect();
         if parts.len() >= 5 {
             let user: u64 = parts[0].parse().unwrap_or(0);
@@ -328,8 +331,8 @@ impl ResourceGuard {
     /// Parses the iowait field from /proc/stat and returns (iowait, total).
     #[cfg(target_os = "linux")]
     fn parse_proc_stat_iowait() -> Option<(u64, u64)> {
-        let stat = fs::read_to_string("/proc/stat").ok()?;
-        let line = stat.lines().next()?;
+        let file = fs::File::open("/proc/stat").ok()?;
+        let line = BufReader::new(file).lines().next()?.ok()?;
         let parts: Vec<&str> = line.split_whitespace().skip(1).collect();
         if parts.len() >= 5 {
             let user: u64 = parts[0].parse().unwrap_or(0);
