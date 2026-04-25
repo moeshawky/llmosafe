@@ -153,8 +153,8 @@ impl ResourceGuard {
     #[cfg(feature = "std")]
     pub fn check_blocking(&self) -> Result<Synapse, KernelError> {
         use crate::llmosafe_integration::{EscalationPolicy, SafetyDecision};
-        use std::thread;
-        use std::time::Duration;
+
+
 
         let policy = EscalationPolicy::default();
         loop {
@@ -184,8 +184,8 @@ impl ResourceGuard {
         deadline: std::time::Instant,
     ) -> Result<Synapse, KernelError> {
         use crate::llmosafe_integration::{EscalationPolicy, SafetyDecision};
-        use std::thread;
-        use std::time::Duration;
+
+
 
         let policy = EscalationPolicy::default();
         loop {
