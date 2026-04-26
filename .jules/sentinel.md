@@ -17,3 +17,8 @@
 **Vulnerability:** In `llmosafe_memory.rs`, the C-ABI function `process_state_update` uses `.expect("memory lock poisoned")` when locking `GLOBAL_MEMORY`. If a thread previously panicked while holding the lock, subsequent calls across the FFI boundary will panic, crashing the host application (Denial of Service).
 **Learning:** Panicking across the FFI boundary leads to undefined behavior or application crashes. Fallible operations, such as locking a Mutex that might be poisoned, must be handled gracefully and return an appropriate C-ABI error code.
 **Prevention:** Use explicit pattern matching (`match`) on `Mutex::lock()` instead of `.expect()` or `.unwrap()`. Return a predefined error code (e.g., `-6`) when a `PoisonError` occurs to ensure system reliability in concurrent environments.
+
+## 2026-04-26 - [CRITICAL] Prevent Undefined Behavior in C-ABI `from_raw_parts` via Length Bounds Check
+**Vulnerability:** In C-ABI boundaries (e.g. `llmosafe_calculate_halo`), passing memory via pointer and length directly into `core::slice::from_raw_parts` without checking if the length parameter is strictly `<= isize::MAX as usize` allows C callers to pass arbitrarily large sizes. This can trigger Undefined Behavior (UB) and potential denial of service or out-of-bounds reads if external callers provide a malicious or uninitialized large size.
+**Learning:** `core::slice::from_raw_parts` explicitly forbids the length from being greater than `isize::MAX`. In FFI contexts, any external input (like sizes from C or Python) is untrusted and must be validated.
+**Prevention:** Always validate that the length parameter is `<= isize::MAX as usize` prior to calling `core::slice::from_raw_parts` in any C-ABI exported functions.
