@@ -433,9 +433,18 @@ mod adler32 {
     pub fn adler32(data: &[u8]) -> u32 {
         let mut a: u32 = 1;
         let mut b: u32 = 0;
-        for &byte in data {
-            a = (a + byte as u32) % 65521;
-            b = (b + a) % 65521;
+
+        // Optimize by deferring modulo operations.
+        // Accumulate sums using fast addition in carefully sized chunks
+        // (up to 5552 bytes for a u32 accumulator) to avoid overflow,
+        // applying the modulo only at the end of each chunk.
+        for chunk in data.chunks(5552) {
+            for &byte in chunk {
+                a += byte as u32;
+                b += a;
+            }
+            a %= 65521;
+            b %= 65521;
         }
         (b << 16) | a
     }
