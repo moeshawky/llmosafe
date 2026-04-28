@@ -433,9 +433,16 @@ mod adler32 {
     pub fn adler32(data: &[u8]) -> u32 {
         let mut a: u32 = 1;
         let mut b: u32 = 0;
-        for &byte in data {
-            a = (a + byte as u32) % 65521;
-            b = (b + a) % 65521;
+        // Defer expensive modulo operations by chunking the data.
+        // 5552 is the maximum number of iterations before `b` can overflow a u32
+        // (the maximum possible value of `b` after 5552 iterations is 4,294,843,200 < u32::MAX)
+        for chunk in data.chunks(5552) {
+            for &byte in chunk {
+                a += byte as u32;
+                b += a;
+            }
+            a %= 65521;
+            b %= 65521;
         }
         (b << 16) | a
     }
