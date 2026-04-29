@@ -431,11 +431,20 @@ pub fn sift_perceptions(observations: &[&str], objective: &str) -> SiftedSynapse
 
 mod adler32 {
     pub fn adler32(data: &[u8]) -> u32 {
+        const MOD_ADLER: u32 = 65521;
         let mut a: u32 = 1;
         let mut b: u32 = 0;
-        for &byte in data {
-            a = (a + byte as u32) % 65521;
-            b = (b + a) % 65521;
+
+        // Accumulate sum using fast addition in carefully sized chunks.
+        // 5552 bytes is the max chunk size for a `u32` accumulator without overflow,
+        // reducing the expensive modulo operations by deferring them.
+        for chunk in data.chunks(5552) {
+            for &byte in chunk {
+                a += byte as u32;
+                b += a;
+            }
+            a %= MOD_ADLER;
+            b %= MOD_ADLER;
         }
         (b << 16) | a
     }
