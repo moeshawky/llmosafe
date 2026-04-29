@@ -7,3 +7,6 @@
 ## 2024-05-20 - [Cache Expensive Derived Properties Inside Search Loops]
 **Learning:** In `sift_perceptions`, the `halo` signal was calculated inside the observation search loop to determine the `score`. However, after the loop completed and the `best_obs` was found, `calculate_halo_signal(best_obs)` was called again to determine `has_bias`. This led to a redundant O(N) recalculation.
 **Action:** When searching for a 'best' element in a loop, if expensive derived properties (like string processing signals) are computed to evaluate the elements, cache these properties alongside the best element pointer when it updates. This avoids redundant O(N) recalculations after the loop.
+## 2025-05-15 - [Defer Modulo Operations in Checksum Calculators]
+**Learning:** The `adler32` function computed `a = (a + byte) % 65521` and `b = (b + a) % 65521` for every single byte. Modulo operations are notoriously slow, especially inside a hot loop iterating over large payloads (like serialized structs).
+**Action:** When calculating checksums or accumulating values that require modulo operations, use mathematically safe chunking. Accumulate the sum using fast addition in carefully sized chunks (e.g., up to 5552 bytes for a `u32` accumulator without overflow) and only apply the modulo at the end of each chunk.
