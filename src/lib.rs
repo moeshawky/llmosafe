@@ -64,6 +64,13 @@ mod c_abi {
         if text_ptr.is_null() || text_len == 0 {
             return 0;
         }
+
+        // Security: Prevent UB by ensuring length does not exceed isize::MAX.
+        // from_raw_parts requires length to be <= isize::MAX as usize.
+        if text_len > isize::MAX as usize {
+            return 0;
+        }
+
         // Securely bound memory reads instead of unbounded null-terminator scan
         let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
         let text = String::from_utf8_lossy(slice);
