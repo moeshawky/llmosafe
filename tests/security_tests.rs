@@ -121,12 +121,7 @@ mod tests {
         let empty: Vec<&str> = vec![];
         let result = std::panic::catch_unwind(|| sift_perceptions(&empty, "test"));
 
-        match result {
-            Ok(_synapse) => {}
-            Err(_) => {
-                // Empty array handling is acceptable to fail gracefully
-            }
-        }
+        if let Ok(_synapse) = result {}
     }
 
     #[test]
