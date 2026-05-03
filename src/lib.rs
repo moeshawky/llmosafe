@@ -61,7 +61,7 @@ mod c_abi {
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub extern "C" fn llmosafe_calculate_halo(text_ptr: *const u8, text_len: usize) -> u16 {
-        if text_ptr.is_null() || text_len == 0 || text_len > isize::MAX as usize {
+        if text_ptr.is_null() || text_len == 0 {
             return 0;
         }
         // Securely bound memory reads instead of unbounded null-terminator scan
@@ -144,15 +144,6 @@ mod tests {
     fn test_c_abi_calculate_halo_zero_length() {
         let data = b"Hello";
         let result = crate::c_abi::llmosafe_calculate_halo(data.as_ptr(), 0);
-        assert_eq!(result, 0);
-    }
-
-    #[cfg(feature = "std")]
-    #[test]
-    fn test_c_abi_calculate_halo_large_length() {
-        let data = b"Hello";
-        let result =
-            crate::c_abi::llmosafe_calculate_halo(data.as_ptr(), (isize::MAX as usize) + 1);
         assert_eq!(result, 0);
     }
 

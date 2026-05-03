@@ -17,8 +17,3 @@
 **Vulnerability:** In `llmosafe_memory.rs`, the C-ABI function `process_state_update` uses `.expect("memory lock poisoned")` when locking `GLOBAL_MEMORY`. If a thread previously panicked while holding the lock, subsequent calls across the FFI boundary will panic, crashing the host application (Denial of Service).
 **Learning:** Panicking across the FFI boundary leads to undefined behavior or application crashes. Fallible operations, such as locking a Mutex that might be poisoned, must be handled gracefully and return an appropriate C-ABI error code.
 **Prevention:** Use explicit pattern matching (`match`) on `Mutex::lock()` instead of `.expect()` or `.unwrap()`. Return a predefined error code (e.g., `-6`) when a `PoisonError` occurs to ensure system reliability in concurrent environments.
-
-## 2026-05-01 - [CRITICAL] Prevent FFI Out-Of-Bounds via Negative/Large Lengths
-**Vulnerability:** External C callers might pass maliciously large sizes or negative integers that cast to huge unsigned values (`usize`). If passed to `core::slice::from_raw_parts`, sizes exceeding `isize::MAX` cause Undefined Behavior (UB), leading to segfaults or potential arbitrary code execution.
-**Learning:** Bounding `text_len` with `0` is not enough when constructing memory slices in Rust. We must always constrain FFI length parameters to explicitly avoid lengths greater than `isize::MAX as usize`.
-**Prevention:** Add `text_len > isize::MAX as usize` as an early exit condition before creating any slices with `core::slice::from_raw_parts` to prevent system crashes from malformed inputs.

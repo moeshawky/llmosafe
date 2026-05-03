@@ -36,4 +36,4 @@ int32_t llmosafe_get_stability(uint64_t synapse_bits);
 
 uint8_t llmosafe_get_system_cpu_load(void);
 
-#endif /* LLMOSAFE_H */
+#endif  /* LLMOSAFE_H */
