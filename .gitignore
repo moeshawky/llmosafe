@@ -47,3 +47,4 @@ __pycache__/
 *.json
 *.txt
 !README.txt
+.ix/
