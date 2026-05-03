@@ -236,19 +236,19 @@ impl EscalationPolicy {
             return SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::BiasDetected,
-                cooldown_ms: 0,
+                cooldown_ms: 5000,
             };
         }
 
         // Entropy-based decisions
         if entropy >= self.halt_entropy {
-            return SafetyDecision::Halt(KernelError::CognitiveInstability, 0);
+            return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
         }
         if entropy >= self.escalate_entropy {
             return SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::EntropyApproachingLimit,
-                cooldown_ms: 0,
+                cooldown_ms: 5000,
             };
         }
         if entropy >= self.warn_entropy {
@@ -260,7 +260,7 @@ impl EscalationPolicy {
             return SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::SurpriseElevated,
-                cooldown_ms: 0,
+                cooldown_ms: 5000,
             };
         }
         if surprise >= self.warn_surprise {
@@ -295,7 +295,7 @@ impl EscalationPolicy {
             CognitiveStability::Stable => SafetyDecision::Proceed,
             CognitiveStability::Pressure => SafetyDecision::Warn("cognitive pressure detected"),
             CognitiveStability::Unstable => {
-                SafetyDecision::Halt(KernelError::CognitiveInstability, 0)
+                SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)
             }
         }
     }
@@ -372,13 +372,13 @@ mod tests {
             SafetyDecision::Escalate {
                 entropy: 500,
                 reason: EscalationReason::BiasDetected,
-                cooldown_ms: 0,
+                cooldown_ms: 5000,
             }
             .severity(),
             2
         );
         assert_eq!(
-            SafetyDecision::Halt(KernelError::CognitiveInstability, 0).severity(),
+            SafetyDecision::Halt(KernelError::CognitiveInstability, 30000).severity(),
             3
         );
         assert_eq!(
@@ -494,5 +494,48 @@ mod tests {
         // Pressure override
         let decision = policy.decide_with_pressure(400, 100, false, PressureLevel::Critical);
         assert!(matches!(decision, SafetyDecision::Escalate { .. }));
+    }
+
+    #[test]
+    fn test_escalation_policy_cooldown_values() {
+        let policy = EscalationPolicy::default();
+
+        // Test Escalate cooldown (5000ms) for entropy-based escalation
+        let decision = policy.decide(850, 100, false);
+        assert!(matches!(decision, SafetyDecision::Escalate { cooldown_ms: 5000, .. }));
+
+        // Test Escalate cooldown (5000ms) for bias-based escalation
+        let decision = policy.decide(400, 100, true);
+        assert!(matches!(decision, SafetyDecision::Escalate { cooldown_ms: 5000, .. }));
+
+        // Test Escalate cooldown (5000ms) for surprise-based escalation
+        let decision = policy.decide(400, 550, false);
+        assert!(matches!(decision, SafetyDecision::Escalate { cooldown_ms: 5000, .. }));
+
+        // Test Halt cooldown (30000ms) for entropy-based halt
+        let decision = policy.decide(1100, 100, false);
+        assert!(matches!(decision, SafetyDecision::Halt(_, 30000)));
+    }
+
+    #[test]
+    fn test_escalation_policy_cooldown_non_zero() {
+        // Verify that all Escalate and Halt decisions have non-zero cooldowns
+        let policy = EscalationPolicy::default();
+
+        // Escalate cases should have 5000ms cooldown
+        if let SafetyDecision::Escalate { cooldown_ms, .. } = policy.decide(850, 100, false) {
+            assert_ne!(cooldown_ms, 0, "Escalate cooldown should be non-zero");
+            assert_eq!(cooldown_ms, 5000, "Escalate cooldown should be 5000ms");
+        } else {
+            panic!("Expected Escalate decision");
+        }
+
+        // Halt case should have 30000ms cooldown
+        if let SafetyDecision::Halt(_, cooldown_ms) = policy.decide(1100, 100, false) {
+            assert_ne!(cooldown_ms, 0, "Halt cooldown should be non-zero");
+            assert_eq!(cooldown_ms, 30000, "Halt cooldown should be 30000ms");
+        } else {
+            panic!("Expected Halt decision");
+        }
     }
 }

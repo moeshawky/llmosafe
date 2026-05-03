@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] - 2026-05-03
+
+### Fixed
+
+- **Fixed:** Zero cooldown on all `SafetyDecision::Halt` and `SafetyDecision::Escalate` return sites (was `0ms`, now `30000ms` and `5000ms` respectively) — previously caused immediate re-entry into evaluation loop on halt/escalation
+- **Fixed:** Missing cooldown on `decide_from_stability()` Halt path (`CognitiveInstability` variant)
+
+### Changed
+
+- `EscalationPolicy::decide()` now returns `5000ms` cooldown for all `Escalate` variants (bias, entropy, surprise)
+- `EscalationPolicy::decide()` now returns `30000ms` cooldown for `Halt` variant
+- `EscalationPolicy::decide_from_stability()` now returns `30000ms` cooldown for `CognitiveInstability`
+
+## [0.5.4] - 2026-04-23
+
+### Fixed
+
+- Updated version metadata (no code changes)
+
 ## [0.5.3] - 2026-04-23
 
 ### 🔒 Security
