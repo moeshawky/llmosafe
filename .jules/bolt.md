@@ -11,3 +11,6 @@
 ## 2025-02-12 - Defer Modulo Operations in Hash/Checksum Accumulators
 **Learning:** When calculating checksums or accumulating values where modulo operations are required (like Adler-32), executing a modulo on every byte iteration introduces significant overhead.
 **Action:** Accumulate sums using fast addition in carefully sized chunks (e.g., up to 5552 bytes for a `u32` accumulator) to avoid integer overflow, and apply the expensive modulo operation only at the end of each chunk.
+## 2025-05-03 - [Ring-buffer ArrayVec for O(1) push]
+**Learning:** In `src/llmosafe_detection.rs`, `ArrayVec::push` implemented an O(N) shift operation to drop the oldest element when the capacity was reached. Because `ArrayVec` acts as a queue structure within tight loops (like updating tracking histories), this caused redundant O(N) work on every insertion past capacity.
+**Action:** Optimize stack-allocated fixed-size buffers by using a ring buffer approach (tracking a `head` index) instead of shifting memory linearly. This changes the O(N) push to an O(1) operation while keeping the underlying structure fixed-size and allocation-free.
