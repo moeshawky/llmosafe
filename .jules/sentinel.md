@@ -22,3 +22,8 @@
 **Vulnerability:** External C callers might pass maliciously large sizes or negative integers that cast to huge unsigned values (`usize`). If passed to `core::slice::from_raw_parts`, sizes exceeding `isize::MAX` cause Undefined Behavior (UB), leading to segfaults or potential arbitrary code execution.
 **Learning:** Bounding `text_len` with `0` is not enough when constructing memory slices in Rust. We must always constrain FFI length parameters to explicitly avoid lengths greater than `isize::MAX as usize`.
 **Prevention:** Add `text_len > isize::MAX as usize` as an early exit condition before creating any slices with `core::slice::from_raw_parts` to prevent system crashes from malformed inputs.
+
+## 2024-06-26 - [MEDIUM] Prevent OOM DoS in AdversarialDetector
+**Vulnerability:** `AdversarialDetector::detect_substrings` calls `input.to_ascii_lowercase()`, which allocates a new `String` on the heap proportional to the input size. Passing a massive string (e.g., gigabytes) causes uncontrolled memory allocation, leading to an Out-Of-Memory (OOM) crash and Denial of Service (DoS).
+**Learning:** String allocation functions like `to_ascii_lowercase()` must be bounded when processing untrusted input to prevent resource exhaustion attacks, especially in a library intended for safety-critical systems.
+**Prevention:** Always enforce a maximum input length (e.g., 64KB) before performing operations that allocate memory proportional to the input size. Use `is_char_boundary` to truncate safely.
