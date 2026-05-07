@@ -22,8 +22,3 @@
 **Vulnerability:** External C callers might pass maliciously large sizes or negative integers that cast to huge unsigned values (`usize`). If passed to `core::slice::from_raw_parts`, sizes exceeding `isize::MAX` cause Undefined Behavior (UB), leading to segfaults or potential arbitrary code execution.
 **Learning:** Bounding `text_len` with `0` is not enough when constructing memory slices in Rust. We must always constrain FFI length parameters to explicitly avoid lengths greater than `isize::MAX as usize`.
 **Prevention:** Add `text_len > isize::MAX as usize` as an early exit condition before creating any slices with `core::slice::from_raw_parts` to prevent system crashes from malformed inputs.
-
-## 2024-06-25 - [MEDIUM] Prevent missing input length limits and integer overflow
-**Vulnerability:** The FFI boundary had no maximum string length validation for `llmosafe_calculate_halo`, which could allow massive allocations causing a Denial of Service (OOM) via huge invalid UTF-8 strings. Furthermore, the math calculating memory bounds `(ceiling_mb as usize) * 1024 * 1024` was susceptible to integer overflows on 32-bit platforms, potentially causing huge limits to roll over into small limits or bypass bounds checking completely.
-**Learning:** Raw limits passed through C-ABI interfaces must be capped to reasonable hard limits before processing. Multiplications converting limits to bytes must explicitly handle or prevent integer overflow via `saturating_mul`.
-**Prevention:** Always place a hard ceiling (e.g. 10MB) on C-string inputs in the boundary. Always use `saturating_mul` for multiplicative scale conversions on input resource limits.
