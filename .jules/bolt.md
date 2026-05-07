@@ -11,3 +11,7 @@
 ## 2025-02-12 - Defer Modulo Operations in Hash/Checksum Accumulators
 **Learning:** When calculating checksums or accumulating values where modulo operations are required (like Adler-32), executing a modulo on every byte iteration introduces significant overhead.
 **Action:** Accumulate sums using fast addition in carefully sized chunks (e.g., up to 5552 bytes for a `u32` accumulator) to avoid integer overflow, and apply the expensive modulo operation only at the end of each chunk.
+
+## 2025-05-07 - [Replace Vec Allocations with Iterators in Static Parsers]
+**Learning:** Collecting string slices into a `Vec` for small, fixed-size iteration (such as parsing the first few fields of `/proc/stat`) causes unnecessary heap allocations that hurt performance.
+**Action:** Replace intermediate collections (like `Vec::collect()`) with zero-allocation iterators using methods like `.nth()` or chained `.next()` calls (e.g., via `.filter_map()`) when only a fixed number of fields are required from a string split operation.
