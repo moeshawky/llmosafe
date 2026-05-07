@@ -502,15 +502,33 @@ mod tests {
 
         // Test Escalate cooldown (5000ms) for entropy-based escalation
         let decision = policy.decide(850, 100, false);
-        assert!(matches!(decision, SafetyDecision::Escalate { cooldown_ms: 5000, .. }));
+        assert!(matches!(
+            decision,
+            SafetyDecision::Escalate {
+                cooldown_ms: 5000,
+                ..
+            }
+        ));
 
         // Test Escalate cooldown (5000ms) for bias-based escalation
         let decision = policy.decide(400, 100, true);
-        assert!(matches!(decision, SafetyDecision::Escalate { cooldown_ms: 5000, .. }));
+        assert!(matches!(
+            decision,
+            SafetyDecision::Escalate {
+                cooldown_ms: 5000,
+                ..
+            }
+        ));
 
         // Test Escalate cooldown (5000ms) for surprise-based escalation
         let decision = policy.decide(400, 550, false);
-        assert!(matches!(decision, SafetyDecision::Escalate { cooldown_ms: 5000, .. }));
+        assert!(matches!(
+            decision,
+            SafetyDecision::Escalate {
+                cooldown_ms: 5000,
+                ..
+            }
+        ));
 
         // Test Halt cooldown (30000ms) for entropy-based halt
         let decision = policy.decide(1100, 100, false);

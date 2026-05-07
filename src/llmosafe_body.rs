@@ -154,8 +154,6 @@ impl ResourceGuard {
     pub fn check_blocking(&self) -> Result<Synapse, KernelError> {
         use crate::llmosafe_integration::{EscalationPolicy, SafetyDecision};
 
-
-
         let policy = EscalationPolicy::default();
         loop {
             let entropy = self.raw_entropy();
@@ -184,8 +182,6 @@ impl ResourceGuard {
         deadline: std::time::Instant,
     ) -> Result<Synapse, KernelError> {
         use crate::llmosafe_integration::{EscalationPolicy, SafetyDecision};
-
-
 
         let policy = EscalationPolicy::default();
         loop {

@@ -65,7 +65,11 @@ mod c_abi {
     pub extern "C" fn llmosafe_calculate_halo(text_ptr: *const u8, text_len: usize) -> u16 {
         // Limit string length to 10MB to prevent DoS (OOM) from huge invalid UTF-8 strings
         let max_text_len = 10 * 1024 * 1024;
-        if text_ptr.is_null() || text_len == 0 || text_len > isize::MAX as usize || text_len > max_text_len {
+        if text_ptr.is_null()
+            || text_len == 0
+            || text_len > isize::MAX as usize
+            || text_len > max_text_len
+        {
             return 0;
         }
         // Securely bound memory reads instead of unbounded null-terminator scan
