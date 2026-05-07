@@ -1,4 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(unused_parens)]
+#![allow(clippy::new_without_default)]
 
 //! LLMOSAFE: A Safety-Critical AI Agent Library
 //!
@@ -61,7 +63,13 @@ mod c_abi {
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub extern "C" fn llmosafe_calculate_halo(text_ptr: *const u8, text_len: usize) -> u16 {
-        if text_ptr.is_null() || text_len == 0 || text_len > isize::MAX as usize {
+        // Limit string length to 10MB to prevent DoS (OOM) from huge invalid UTF-8 strings
+        let max_text_len = 10 * 1024 * 1024;
+        if text_ptr.is_null()
+            || text_len == 0
+            || text_len > isize::MAX as usize
+            || text_len > max_text_len
+        {
             return 0;
         }
         // Securely bound memory reads instead of unbounded null-terminator scan
@@ -72,7 +80,7 @@ mod c_abi {
 
     #[no_mangle]
     pub extern "C" fn llmosafe_check_resources(ceiling_mb: u32) -> i32 {
-        let ceiling_bytes = (ceiling_mb as usize) * 1024 * 1024;
+        let ceiling_bytes = (ceiling_mb as usize).saturating_mul(1024 * 1024);
         let guard = ResourceGuard::new(ceiling_bytes);
 
         match guard.check() {
@@ -89,7 +97,7 @@ mod c_abi {
 
     #[no_mangle]
     pub extern "C" fn llmosafe_get_resource_pressure(ceiling_mb: u32) -> u8 {
-        let ceiling_bytes = (ceiling_mb as usize) * 1024 * 1024;
+        let ceiling_bytes = (ceiling_mb as usize).saturating_mul(1024 * 1024);
         if ceiling_bytes == 0 {
             return 100;
         }
