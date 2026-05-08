@@ -1,5 +1,4 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-#![allow(unused_parens)]
 
 //! LLMOSAFE: A Safety-Critical AI Agent Library
 //!

@@ -306,12 +306,6 @@ pub struct Synapse {
     pub reserved: B28,
 }
 
-impl Default for Synapse {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Synapse {
     /// Creates a Synapse from a raw u128.
     ///
