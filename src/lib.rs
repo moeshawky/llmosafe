@@ -1,3 +1,5 @@
+#![allow(unused_parens)]
+#![allow(clippy::new_without_default)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 //! LLMOSAFE: A Safety-Critical AI Agent Library
