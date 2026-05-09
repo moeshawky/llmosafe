@@ -295,7 +295,6 @@ impl CusumDetector {
 #[bitfield(bits = 128)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[allow(unused_parens)]
 pub struct Synapse {
     pub raw_entropy: B16,
     pub raw_surprise: B16,
