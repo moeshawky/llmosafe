@@ -1,18 +1,25 @@
-//! LLMOSAFE Tier 3 Perceptual Sifter (Rust Implementation)
+//! LLMOSAFE Tier 3 Perceptual Sifter
 //!
-//! This module implements the "Perceptual Decoupling" Axiom.
-//! It acts as a 'Thinking Proxy' (MemSifter pattern) that sifts external
-//! reality into high-signal anchors for the Tier 1/2 safety core.
+//! Implements perceptual decoupling: filters raw observations through
+//! bias detection and utility ranking before they reach the cognitive
+//! kernel.
 //!
-//! Research Grounds:
-//! - MemSifter: Think-and-Rank proxy reasoning.
-//! - Selective Attention: Bias/Halo screening (SCS).
-//! - GDWM: Task-Contextual Utility (CPMI).
+//! # Architecture
+//!
+//! Drawing from MemSifter and Selective Attention (SCS) research:
+//! - **Bias detection**: 8 categories (authority, social proof, scarcity,
+//!   urgency, emotional appeal, expertise signaling, semantic traps,
+//!   template fitting)
+//! - **Utility ranking**: Contextual utility measurement via keyword
+//!   overlap with objective
+//! - **Think-and-Rank**: Scores observations by (utility - halo) and
+//!   returns the highest-scoring perception
 
 use crate::llmosafe_kernel::SiftedSynapse;
 use crate::llmosafe_kernel::Synapse;
 
-/// Authority Bias Keywords: Red flags for expertise/position bias.
+/// Authority bias keyword detection list.
+/// Matches terms that signal expertise/position appeals.
 pub const AUTHORITY_BIAS: &[&str] = &[
     "expert",
     "official",

@@ -1,17 +1,25 @@
-//! LLMOSAFE Tier 1 Cognitive Kernel Prototype
+//! LLMOSAFE Tier 1 Cognitive Kernel
 //!
-//! This module implements the "Law" of the LLMOSAFE meta-pattern.
-//! It uses the SCRUST foundation (Deterministic memory, Bounded execution)
-//! to enforce Cognitive Stability invariants derived from the research corpus.
+//! Implements the formal stability layer using cognitive entropy tracking
+//! and dynamic stability monitoring. Uses bit-index envelope tracking for
+//! O(1) adaptive thresholds without statistical assumptions.
 //!
-//! Research Grounds:
-//! - RMPC (Knowledge Mechanisms): Concentric Containers for uncertainty.
-//! - Titans (Neural Memory): Surprise-based gating.
-//! - Focal Attention (Livšic Equation): Flow stability.
+//! # Architecture
+//!
+//! The safety architecture draws from three domains:
+//!
+//! 1. **Robust Model Predictive Control (RMPC)** — Concentric container
+//!    boundaries for uncertainty quantification.
+//! 2. **Neural Memory Systems (Titans)** — Surprise-based gating for
+//!    state updates.
+//! 3. **Selective Attention (SCS)** — Bias/halo screening at perceptual
+//!    boundaries.
+//!
+//! See the main README for full citations.
 
-/// Repurposed FixedDecimal from SCRUST for Cognitive Entropy tracking.
-/// Precision 28, Scale 2 ensures COBOL-level deterministic arithmetic
-/// for Agent Surprise metrics, preventing "Floating Point Hallucinations."
+/// Cognitive entropy tracker using fixed-point arithmetic.
+/// Precision 28, scale 2 ensures deterministic arithmetic
+/// for agent surprise metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CognitiveEntropy<const P: u32, const S: u32> {

@@ -1,18 +1,21 @@
 //! LLMOSAFE Tier 2 Cognitive Working Memory
 //!
-//! This module implements the "Memory Integrity" Axiom.
-//! It uses the Seshat principle of "Tangible Ratios" (Sekel)
-//! to maintain a fixed-size cognitive state without heap allocation.
+//! Implements surprise-gated state updates with fixed-size storage.
+//! Uses a ring buffer of cognitive entropy values with momentum-based
+//! drift detection.
 //!
-//! Research Grounds:
-//! - Titans: Surprise-based gating with momentum.
-//! - TransformerFAM: Feedback-loop working memory.
-//! - Infini-attention: Compressive associative memory.
+//! # Architecture
+//!
+//! Drawing from TransformerFAM and Infini-attention: surprise-based
+//! gating prevents hallucination propagation, while fixed-size storage
+//! ensures stack allocation and no heap fragmentation.
 
 use crate::llmosafe_kernel::{CognitiveEntropy, KernelError, SiftedSynapse, ValidatedSynapse};
 
-/// The "Working Memory" container (The Sekel of State).
-/// Ratio: 64 "Palms" (anchors) for persistent reasoning.
+/// Fixed-size working memory stack buffer.
+///
+/// Holds up to SIZE entropy values in a ring buffer.
+/// Default capacity is 64 entries (stack-allocated).
 pub struct WorkingMemory<const SIZE: usize = 64> {
     state: [CognitiveEntropy<28, 2>; SIZE],
     current_index: usize,
