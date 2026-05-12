@@ -66,6 +66,7 @@ proptest! {
     }
 }
 
+#[allow(improper_ctypes)]
 extern "C" {
     fn llmosafe_get_stability(synapse_bits: u128) -> i32;
     fn llmosafe_process_synapse(synapse_bits: u128) -> i32;

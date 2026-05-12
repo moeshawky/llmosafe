@@ -43,6 +43,7 @@ pub struct RepetitionDetector {
 #[derive(Debug, Clone)]
 struct ArrayVec<T, const N: usize> {
     data: [Option<T>; N],
+    head: usize,
     len: usize,
 }
 
@@ -57,6 +58,7 @@ impl<T: Clone, const N: usize> ArrayVec<T, N> {
     fn new() -> Self {
         Self {
             data: [Self::INIT; N],
+            head: 0,
             len: 0,
         }
     }
@@ -66,16 +68,19 @@ impl<T: Clone, const N: usize> ArrayVec<T, N> {
             self.data[self.len] = Some(item);
             self.len += 1;
         } else {
-            // Shift left, drop oldest
-            for i in 0..(N - 1) {
-                self.data[i] = self.data[i + 1].take();
-            }
-            self.data[N - 1] = Some(item);
+            // Overwrite oldest in ring buffer
+            self.data[self.head] = Some(item);
+            self.head = (self.head + 1) % N;
         }
     }
 
     fn iter(&self) -> impl Iterator<Item = &T> {
-        self.data[..self.len].iter().filter_map(|x| x.as_ref())
+        let (first, second) = if self.len < N {
+            (&self.data[..self.len], &self.data[0..0])
+        } else {
+            (&self.data[self.head..], &self.data[..self.head])
+        };
+        first.iter().chain(second.iter()).filter_map(|x| x.as_ref())
     }
 
     fn len(&self) -> usize {
