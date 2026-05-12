@@ -55,10 +55,12 @@ class TestCheckResources:
             llmosafe.check_resources(0)
 
     def test_small_ceiling(self):
-        """Very small ceiling may fail."""
-        # This might or might not fail depending on system state
-        result = llmosafe.check_resources(1)
-        assert result in (0, -5)  # OK or ResourceExhaustion
+        """Very small ceiling may fail or raise."""
+        try:
+            result = llmosafe.check_resources(1)
+            assert result in (0, -5)
+        except llmosafe.ResourceExhaustedError:
+            pass
 
 
 class TestGetResourcePressure:

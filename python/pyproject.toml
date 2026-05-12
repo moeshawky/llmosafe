@@ -31,5 +31,7 @@ keywords = ["safety", "ai-agent", "entropy", "detection", "guardrails", "llm"]
 dev = ["pytest>=7.0", "mypy>=1.0"]
 
 [tool.maturin]
-include = [{ path = "Cargo.toml" }]
+manifest-path = "../python-bindings/Cargo.toml"
+module-name = "llmosafe._llmosafe"
+python-source = "."
 features = ["pyo3/extension-module"]
