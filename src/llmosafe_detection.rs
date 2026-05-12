@@ -313,6 +313,13 @@ impl ConfidenceTracker {
     }
 }
 
+#[cfg(feature = "std")]
+fn contains_ignore_ascii_case(text: &str, pattern: &str) -> bool {
+    text.as_bytes()
+        .windows(pattern.len())
+        .any(|window| window.eq_ignore_ascii_case(pattern.as_bytes()))
+}
+
 /// Adversarial pattern detector.
 ///
 /// Recognizes known attack patterns and manipulation attempts.
@@ -330,7 +337,7 @@ impl AdversarialDetector {
 
     /// Add a known adversarial pattern.
     pub fn add_pattern(&mut self, pattern: &str) {
-        let hash = RepetitionDetector::hash_str(pattern);
+        let hash = RepetitionDetector::hash_str(&pattern.to_ascii_lowercase());
         self.patterns.push(hash);
     }
 
@@ -346,7 +353,7 @@ impl AdversarialDetector {
         } else {
             input
         };
-        let input_hash = RepetitionDetector::hash_str(bounded);
+        let input_hash = RepetitionDetector::hash_str(&bounded.to_ascii_lowercase());
         self.patterns.iter().any(|&p| p == input_hash)
     }
 
@@ -363,7 +370,6 @@ impl AdversarialDetector {
         } else {
             input
         };
-        let lower = bounded.to_ascii_lowercase();
         let mut found = Vec::new();
         // Common adversarial patterns
         let patterns: &[&str] = &[
@@ -379,7 +385,7 @@ impl AdversarialDetector {
             "jailbreak",
         ];
         for &pattern in patterns {
-            if lower.contains(pattern) {
+            if contains_ignore_ascii_case(bounded, pattern) {
                 found.push(pattern);
             }
         }

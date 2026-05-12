@@ -249,49 +249,6 @@ use modular_bitfield::prelude::*;
 /// - Knowledge_Mechanisms: cascade depth tracking for ripple effects
 /// - MemSifter: staleness detection via relative timestamps
 ///
-/// # Examples
-///
-/// CusumDetector: Two-sided cumulative sum for anomaly detection.
-/// Derived from statistical process control (Montgomery).
-#[derive(Debug, Clone)]
-pub struct CusumDetector {
-    s_high: f64,
-    s_low: f64,
-    k: f64,
-    h: f64,
-    mu_ref: f64,
-}
-
-impl CusumDetector {
-    pub fn new(mu_ref: f64, k: f64, h: f64) -> Self {
-        Self {
-            s_high: 0.0,
-            s_low: 0.0,
-            k,
-            h,
-            mu_ref,
-        }
-    }
-
-    pub fn update(&mut self, val: f64) -> bool {
-        self.s_high = (0.0f64).max(self.s_high + (val - self.mu_ref) - self.k);
-        self.s_low = (0.0f64).max(self.s_low - (val - self.mu_ref) - self.k);
-        self.s_high > self.h || self.s_low > self.h
-    }
-
-    pub fn reset(&mut self) {
-        self.s_high = 0.0;
-        self.s_low = 0.0;
-    }
-
-    pub fn s_high(&self) -> f64 {
-        self.s_high
-    }
-    pub fn s_low(&self) -> f64 {
-        self.s_low
-    }
-}
-
 #[bitfield(bits = 128)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -379,23 +336,6 @@ impl Synapse {
 mod tests {
     use super::*;
     use proptest::prelude::*;
-
-    #[test]
-    fn test_cusum_detection() {
-        let mut detector = CusumDetector::new(500.0, 50.0, 200.0);
-
-        // No drift
-        for _ in 0..5 {
-            assert!(!detector.update(500.0));
-        }
-
-        // Sustained upward drift
-        assert!(!detector.update(600.0)); // S_high = 0 + (600-500) - 50 = 50
-        assert!(!detector.update(600.0)); // S_high = 50 + (600-500) - 50 = 100
-        assert!(!detector.update(600.0)); // S_high = 100 + (600-500) - 50 = 150
-        assert!(!detector.update(600.0)); // S_high = 150 + (600-500) - 50 = 200
-        assert!(detector.update(600.0)); // S_high = 200 + (600-500) - 50 = 250 -> TRIGGERS (h=200)
-    }
 
     #[test]
     fn test_reasoning_loop() {

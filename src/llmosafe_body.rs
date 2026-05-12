@@ -213,7 +213,7 @@ impl ResourceGuard {
         let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
 
         if ret == 0 {
-            (usage.ru_maxrss as usize) * 1024
+            (usage.ru_maxrss as usize).saturating_mul(1024)
         } else {
             Self::read_rss_from_proc()
         }
@@ -255,7 +255,7 @@ impl ResourceGuard {
                 if line.starts_with("VmRSS:") {
                     if let Some(size_str) = line.split_whitespace().nth(1) {
                         if let Ok(kb) = size_str.parse::<usize>() {
-                            return kb * 1024;
+                            return kb.saturating_mul(1024);
                         }
                     }
                 }
@@ -277,7 +277,7 @@ impl ResourceGuard {
                 if line.starts_with("MemTotal:") {
                     if let Some(size_str) = line.split_whitespace().nth(1) {
                         if let Ok(kb) = size_str.parse::<usize>() {
-                            return kb * 1024;
+                            return kb.saturating_mul(1024);
                         }
                     }
                 }
