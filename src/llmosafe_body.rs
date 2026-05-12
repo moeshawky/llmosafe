@@ -32,9 +32,8 @@ impl EnvironmentalVitals {
     fn read_iowait() -> u64 {
         if let Ok(file) = fs::File::open("/proc/stat") {
             if let Some(Ok(line)) = BufReader::new(file).lines().next() {
-                let parts: Vec<&str> = line.split_whitespace().skip(1).collect();
-                if parts.len() >= 5 {
-                    return parts[4].parse().unwrap_or(0);
+                if let Some(iowait_str) = line.split_whitespace().nth(5) {
+                    return iowait_str.parse().unwrap_or(0);
                 }
             }
         }
@@ -154,8 +153,6 @@ impl ResourceGuard {
     pub fn check_blocking(&self) -> Result<Synapse, KernelError> {
         use crate::llmosafe_integration::{EscalationPolicy, SafetyDecision};
 
-
-
         let policy = EscalationPolicy::default();
         loop {
             let entropy = self.raw_entropy();
@@ -184,8 +181,6 @@ impl ResourceGuard {
         deadline: std::time::Instant,
     ) -> Result<Synapse, KernelError> {
         use crate::llmosafe_integration::{EscalationPolicy, SafetyDecision};
-
-
 
         let policy = EscalationPolicy::default();
         loop {
@@ -313,19 +308,15 @@ impl ResourceGuard {
     fn parse_proc_stat() -> Option<(u64, u64)> {
         let file = fs::File::open("/proc/stat").ok()?;
         let line = BufReader::new(file).lines().next()?.ok()?;
-        let parts: Vec<&str> = line.split_whitespace().skip(1).collect();
-        if parts.len() >= 5 {
-            let user: u64 = parts[0].parse().unwrap_or(0);
-            let nice: u64 = parts[1].parse().unwrap_or(0);
-            let system: u64 = parts[2].parse().unwrap_or(0);
-            let idle: u64 = parts[3].parse().unwrap_or(0);
-            let iowait: u64 = parts[4].parse().unwrap_or(0);
-            let active = user + nice + system;
-            let total = active + idle + iowait;
-            Some((active, total))
-        } else {
-            None
-        }
+        let mut parts = line.split_whitespace().skip(1);
+        let user: u64 = parts.next()?.parse().unwrap_or(0);
+        let nice: u64 = parts.next()?.parse().unwrap_or(0);
+        let system: u64 = parts.next()?.parse().unwrap_or(0);
+        let idle: u64 = parts.next()?.parse().unwrap_or(0);
+        let iowait: u64 = parts.next()?.parse().unwrap_or(0);
+        let active = user + nice + system;
+        let total = active + idle + iowait;
+        Some((active, total))
     }
 
     /// Parses the iowait field from /proc/stat and returns (iowait, total).
@@ -333,19 +324,15 @@ impl ResourceGuard {
     fn parse_proc_stat_iowait() -> Option<(u64, u64)> {
         let file = fs::File::open("/proc/stat").ok()?;
         let line = BufReader::new(file).lines().next()?.ok()?;
-        let parts: Vec<&str> = line.split_whitespace().skip(1).collect();
-        if parts.len() >= 5 {
-            let user: u64 = parts[0].parse().unwrap_or(0);
-            let nice: u64 = parts[1].parse().unwrap_or(0);
-            let system: u64 = parts[2].parse().unwrap_or(0);
-            let idle: u64 = parts[3].parse().unwrap_or(0);
-            let iowait: u64 = parts[4].parse().unwrap_or(0);
-            let active = user + nice + system;
-            let total = active + idle + iowait;
-            Some((iowait, total))
-        } else {
-            None
-        }
+        let mut parts = line.split_whitespace().skip(1);
+        let user: u64 = parts.next()?.parse().unwrap_or(0);
+        let nice: u64 = parts.next()?.parse().unwrap_or(0);
+        let system: u64 = parts.next()?.parse().unwrap_or(0);
+        let idle: u64 = parts.next()?.parse().unwrap_or(0);
+        let iowait: u64 = parts.next()?.parse().unwrap_or(0);
+        let active = user + nice + system;
+        let total = active + idle + iowait;
+        Some((iowait, total))
     }
 
     /// Returns the current CPU load percentage (0-100) using delta measurement.
