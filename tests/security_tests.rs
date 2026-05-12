@@ -1,3 +1,4 @@
+#![allow(clippy::single_match)]
 //! G-SEC security tests - fuzz and injection resilience
 
 #[cfg(test)]
