@@ -336,14 +336,34 @@ impl AdversarialDetector {
 
     /// Check if input matches any known adversarial pattern.
     pub fn is_adversarial(&self, input: &str) -> bool {
-        let input_hash = RepetitionDetector::hash_str(input);
+        const MAX_INPUT_LEN: usize = 64 * 1024;
+        let bounded = if input.len() > MAX_INPUT_LEN {
+            let mut end = MAX_INPUT_LEN;
+            while end > 0 && !input.is_char_boundary(end) {
+                end -= 1;
+            }
+            &input[..end]
+        } else {
+            input
+        };
+        let input_hash = RepetitionDetector::hash_str(bounded);
         self.patterns.iter().any(|&p| p == input_hash)
     }
 
     /// Check for common adversarial substrings.
     #[cfg(feature = "std")]
     pub fn detect_substrings(&self, input: &str) -> Vec<&'static str> {
-        let lower = input.to_ascii_lowercase();
+        const MAX_INPUT_LEN: usize = 64 * 1024;
+        let bounded = if input.len() > MAX_INPUT_LEN {
+            let mut end = MAX_INPUT_LEN;
+            while end > 0 && !input.is_char_boundary(end) {
+                end -= 1;
+            }
+            &input[..end]
+        } else {
+            input
+        };
+        let lower = bounded.to_ascii_lowercase();
         let mut found = Vec::new();
         // Common adversarial patterns
         let patterns: &[&str] = &[
