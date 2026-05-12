@@ -1,0 +1,14 @@
+[package]
+name = "llmosafe-python"
+version = "0.5.5"
+edition = "2021"
+description = "Python bindings for llmosafe"
+publish = false
+
+[lib]
+name = "_llmosafe"
+crate-type = ["cdylib"]
+
+[dependencies]
+llmosafe = { path = "..", features = ["std"] }
+pyo3 = { version = "0.20", features = ["extension-module"] }
