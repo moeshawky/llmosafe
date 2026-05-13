@@ -37,7 +37,7 @@ from llmosafe._llmosafe import (
     BiasHaloDetectedError,
 )
 
-__version__ = "0.5.5"
+__version__ = "0.6.0"
 __all__ = [
     "calculate_halo",
     "check_resources",

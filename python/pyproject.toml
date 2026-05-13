@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "llmosafe"
-version = "0.5.5"
+version = "0.6.0"
 description = "Safety-critical cognitive safety library for AI agents"
 authors = [{name = "llmosafe team", email = "llmosafe@example.com"}]
 readme = "README.md"
