@@ -18,11 +18,6 @@
  * A bit-packed u128 carrying the entire stability state.
  * [Entropy: 16][Surprise: 16][Bias: 1][Position: 12][Timestamp: 16][Cascade: 8][Hash: 31][Reserved: 28]
  *
- * Research Grounds:
- * - Memory_in_LLMs: position-performance curves require context position
- * - Knowledge_Mechanisms: cascade depth tracking for ripple effects
- * - MemSifter: staleness detection via relative timestamps
- *
  */
 typedef struct Synapse Synapse;
 
