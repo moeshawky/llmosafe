@@ -3,6 +3,7 @@ target/
 **/*.rs.bk
 *.lock
 .sniper/
+.jules/
 
 # IDE and editor files
 .vscode/
