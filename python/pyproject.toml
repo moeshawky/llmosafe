@@ -1,0 +1,51 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "llmosafe"
+version = "0.6.0"
+description = "Predictive resource-pressure instrumentation and runtime guardrails for systems processing untrusted inputs"
+authors = [{name = "llmosafe team", email = "llmosafe@example.com"}]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Systems Administration",
+]
+keywords = [
+    "safety",
+    "ai-agent",
+    "entropy",
+    "detection",
+    "guardrails",
+    "llm",
+    "resource-pressure",
+    "disk-exhaustion",
+    "io-monitoring",
+    "runtime-safety",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "mypy>=1.0"]
+
+[tool.maturin]
+python-source = "."
+module-name = "llmosafe._llmosafe"
+features = ["pyo3/extension-module"]
