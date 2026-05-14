@@ -40,7 +40,7 @@ from llmosafe._llmosafe import (
     BiasHaloDetectedError,
 )
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 __all__ = [
     # Functions
