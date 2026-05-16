@@ -238,7 +238,7 @@ impl BiasBreakdown {
 /// Case-insensitive keyword match without allocation.
 #[inline]
 fn word_in_list(word: &str, list: &[&str]) -> bool {
-    list.iter().any(|kw| word.eq_ignore_ascii_case(kw))
+    list.iter().any(|kw| word.len() == kw.len() && word.eq_ignore_ascii_case(kw))
 }
 
 /// Returns a breakdown of detected biases by category.
@@ -346,7 +346,7 @@ fn calculate_utility_with_cache(
 
         let mut found = false;
         for word_b in obj_words.iter().take(obj_len) {
-            if trimmed_a.eq_ignore_ascii_case(word_b) {
+            if trimmed_a.len() == word_b.len() && trimmed_a.eq_ignore_ascii_case(word_b) {
                 count += 1;
                 found = true;
                 break;
@@ -357,7 +357,7 @@ fn calculate_utility_with_cache(
         if !found && obj_len == 64 {
             for word_b in objective.split_whitespace().skip(64) {
                 let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
-                if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
+                if trimmed_a.len() == trimmed_b.len() && trimmed_a.eq_ignore_ascii_case(trimmed_b) {
                     count += 1;
                     break;
                 }
