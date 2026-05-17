@@ -494,10 +494,7 @@ mod tests {
         // Pressure override
         let decision = policy.decide_with_pressure(400, 100, false, PressureLevel::Critical);
         if let SafetyDecision::Escalate { cooldown_ms, .. } = decision {
-            assert_ne!(
-                cooldown_ms, 0,
-                "Escalate cooldown on pressure override should be non-zero to prevent spin-loops"
-            );
+            assert_ne!(cooldown_ms, 0, "Escalate cooldown on pressure override should be non-zero to prevent spin-loops");
             assert_eq!(cooldown_ms, 5000);
         } else {
             panic!("Expected Escalate decision on Critical pressure override");
