@@ -283,7 +283,7 @@ impl EscalationPolicy {
             return SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::ResourcePressure,
-                cooldown_ms: 0,
+                cooldown_ms: 5000,
             };
         }
         self.decide(entropy, surprise, has_bias)
@@ -493,7 +493,12 @@ mod tests {
         assert!(matches!(decision, SafetyDecision::Proceed));
         // Pressure override
         let decision = policy.decide_with_pressure(400, 100, false, PressureLevel::Critical);
-        assert!(matches!(decision, SafetyDecision::Escalate { .. }));
+        if let SafetyDecision::Escalate { cooldown_ms, .. } = decision {
+            assert_ne!(cooldown_ms, 0, "Escalate cooldown should be non-zero");
+            assert_eq!(cooldown_ms, 5000, "Escalate cooldown should be 5000ms");
+        } else {
+            panic!("Expected Escalate decision");
+        }
     }
 
     #[test]
