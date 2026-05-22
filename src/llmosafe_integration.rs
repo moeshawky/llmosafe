@@ -279,13 +279,13 @@ impl EscalationPolicy {
         pressure: PressureLevel,
     ) -> SafetyDecision {
         // Pressure override
-        if pressure >= self.escalate_pressure {
-            return SafetyDecision::Escalate {
-                entropy,
-                reason: EscalationReason::ResourcePressure,
-                cooldown_ms: 0,
-            };
-        }
+if pressure >= self.escalate_pressure {
+    return SafetyDecision::Escalate {
+        entropy,
+        reason: EscalationReason::ResourcePressure,
+        cooldown_ms: 5000,
+    };
+}
         self.decide(entropy, surprise, has_bias)
     }
 
