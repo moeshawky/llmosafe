@@ -29,8 +29,7 @@ pub mod llmosafe_sifter;
 pub mod llmosafe_body;
 
 #[cfg(feature = "python")]
-pub mod py_module;
-
+//pub mod py_module;
 #[cfg(feature = "std")]
 pub use llmosafe_body::ResourceGuard;
 #[cfg(feature = "std")]
