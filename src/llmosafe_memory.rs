@@ -81,18 +81,20 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
 
     pub fn trend(&self) -> f64 {
         let n = SIZE as f64;
-        let mut sum_x = 0.0;
+
+        // ⚡ Bolt Optimization: Use O(1) arithmetic formulas for static loop indices.
+        // Impact: Eliminates O(N) iterative accumulations for sum_x and sum_xx.
+        let sum_x = n * (n - 1.0) / 2.0;
+        let sum_xx = n * (n - 1.0) * (2.0 * n - 1.0) / 6.0;
+
         let mut sum_y = 0.0;
         let mut sum_x_times_y = 0.0;
-        let mut sum_xx = 0.0;
 
         for (i, e) in self.state.iter().enumerate() {
             let x = i as f64;
             let y = e.mantissa() as f64;
-            sum_x += x;
             sum_y += y;
             sum_x_times_y += x * y;
-            sum_xx += x * x;
         }
 
         (n * sum_x_times_y - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x)
