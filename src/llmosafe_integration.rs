@@ -283,7 +283,7 @@ impl EscalationPolicy {
             return SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::ResourcePressure,
-                cooldown_ms: 5000,
+                cooldown_ms: 0,
             };
         }
         self.decide(entropy, surprise, has_bias)

@@ -337,7 +337,7 @@ impl AdversarialDetector {
 
     /// Add a known adversarial pattern.
     pub fn add_pattern(&mut self, pattern: &str) {
-        let hash = RepetitionDetector::hash_str(&pattern.to_ascii_lowercase());
+        let hash = RepetitionDetector::hash_str(&pattern.to_lowercase());
         self.patterns.push(hash);
     }
 
@@ -353,7 +353,7 @@ impl AdversarialDetector {
         } else {
             input
         };
-        let input_hash = RepetitionDetector::hash_str(&bounded.to_ascii_lowercase());
+        let input_hash = RepetitionDetector::hash_str(&bounded.to_lowercase());
         self.patterns.iter().any(|&p| p == input_hash)
     }
 
