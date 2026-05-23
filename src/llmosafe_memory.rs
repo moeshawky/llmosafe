@@ -81,19 +81,19 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
 
     pub fn trend(&self) -> f64 {
         let n = SIZE as f64;
-        let mut sum_x = 0.0;
         let mut sum_y = 0.0;
         let mut sum_x_times_y = 0.0;
-        let mut sum_xx = 0.0;
 
         for (i, e) in self.state.iter().enumerate() {
-            let x = i as f64;
             let y = e.mantissa() as f64;
-            sum_x += x;
             sum_y += y;
-            sum_x_times_y += x * y;
-            sum_xx += x * x;
+            sum_x_times_y += (i as f64) * y;
         }
+
+        // O(1) closed-form formulas for arithmetic progressions
+        let nm1 = n - 1.0;
+        let sum_x = (n * nm1) / 2.0;
+        let sum_xx = (n * nm1 * (2.0 * n - 1.0)) / 6.0;
 
         (n * sum_x_times_y - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x)
     }
