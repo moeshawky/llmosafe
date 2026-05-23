@@ -336,12 +336,26 @@ impl AdversarialDetector {
     }
 
     /// Add a known adversarial pattern.
+    #[cfg(feature = "std")]
     pub fn add_pattern(&mut self, pattern: &str) {
         let hash = RepetitionDetector::hash_str(&pattern.to_ascii_lowercase());
         self.patterns.push(hash);
     }
+    #[cfg(not(feature = "std"))]
+    pub fn add_pattern(&mut self, pattern: &str) {
+        let mut lower = [0u8; 1024];
+        let bytes = pattern.as_bytes();
+        let len = core::cmp::min(bytes.len(), 1024);
+        for i in 0..len {
+            lower[i] = bytes[i].to_ascii_lowercase();
+        }
+        let lower_str = core::str::from_utf8(&lower[..len]).unwrap_or("");
+        let hash = RepetitionDetector::hash_str(lower_str);
+        self.patterns.push(hash);
+    }
 
     /// Check if input matches any known adversarial pattern.
+    #[cfg(feature = "std")]
     pub fn is_adversarial(&self, input: &str) -> bool {
         const MAX_INPUT_LEN: usize = 64 * 1024;
         let bounded = if input.len() > MAX_INPUT_LEN {
@@ -354,6 +368,29 @@ impl AdversarialDetector {
             input
         };
         let input_hash = RepetitionDetector::hash_str(&bounded.to_ascii_lowercase());
+        self.patterns.iter().any(|&p| p == input_hash)
+    }
+    #[cfg(not(feature = "std"))]
+    pub fn is_adversarial(&self, input: &str) -> bool {
+        const MAX_INPUT_LEN: usize = 64 * 1024;
+        let bounded = if input.len() > MAX_INPUT_LEN {
+            let mut end = MAX_INPUT_LEN;
+            while end > 0 && !input.is_char_boundary(end) {
+                end -= 1;
+            }
+            &input[..end]
+        } else {
+            input
+        };
+
+        let mut lower = [0u8; 1024];
+        let bytes = bounded.as_bytes();
+        let len = core::cmp::min(bytes.len(), 1024);
+        for i in 0..len {
+            lower[i] = bytes[i].to_ascii_lowercase();
+        }
+        let lower_str = core::str::from_utf8(&lower[..len]).unwrap_or("");
+        let input_hash = RepetitionDetector::hash_str(lower_str);
         self.patterns.iter().any(|&p| p == input_hash)
     }
 
