@@ -21,6 +21,9 @@ Thumbs.db
 *.dylib
 *.dll
 *.a
+c_harness
+test_llmosafe
+libtest_mod.rlib
 
 # Test artifacts
 *.log
@@ -37,11 +40,13 @@ kaggle_upload/
 llmosafe_new/
 
 # Python - NOT PART OF RUST LIBRARY
-*.py
+/*.py
 *.pyc
 __pycache__/
 *.ipynb
 .ipynb_checkpoints/
+!llmosafe-py/llmosafe/
+!examples/python_consumer/
 
 # Data files - NOT PART OF RUST LIBRARY
 *.jsonl

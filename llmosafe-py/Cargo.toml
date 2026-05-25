@@ -1,6 +1,6 @@
 [package]
-name = "llmosafe-python"
-version = "0.6.0"
+name = "llmosafe-py"
+version = "0.6.1"
 edition = "2021"
 description = "Python bindings for llmosafe"
 publish = false

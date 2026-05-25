@@ -4,14 +4,16 @@ build-backend = "maturin"
 
 [project]
 name = "llmosafe"
-version = "0.6.0"
-description = "Safety-critical cognitive safety library for AI agents"
+version = "0.6.1"
+description = "Predictive resource-pressure instrumentation and runtime guardrails for systems processing untrusted inputs"
 authors = [{name = "llmosafe team", email = "llmosafe@example.com"}]
 readme = "README.md"
 requires-python = ">=3.8"
+license = {text = "MIT"}
 classifiers = [
-    "Development Status :: 4 - Mature",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Operating System :: Microsoft :: Windows",
@@ -24,14 +26,26 @@ classifiers = [
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Systems Administration",
 ]
-keywords = ["safety", "ai-agent", "entropy", "detection", "guardrails", "llm"]
+keywords = [
+    "safety",
+    "ai-agent",
+    "entropy",
+    "detection",
+    "guardrails",
+    "llm",
+    "resource-pressure",
+    "disk-exhaustion",
+    "io-monitoring",
+    "runtime-safety",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "mypy>=1.0"]
 
 [tool.maturin]
-manifest-path = "../python-bindings/Cargo.toml"
-module-name = "llmosafe._llmosafe"
 python-source = "."
+module-name = "llmosafe._llmosafe"
 features = ["pyo3/extension-module"]

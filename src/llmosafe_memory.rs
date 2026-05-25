@@ -79,23 +79,23 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         variance_sum / SIZE as f64
     }
 
-pub fn trend(&self) -> f64 {
-    let n = SIZE as f64;
-    let mut sum_y = 0.0;
-    let mut sum_x_times_y = 0.0;
+    pub fn trend(&self) -> f64 {
+        let n = SIZE as f64;
+        let mut sum_y = 0.0;
+        let mut sum_x_times_y = 0.0;
 
-    for (i, e) in self.state.iter().enumerate() {
-        let x = i as f64;
-        let y = e.mantissa() as f64;
-        sum_y += y;
-        sum_x_times_y += x * y;
+        for (i, e) in self.state.iter().enumerate() {
+            let x = i as f64;
+            let y = e.mantissa() as f64;
+            sum_y += y;
+            sum_x_times_y += x * y;
+        }
+
+        let sum_x = (n * (n - 1.0)) / 2.0;
+        let sum_xx = (n * (n - 1.0) * (2.0 * n - 1.0)) / 6.0;
+
+        (n * sum_x_times_y - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x)
     }
-
-    let sum_x = (n * (n - 1.0)) / 2.0;
-    let sum_xx = (n * (n - 1.0) * (2.0 * n - 1.0)) / 6.0;
-
-    (n * sum_x_times_y - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x)
-}
 
     pub fn is_drifting(&self, threshold: f64) -> bool {
         self.trend().abs() > threshold
