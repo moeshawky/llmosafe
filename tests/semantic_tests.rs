@@ -85,7 +85,7 @@ mod tests {
         let mut synapse1 = Synapse::new();
         synapse1.set_raw_entropy(100);
         synapse1.set_raw_surprise(500);
-        let sifted1 = SiftedSynapse::new(synapse1);
+        let sifted1 = SiftedSynapse::from_synapse(synapse1);
         assert!(
             memory.update(sifted1).is_ok(),
             "surprise == threshold should pass"
@@ -95,7 +95,7 @@ mod tests {
         let mut synapse2 = Synapse::new();
         synapse2.set_raw_entropy(100);
         synapse2.set_raw_surprise(501);
-        let sifted2 = SiftedSynapse::new(synapse2);
+        let sifted2 = SiftedSynapse::from_synapse(synapse2);
         assert!(
             memory.update(sifted2).is_err(),
             "surprise > threshold should fail"
@@ -111,7 +111,7 @@ mod tests {
         for &v in &values {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(v);
-            let sifted = SiftedSynapse::new(synapse);
+            let sifted = SiftedSynapse::from_synapse(synapse);
             memory.update(sifted).unwrap();
         }
 
@@ -132,11 +132,11 @@ mod tests {
 
         let mut s1 = Synapse::new();
         s1.set_raw_entropy(100);
-        memory.update(SiftedSynapse::new(s1)).unwrap();
+        memory.update(SiftedSynapse::from_synapse(s1)).unwrap();
 
         let mut s2 = Synapse::new();
         s2.set_raw_entropy(200);
-        memory.update(SiftedSynapse::new(s2)).unwrap();
+        memory.update(SiftedSynapse::from_synapse(s2)).unwrap();
 
         // Variance of [100, 200] = ((100-150)^2 + (200-150)^2) / 2 = 2500
         let variance = memory.entropy_variance();
@@ -149,19 +149,19 @@ mod tests {
 
     #[test]
     fn test_trend_calculation_correctness() {
-        // Linear regression slope
-        // For [1, 2, 3, 4] mapped to [100, 200, 300, 400]
-        // Slope should be exactly 100 (perfect linear)
-
+        // Linear regression slope for [100, 200, 300, 400] = 100
+        // Fill buffer to capacity to avoid default-zero skew
         let mut memory = WorkingMemory::<4>::new(1000);
 
         for i in 1..=4u16 {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(i * 100);
-            let sifted = SiftedSynapse::new(synapse);
+            let sifted = SiftedSynapse::from_synapse(synapse);
             memory.update(sifted).unwrap();
         }
 
+        // Temporal order is [100, 200, 300, 400] (oldest→newest)
+        // Slope = 100.0.
         let trend = memory.trend();
         assert!(
             (trend - 100.0).abs() < 1.0,

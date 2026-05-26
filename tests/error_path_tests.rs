@@ -13,7 +13,7 @@ mod tests {
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(50);
         synapse.set_has_bias(false);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
         let mut memory = WorkingMemory::<64>::new(1000);
         let validated = memory.update(sifted).unwrap();
 
@@ -36,7 +36,7 @@ mod tests {
         synapse.set_raw_entropy((STABILITY_THRESHOLD + 1) as u16);
         synapse.set_raw_surprise(50);
         synapse.set_has_bias(false);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
 
         match memory.update(sifted) {
             Err(KernelError::CognitiveInstability) => (),
@@ -53,7 +53,7 @@ mod tests {
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(50);
         synapse.set_has_bias(true);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
 
         match memory.update(sifted) {
             Err(KernelError::BiasHaloDetected) => (),
@@ -70,7 +70,7 @@ mod tests {
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(501);
         synapse.set_has_bias(false);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
 
         match memory.update(sifted) {
             Err(KernelError::HallucinationDetected) => (),
@@ -104,7 +104,7 @@ mod tests {
         let mut synapse = Synapse::new();
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(501);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
         assert_eq!(
             memory.update(sifted),
             Err(KernelError::HallucinationDetected),
@@ -115,7 +115,7 @@ mod tests {
         let mut synapse = Synapse::new();
         synapse.set_raw_entropy(1001);
         synapse.set_raw_surprise(100);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
         assert_eq!(
             memory.update(sifted),
             Err(KernelError::CognitiveInstability),
@@ -127,7 +127,7 @@ mod tests {
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(100);
         synapse.set_has_bias(true);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
         assert_eq!(
             memory.update(sifted),
             Err(KernelError::BiasHaloDetected),

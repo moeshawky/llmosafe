@@ -52,14 +52,24 @@ mod std_tests {
         // Should have bias detected
         assert!(sifted.has_bias());
 
-        // Integration: Should escalate
-        let policy = EscalationPolicy::default();
+        // With default policy, high bias produces high entropy which Halts.
+        // Test with elevated halt threshold so bias Escalate is exercised.
+        let policy = EscalationPolicy::default().with_halt_entropy(2000);
         let decision = policy.decide(
             sifted.raw_entropy(),
             sifted.raw_surprise(),
             sifted.has_bias(),
         );
         assert!(matches!(decision, SafetyDecision::Escalate { .. }));
+
+        // With default policy (halt=1000), the entropy from strong bias triggers Halt
+        let policy2 = EscalationPolicy::default();
+        let decision2 = policy2.decide(
+            sifted.raw_entropy(),
+            sifted.raw_surprise(),
+            sifted.has_bias(),
+        );
+        assert!(matches!(decision2, SafetyDecision::Halt(..)));
     }
 
     #[test]
@@ -162,7 +172,7 @@ mod std_tests {
         for i in 1..=4 {
             let mut synapse = llmosafe::Synapse::new();
             synapse.set_raw_entropy(100 * i as u16);
-            let sifted = llmosafe::SiftedSynapse::new(synapse);
+            let sifted = llmosafe::SiftedSynapse::from_synapse(synapse);
             memory.update(sifted).unwrap();
         }
         // Check statistics
@@ -170,7 +180,7 @@ mod std_tests {
         let trend = memory.trend();
         // Mean should be (100 + 200 + 300 + 400) / 4 = 250
         assert!((mean - 250.0).abs() < 1.0);
-        // Trend should be positive (increasing)
+        // Trend is positive (temporal order: 100→200→300→400)
         assert!(trend > 0.0);
         // Should detect drifting with low threshold
         assert!(memory.is_drifting(10.0));

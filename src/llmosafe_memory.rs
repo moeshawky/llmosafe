@@ -23,6 +23,8 @@ pub struct WorkingMemory<const SIZE: usize = 64> {
 }
 
 impl<const SIZE: usize> WorkingMemory<SIZE> {
+    const _SIZE_CHECK: () = assert!(SIZE > 0, "WorkingMemory size must be > 0");
+
     /// Initialize with a fixed surprise threshold (e.g. 5.00)
     ///
     /// # Examples
@@ -57,9 +59,20 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         }
 
         self.state[self.current_index] = sifted.entropy();
+        let prev_index = self.current_index;
         self.current_index = (self.current_index + 1) % SIZE;
 
-        Ok(ValidatedSynapse::new(sifted.into_inner()))
+        let validated = ValidatedSynapse::new(sifted.into_inner());
+
+        // Shadow validator: invariants at memory → kernel boundary
+        debug_assert!(
+            prev_index < SIZE,
+            "CMIT: memory index {} overflowed SIZE={}",
+            prev_index,
+            SIZE,
+        );
+
+        Ok(validated)
     }
     pub fn mean_entropy(&self) -> f64 {
         let sum: i128 = self.state.iter().map(|e| e.mantissa()).sum();
@@ -84,9 +97,13 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         let mut sum_y = 0.0;
         let mut sum_x_times_y = 0.0;
 
-        for (i, e) in self.state.iter().enumerate() {
-            let x = i as f64;
-            let y = e.mantissa() as f64;
+        // Walk the ring buffer in temporal order: oldest first, newest last.
+        // After wraparound, buffer order is [current_index, ..., SIZE-1, 0, ..., current_index-1].
+        // Assign x=0 to oldest, x=SIZE-1 to newest.
+        for offset in 0..SIZE {
+            let idx = (self.current_index + offset) % SIZE;
+            let x = offset as f64;
+            let y = self.state[idx].mantissa() as f64;
             sum_y += y;
             sum_x_times_y += x * y;
         }
@@ -94,7 +111,11 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         let sum_x = (n * (n - 1.0)) / 2.0;
         let sum_xx = (n * (n - 1.0) * (2.0 * n - 1.0)) / 6.0;
 
-        (n * sum_x_times_y - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x)
+        let denominator = n * sum_xx - sum_x * sum_x;
+        if denominator == 0.0 {
+            return 0.0;
+        }
+        (n * sum_x_times_y - sum_x * sum_y) / denominator
     }
 
     pub fn is_drifting(&self, threshold: f64) -> bool {
@@ -116,10 +137,13 @@ mod tests {
             let sifted = SiftedSynapse::new(synapse);
             memory.update(sifted).unwrap();
         }
-        // Entropy: 100, 200, 300, 400
+        // Buffer after 4 updates (all values present):
+        // Entropy stored: 100, 200, 300, 400
+        // Temporal order (oldest→newest): 100, 200, 300, 400
         assert_eq!(memory.mean_entropy(), 250.0);
-        assert!(memory.trend() > 0.0);
-        assert!(memory.is_drifting(50.0));
+        // Slope = 100.0 (rising from 100 to 400)
+        assert!((memory.trend() - 100.0).abs() < 0.01);
+        assert!(memory.is_drifting(10.0));
     }
     #[test]
     fn test_memory_update_gating() {

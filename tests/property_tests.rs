@@ -47,7 +47,7 @@ proptest! {
         synapse.set_raw_entropy(entropy);
         synapse.set_raw_surprise(100);
         synapse.set_has_bias(false);
-        let sifted = llmosafe::SiftedSynapse::new(synapse);
+        let sifted = llmosafe::SiftedSynapse::from_synapse(synapse);
         prop_assert!(memory.update(sifted).is_ok());
     }
 

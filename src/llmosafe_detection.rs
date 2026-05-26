@@ -337,7 +337,7 @@ impl AdversarialDetector {
 
     /// Add a known adversarial pattern.
     pub fn add_pattern(&mut self, pattern: &str) {
-        let hash = RepetitionDetector::hash_str(&pattern.to_ascii_lowercase());
+        let hash = Self::hash_lowercase(pattern);
         self.patterns.push(hash);
     }
 
@@ -353,8 +353,19 @@ impl AdversarialDetector {
         } else {
             input
         };
-        let input_hash = RepetitionDetector::hash_str(&bounded.to_ascii_lowercase());
+        let input_hash = Self::hash_lowercase(bounded);
         self.patterns.iter().any(|&p| p == input_hash)
+    }
+
+    /// FNV-1a hash with ASCII lowercase folding (no allocation).
+    fn hash_lowercase(s: &str) -> u32 {
+        let mut hash: u32 = 2_166_136_261;
+        for byte in s.bytes() {
+            let lower = byte.to_ascii_lowercase();
+            hash ^= lower as u32;
+            hash = hash.wrapping_mul(16_777_619);
+        }
+        hash
     }
 
     /// Check for common adversarial substrings.

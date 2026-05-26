@@ -37,7 +37,7 @@ fn bench_kernel(c: &mut Criterion) {
     });
 
     let mut memory = WorkingMemory::<64>::new(1000);
-    let sifted = llmosafe::SiftedSynapse::new(synapse);
+    let sifted = llmosafe::SiftedSynapse::from_synapse(synapse);
     let validated = memory.update(sifted).unwrap();
     c.bench_function("reasoning_loop_next", |b| {
         b.iter(|| loop_guard.next_step(black_box(validated)))
@@ -48,7 +48,7 @@ fn bench_memory(c: &mut Criterion) {
     let mut memory = WorkingMemory::<64>::new(1000);
     let mut synapse = Synapse::new();
     synapse.set_raw_entropy(500);
-    let sifted = llmosafe::SiftedSynapse::new(synapse);
+    let sifted = llmosafe::SiftedSynapse::from_synapse(synapse);
 
     c.bench_function("memory_update", |b| {
         b.iter(|| memory.update(black_box(sifted)))

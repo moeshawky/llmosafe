@@ -1,0 +1,121 @@
+# Cross-Module Invariant Tracing (CMIT)
+# Human-readable invariants that must hold at module boundaries.
+# These are checked by property tests and shadow validators.
+
+# ── Perception Chain: input → sift → memory → kernel ─────────────
+
+[[invariant]]
+name = "sift_entropy_bounded"
+chain = ["sift"]
+description = "Sifter entropy must be in [0, 65535] (u16 range)"
+check = "0 <= sifted.raw_entropy() <= 0xFFFF"
+
+[[invariant]]
+name = "sift_bias_flag_matches_breakdown"
+chain = ["sift"]
+description = "has_bias must be true iff at least one bias category scored > 0"
+check = "sifted.has_bias() == (best_halo > 0)"
+
+[[invariant]]
+name = "memory_entropy_preserved"
+chain = ["sift", "memory"]
+description = "Entropy stored in WorkingMemory must match sifter output"
+check = "memory.last_entropy() == sifted.raw_entropy()"
+
+[[invariant]]
+name = "memory_surprise_bounded"
+chain = ["sift", "memory"]
+description = "Surprise must be non-negative and ≤ surprise_threshold after gating"
+check = "0 <= validated.surprise_raw() <= memory.surprise_threshold"
+
+[[invariant]]
+name = "kernel_validate_rejects_bias"
+chain = ["memory", "kernel"]
+description = "Validated synapse with has_bias=true must be rejected"
+check = "if validated.has_bias(): validated.validate() == Err(BiasHaloDetected)"
+
+[[invariant]]
+name = "kernel_validate_rejects_high_entropy"
+chain = ["memory", "kernel"]
+description = "Validated synapse with entropy > STABILITY_THRESHOLD must be rejected"
+check = "if validated.raw_entropy() > 1000: validated.stability() == Unstable"
+
+[[invariant]]
+name = "kernel_depth_exceeded"
+chain = ["kernel"]
+description = "ReasoningLoop must reject steps beyond MAX_STEPS"
+check = "loop.next_step(validated) after MAX_STEPS steps returns Err(DepthExceeded)"
+
+# ── Resource Chain: os → body → kernel ──────────────────────────
+
+[[invariant]]
+name = "body_entropy_bounded"
+chain = ["body"]
+description = "raw_entropy() must be in [0, 1000]"
+check = "0 <= guard.raw_entropy() <= 1000"
+
+[[invariant]]
+name = "body_pressure_bounded"
+chain = ["body"]
+description = "pressure() must be in [0, 100]"
+check = "0 <= guard.pressure() <= 100"
+
+[[invariant]]
+name = "body_check_zero_ceiling"
+chain = ["body"]
+description = "Zero ceiling must always return ResourceExhaustion"
+check = "ResourceGuard::new(0).check() == Err(ResourceExhaustion)"
+
+[[invariant]]
+name = "body_check_blocking_terminates"
+chain = ["body"]
+description = "check_blocking_with_max_retries must return within max_retries iterations"
+check = "guard.check_blocking_with_max_retries(N) does not hang"
+
+# ── Decision Chain: signals → policy → action ────────────────────
+
+[[invariant]]
+name = "policy_halt_overrides_escalate"
+chain = ["policy"]
+description = "If entropy >= halt_entropy, decision must be Halt regardless of bias/surprise/pressure"
+check = "if entropy >= halt_entropy: decision == Halt"
+
+[[invariant]]
+name = "policy_escalate_overrides_warn"
+chain = ["policy"]
+description = "If entropy >= escalate_entropy, decision severity must be >= Escalate"
+check = "if entropy >= escalate_entropy: decision.severity() >= 2"
+
+[[invariant]]
+name = "policy_decision_never_upgrades"
+chain = ["policy"]
+description = "Severity must be monotonic with entropy: increasing entropy never decreases severity"
+check = "if e1 >= e2: decide(e1, s, b).severity() >= decide(e2, s, b).severity()"
+
+[[invariant]]
+name = "policy_pressure_escalates"
+chain = ["policy", "body"]
+description = "pressure >= escalate_pressure triggers escalation when no Halt present"
+check = "if pressure >= escalate_pressure && entropy < halt_entropy: decision == Escalate"
+
+# ── Typestate Chain: sifted → validated ─────────────────────────
+
+[[invariant]]
+name = "typestate_pipeline_order"
+chain = ["sift", "memory", "kernel"]
+description = "SiftedSynapse → WorkingMemory::update → ValidatedSynapse → ReasoningLoop::next_step must be the only callable path"
+check = "Cannot construct ValidatedSynapse without going through WorkingMemory (pub(crate) enforced at compile time)"
+
+# ── Cross-Chain: Decision Consistency ────────────────────────────
+
+[[invariant]]
+name = "sifted_vs_resource_entropy"
+chain = ["sift", "body"]
+description = "Sifter entropy and body entropy share the same range and are comparable via EscalationPolicy"
+check = "decide(sift_entropy) and decide(body_entropy) produce decisions in the same ordering"
+
+[[invariant]]
+name = "no_silent_pressure_zone"
+chain = ["sift", "memory", "kernel"]
+description = "Entropy in [800, 1000] must produce a Warn or higher at some tier"
+check = "if raw_entropy >= 800: synapse.stability() == Pressure || synapse.stability() == Unstable"

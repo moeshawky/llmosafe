@@ -14,7 +14,7 @@ mod tests {
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(50);
         synapse.set_has_bias(false);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
 
         let mut memory = llmosafe::WorkingMemory::<64>::new(1000);
         let validated = memory.update(sifted).unwrap();
@@ -32,7 +32,7 @@ mod tests {
         let mut loop_guard = ReasoningLoop::<5>::new();
         let mut synapse = Synapse::new();
         synapse.set_raw_entropy(100);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
         let mut memory = llmosafe::WorkingMemory::<64>::new(1000);
         let validated = memory.update(sifted).unwrap();
 
@@ -145,7 +145,7 @@ mod tests {
         let mut loop_guard = ReasoningLoop::<1>::new();
         let mut synapse = Synapse::new();
         synapse.set_raw_entropy(100);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
         let mut memory = llmosafe::WorkingMemory::<64>::new(1000);
         let validated = memory.update(sifted).unwrap();
 

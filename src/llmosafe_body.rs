@@ -145,26 +145,70 @@ impl ResourceGuard {
         Ok(synapse)
     }
 
+    /// Like `check()` but reuses a previously-measured entropy value.
+    ///
+    /// Prevents TOCTOU when entropy is measured for a policy decision
+    /// and then recomputed inside `check()`, potentially returning a
+    /// different entropy than what was approved.
+    #[must_use = "ignoring the safety check defeats the purpose of the guard"]
+    pub fn check_with_entropy(&self, entropy: u16) -> Result<Synapse, KernelError> {
+        if self.memory_ceiling_bytes == 0 {
+            return Err(KernelError::ResourceExhaustion);
+        }
+        let current_rss = Self::current_rss_bytes();
+        let ratio = current_rss as f64 / self.memory_ceiling_bytes as f64;
+
+        if ratio >= 1.0 {
+            return Err(KernelError::ResourceExhaustion);
+        }
+
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(entropy);
+        synapse.set_raw_surprise(0);
+        synapse.set_has_bias(false);
+        synapse.set_anchor_hash(0);
+
+        Ok(synapse)
+    }
+
     /// Blocks until resources are safe, automatically honoring Escalate/Halt cooldowns.
+    ///
+    /// Returns an error after `max_retries` consecutive non-Proceed decisions
+    /// to prevent infinite spinning under sustained pressure. Default: 3 retries.
     ///
     /// ⚠ BLOCKING: Reads /proc/stat multiple times with sleeps.
     /// Do NOT call in async contexts without spawn_blocking.
     #[cfg(feature = "std")]
     pub fn check_blocking(&self) -> Result<Synapse, KernelError> {
+        self.check_blocking_with_max_retries(3)
+    }
+
+    /// Same as check_blocking() but with configurable max retries.
+    #[cfg(feature = "std")]
+    pub fn check_blocking_with_max_retries(
+        &self,
+        max_retries: u32,
+    ) -> Result<Synapse, KernelError> {
         use crate::llmosafe_integration::{EscalationPolicy, SafetyDecision};
 
         let policy = EscalationPolicy::default();
+        let mut retries = 0u32;
         loop {
+            if retries >= max_retries {
+                return Err(KernelError::DeadlineExceeded);
+            }
             let entropy = self.raw_entropy();
             let decision = policy.decide(entropy, 0, false);
             match decision {
                 SafetyDecision::Proceed | SafetyDecision::Warn(_) => {
-                    return self.check();
+                    return self.check_with_entropy(entropy);
                 }
                 SafetyDecision::Escalate { cooldown_ms, .. } => {
+                    retries += 1;
                     thread::sleep(Duration::from_millis(cooldown_ms as u64));
                 }
                 SafetyDecision::Halt(_, cooldown_ms) => {
+                    retries += 1;
                     thread::sleep(Duration::from_millis(cooldown_ms as u64));
                 }
                 SafetyDecision::Exit(err) => {
@@ -191,7 +235,7 @@ impl ResourceGuard {
             let decision = policy.decide(entropy, 0, false);
             match decision {
                 SafetyDecision::Proceed | SafetyDecision::Warn(_) => {
-                    return self.check();
+                    return self.check_with_entropy(entropy);
                 }
                 SafetyDecision::Escalate { cooldown_ms, .. } => {
                     thread::sleep(Duration::from_millis(cooldown_ms as u64));
@@ -213,7 +257,10 @@ impl ResourceGuard {
         let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
 
         if ret == 0 {
-            (usage.ru_maxrss as usize).saturating_mul(1024)
+            #[cfg(target_os = "linux")]
+            { (usage.ru_maxrss as usize).saturating_mul(1024) }
+            #[cfg(not(target_os = "linux"))]
+            { usage.ru_maxrss as usize }
         } else {
             Self::read_rss_from_proc()
         }
@@ -297,7 +344,7 @@ impl ResourceGuard {
         let ceiling = if sys_mem > 0 {
             (sys_mem as f64 * fraction) as usize
         } else {
-            usize::MAX / 2
+            0
         };
         Self::new(ceiling)
     }
@@ -378,6 +425,12 @@ impl ResourceGuard {
 }
 
 /// C-ABI entry point for environmental entropy.
+/// Returns 0-1000 weighted metabolic entropy score.
+/// On Linux: uses actual system memory from /proc/meminfo.
+/// On non-Linux (or when /proc unreadable): ceiling is 0 (fail-closed),
+/// which causes raw_entropy() to return a high score since rss_ratio defaults to 1.0.
+/// Callers should not treat a high return value as a definitive exhaustion signal
+/// without also checking platform availability.
 #[no_mangle]
 pub extern "C" fn llmosafe_get_environmental_entropy() -> u16 {
     // Uses a default 50% system RAM ceiling for the global signal

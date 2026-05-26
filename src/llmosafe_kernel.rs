@@ -114,6 +114,9 @@ impl DynamicStabilityMonitor {
     /// Get current adaptive thresholds based on observed envelopes.
     /// Returns (high_threshold, low_threshold, pressure_threshold).
     pub fn get_thresholds(&self) -> (u32, u32, u32) {
+        if !self.seen {
+            return (u32::MAX, 0, 0);
+        }
         let high = if self.hi_idx >= 31 {
             u32::MAX
         } else {
@@ -124,7 +127,7 @@ impl DynamicStabilityMonitor {
         } else {
             1u32 << self.lo_idx
         };
-        let pressure = (high * 4) / 5; // 80% of high threshold
+        let pressure = (high as u64 * 4 / 5) as u32;
         (high, low, pressure)
     }
 
@@ -154,6 +157,17 @@ pub enum CognitiveStability {
     Stable,
     Pressure,
     Unstable,
+}
+
+impl From<StabilityResult> for CognitiveStability {
+    fn from(result: StabilityResult) -> Self {
+        match result {
+            StabilityResult::Stable => CognitiveStability::Stable,
+            StabilityResult::High => CognitiveStability::Unstable,
+            StabilityResult::Low => CognitiveStability::Unstable,
+            StabilityResult::Both => CognitiveStability::Unstable,
+        }
+    }
 }
 
 impl<const P: u32, const S: u32> CognitiveEntropy<P, S> {
@@ -306,7 +320,7 @@ impl Synapse {
 
     pub fn stability(&self) -> CognitiveStability {
         let ent = self.raw_entropy() as i128;
-        if ent >= STABILITY_THRESHOLD {
+        if ent > STABILITY_THRESHOLD {
             CognitiveStability::Unstable
         } else if ent >= PRESSURE_THRESHOLD {
             CognitiveStability::Pressure
@@ -735,6 +749,26 @@ mod tests {
         assert_eq!(result, StabilityResult::Stable);
         assert!(monitor.seen);
     }
+
+    #[test]
+    fn test_stability_result_to_cognitive_stability() {
+        assert_eq!(
+            CognitiveStability::from(StabilityResult::Stable),
+            CognitiveStability::Stable
+        );
+        assert_eq!(
+            CognitiveStability::from(StabilityResult::High),
+            CognitiveStability::Unstable
+        );
+        assert_eq!(
+            CognitiveStability::from(StabilityResult::Low),
+            CognitiveStability::Unstable
+        );
+        assert_eq!(
+            CognitiveStability::from(StabilityResult::Both),
+            CognitiveStability::Unstable
+        );
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -746,6 +780,8 @@ pub enum KernelError {
     HallucinationDetected,
     ResourceExhaustion,
     /// Daemon's own RSS exceeded self-imposed limit.
+    /// Reserved for future self-memory protection (see RECOMMENDATIONS.md #4).
+    /// Not currently constructed — handled as a forward-compatible error code.
     SelfMemoryExceeded,
     /// Deadline exceeded while waiting for safe state.
     DeadlineExceeded,
@@ -781,23 +817,22 @@ pub mod cognitive_kernel {
     use super::*;
 
     /// Internal reasoning flow using the typestate pipeline.
-    /// This bypasses the public API for internal use cases.
+    /// Routes through WorkingMemory for surprise gating, not direct synapse construction.
     pub fn execute_reasoning_flow() -> Result<bool, KernelError> {
+        use crate::llmosafe_memory::WorkingMemory;
+
         let mut loop_guard = ReasoningLoop::<10>::new();
 
-        // Create a valid synapse internally (bypasses typestate for internal use)
+        // Route through sifter + memory for proper typestate gating
         let mut synapse = Synapse::new();
-        synapse.set_raw_entropy(500); // 5.00 entropy
+        synapse.set_raw_entropy(500);
         let sifted = SiftedSynapse::new(synapse);
 
-        // For internal use, validate directly
-        sifted.validate()?;
-        let validated = ValidatedSynapse::new(sifted.into_inner());
+        let mut memory = WorkingMemory::<64>::new(500);
+        let validated = memory.update(sifted)?;
 
         // Execute reasoning steps with hard stability gates
         loop_guard.next_step(validated)?;
-
-        // ... Core reasoning logic here ...
 
         Ok(true)
     }
@@ -811,7 +846,22 @@ pub struct SiftedSynapse {
 }
 
 impl SiftedSynapse {
-    pub fn new(synapse: Synapse) -> Self {
+    /// Construct a SiftedSynapse from a raw Synapse.
+    ///
+    /// Prefer `sift_perceptions()` for production code — it applies the full
+    /// sifter pipeline (bias detection, utility ranking, entropy calculation).
+    /// Direct construction is intended for testing and crate-internal use only.
+    pub(crate) fn new(synapse: Synapse) -> Self {
+        Self { synapse }
+    }
+
+    /// Low-level constructor from a raw Synapse, bypassing the sifter pipeline.
+    ///
+    /// **Warning:** Prefer `sift_perceptions()` for production code. This constructor
+    /// is intended for testing and internal use where precise control over
+    /// entropy/surprise/halo values is needed. The sifter pipeline applies bias
+    /// detection, utility ranking, and anchor hashing which this skips.
+    pub fn from_synapse(synapse: Synapse) -> Self {
         Self { synapse }
     }
 

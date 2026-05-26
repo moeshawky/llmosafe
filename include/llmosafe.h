@@ -27,6 +27,12 @@ typedef struct Synapse Synapse;
 
 /**
  * C-ABI entry point for environmental entropy.
+ * Returns 0-1000 weighted metabolic entropy score.
+ * On Linux: uses actual system memory from /proc/meminfo.
+ * On non-Linux (or when /proc unreadable): ceiling is 0 (fail-closed),
+ * which causes raw_entropy() to return a high score since rss_ratio defaults to 1.0.
+ * Callers should not treat a high return value as a definitive exhaustion signal
+ * without also checking platform availability.
  */
 uint16_t llmosafe_get_environmental_entropy(void);
 

@@ -24,6 +24,9 @@
 
 use crate::llmosafe_kernel::{CognitiveStability, KernelError};
 
+#[cfg(feature = "std")]
+use crate::llmosafe_detection::DetectionResult;
+
 /// Safety decision outcome from the cognitive safety pipeline.
 ///
 /// This enum represents the decision flow for a processed input,
@@ -120,6 +123,14 @@ pub enum EscalationReason {
     AnomalyDetected,
     /// Custom reason.
     Custom(&'static str),
+    /// Agent appears stuck in a loop.
+    StuckAgent,
+    /// Goal has drifted significantly from original objective.
+    GoalDriftDetected,
+    /// Model confidence is decaying rapidly.
+    ConfidenceDecaying,
+    /// Adversarial prompt patterns detected.
+    AdversarialDetected,
 }
 
 /// Resource pressure level mapping.
@@ -230,19 +241,24 @@ impl EscalationPolicy {
     }
 
     /// Evaluate entropy, surprise, and bias flags to produce a decision.
+    ///
+    /// Checks are ordered by severity: Halt conditions are checked first,
+    /// then Escalate, then Warn. This ensures higher-severity signals are never
+    /// masked by lower-severity ones (e.g., entropy Halt is NOT overridden by
+    /// bias Escalate).
     pub fn decide(&self, entropy: u16, surprise: u16, has_bias: bool) -> SafetyDecision {
-        // Bias check first (if configured)
+        // Halt checks first (highest severity — must not be overridden)
+        if entropy > self.halt_entropy {
+            return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
+        }
+
+        // Escalate checks (medium severity)
         if has_bias && self.bias_escalates {
             return SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::BiasDetected,
                 cooldown_ms: 5000,
             };
-        }
-
-        // Entropy-based decisions
-        if entropy >= self.halt_entropy {
-            return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
         }
         if entropy >= self.escalate_entropy {
             return SafetyDecision::Escalate {
@@ -251,17 +267,17 @@ impl EscalationPolicy {
                 cooldown_ms: 5000,
             };
         }
-        if entropy >= self.warn_entropy {
-            return SafetyDecision::Warn("entropy elevated");
-        }
-
-        // Surprise-based decisions
         if surprise >= self.escalate_surprise {
             return SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::SurpriseElevated,
                 cooldown_ms: 5000,
             };
+        }
+
+        // Warn checks (lowest severity)
+        if entropy >= self.warn_entropy {
+            return SafetyDecision::Warn("entropy elevated");
         }
         if surprise >= self.warn_surprise {
             return SafetyDecision::Warn("surprise elevated");
@@ -271,6 +287,9 @@ impl EscalationPolicy {
     }
 
     /// Evaluate with pressure level.
+    ///
+    /// Halt conditions always take priority over pressure escalation.
+    /// Pressure only escalates when no Halt-level signal exists.
     pub fn decide_with_pressure(
         &self,
         entropy: u16,
@@ -278,7 +297,12 @@ impl EscalationPolicy {
         has_bias: bool,
         pressure: PressureLevel,
     ) -> SafetyDecision {
-        // Pressure override
+        // Halt takes priority over everything
+        if entropy > self.halt_entropy {
+            return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
+        }
+
+        // Pressure escalation (only when not at Halt threshold)
         if pressure >= self.escalate_pressure {
             return SafetyDecision::Escalate {
                 entropy,
@@ -286,6 +310,7 @@ impl EscalationPolicy {
                 cooldown_ms: 5000,
             };
         }
+
         self.decide(entropy, surprise, has_bias)
     }
 
@@ -298,6 +323,54 @@ impl EscalationPolicy {
                 SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)
             }
         }
+    }
+
+    /// Evaluate detection results and produce a safety decision.
+    ///
+    /// Maps each detection signal to the appropriate escalation level based
+    /// on severity: adversarial patterns and high risk → Halt,
+    /// stuck/drifting → Escalate, decaying confidence → Warn.
+    #[cfg(feature = "std")]
+    pub fn decide_from_detection(
+        &self,
+        detection: &DetectionResult,
+        entropy: u16,
+        surprise: u16,
+    ) -> SafetyDecision {
+        // Halt conditions: adversarial attack or high composite risk
+        if !detection.adversarial_patterns.is_empty() {
+            return SafetyDecision::Halt(KernelError::BiasHaloDetected, 30000);
+        }
+        if detection.risk_score > 0.85 {
+            return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
+        }
+
+        // Escalate conditions: stuck agent or goal drift
+        if detection.is_stuck {
+            return SafetyDecision::Escalate {
+                entropy,
+                reason: EscalationReason::StuckAgent,
+                cooldown_ms: 5000,
+            };
+        }
+        if detection.is_drifting {
+            return SafetyDecision::Escalate {
+                entropy,
+                reason: EscalationReason::GoalDriftDetected,
+                cooldown_ms: 5000,
+            };
+        }
+
+        // Warn conditions: decaying or low confidence
+        if detection.is_decaying {
+            return SafetyDecision::Warn("Confidence decay detected");
+        }
+        if detection.is_low_confidence {
+            return SafetyDecision::Warn("Low model confidence");
+        }
+
+        // Fall through to standard decide()
+        self.decide(entropy, surprise, false)
     }
 }
 

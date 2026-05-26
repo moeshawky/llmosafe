@@ -54,3 +54,25 @@ __pycache__/
 *.txt
 !README.txt
 .ix/
+
+# --- RNA artifacts (AI-generated, never committed per AGENTS.md) ---
+.annotations/
+
+# --- AI-generated audit/analysis artifacts ---
+COMPREHENSIVE_ANALYSIS.md
+/audit_*.yaml
+
+# --- ML training scripts (not part of Rust library) ---
+/scripts/
+
+# --- Profiling and valgrind artifacts ---
+*.prof*
+valgrind*
+callgrind*
+cachegrind*
+
+# --- Miscellaneous ---
+*.core
+*.tmp
+*.bak
+TODO

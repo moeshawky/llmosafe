@@ -11,13 +11,13 @@ mod tests {
         let mut s1 = Synapse::new();
         s1.set_raw_entropy(100);
         s1.set_raw_surprise(50);
-        let sifted1 = SiftedSynapse::new(s1);
+        let sifted1 = SiftedSynapse::from_synapse(s1);
         memory.update(sifted1).unwrap();
 
         let mut s2 = Synapse::new();
         s2.set_raw_entropy(200);
         s2.set_raw_surprise(50);
-        let sifted2 = SiftedSynapse::new(s2);
+        let sifted2 = SiftedSynapse::from_synapse(s2);
         memory.update(sifted2).unwrap();
 
         assert_eq!(memory.mean_entropy(), 200.0);
@@ -31,7 +31,7 @@ mod tests {
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(500);
         synapse.set_has_bias(false);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
 
         assert!(
             memory.update(sifted).is_ok(),
@@ -47,7 +47,7 @@ mod tests {
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(501);
         synapse.set_has_bias(false);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
 
         assert_eq!(
             memory.update(sifted),
@@ -64,7 +64,7 @@ mod tests {
         synapse.set_raw_entropy(1000);
         synapse.set_raw_surprise(100);
         synapse.set_has_bias(false);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
 
         assert!(
             memory.update(sifted).is_ok(),
@@ -80,7 +80,7 @@ mod tests {
         synapse.set_raw_entropy(1001);
         synapse.set_raw_surprise(100);
         synapse.set_has_bias(false);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
 
         assert_eq!(
             memory.update(sifted),
@@ -97,7 +97,7 @@ mod tests {
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(100);
         synapse.set_has_bias(true);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
 
         assert_eq!(
             memory.update(sifted),
@@ -120,7 +120,7 @@ mod tests {
         for _ in 0..4 {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(100);
-            let sifted = SiftedSynapse::new(synapse);
+            let sifted = SiftedSynapse::from_synapse(synapse);
             memory.update(sifted).unwrap();
         }
 
@@ -139,7 +139,7 @@ mod tests {
         for i in 0..4 {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(100 * (i + 1) as u16);
-            let sifted = SiftedSynapse::new(synapse);
+            let sifted = SiftedSynapse::from_synapse(synapse);
             memory.update(sifted).unwrap();
         }
 
@@ -155,11 +155,11 @@ mod tests {
 
         let mut s1 = Synapse::new();
         s1.set_raw_entropy(100);
-        memory.update(SiftedSynapse::new(s1)).unwrap();
+        memory.update(SiftedSynapse::from_synapse(s1)).unwrap();
 
         let mut s2 = Synapse::new();
         s2.set_raw_entropy(200);
-        memory.update(SiftedSynapse::new(s2)).unwrap();
+        memory.update(SiftedSynapse::from_synapse(s2)).unwrap();
 
         let variance = memory.entropy_variance();
         assert!(
@@ -176,7 +176,7 @@ mod tests {
         for i in 1..=3 {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(i * 100);
-            memory.update(SiftedSynapse::new(synapse)).unwrap();
+            memory.update(SiftedSynapse::from_synapse(synapse)).unwrap();
         }
 
         assert!(

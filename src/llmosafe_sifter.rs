@@ -193,7 +193,6 @@ pub const SEMANTIC_TRAPS: &[&str] = &[
     "on the other hand",
     "despite",
     "although",
-    "while",
 ];
 
 /// Template Fitting: Common AI-specific template markers.
@@ -241,6 +240,20 @@ fn word_in_list(word: &str, list: &[&str]) -> bool {
     list.iter().any(|kw| word.eq_ignore_ascii_case(kw))
 }
 
+/// Check if consecutive tokens match a multi-word phrase.
+#[cfg(feature = "std")]
+#[inline]
+fn phrase_matches(window: &[&str], phrase: &str) -> bool {
+    let phrase_tokens: Vec<&str> = phrase.split_whitespace().collect();
+    if window.len() < phrase_tokens.len() {
+        return false;
+    }
+    window[..phrase_tokens.len()]
+        .iter()
+        .zip(phrase_tokens.iter())
+        .all(|(a, b)| a.eq_ignore_ascii_case(b))
+}
+
 /// Returns a breakdown of detected biases by category.
 pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
     let mut breakdown = BiasBreakdown::default();
@@ -254,7 +267,7 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
         let negated = negation_ttl > 0;
 
         if is_negation {
-            negation_ttl = 3;
+            negation_ttl = 6;
         } else {
             negation_ttl = negation_ttl.saturating_sub(1);
         }
@@ -286,6 +299,55 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
         }
         if word_in_list(trimmed, TEMPLATE_FITTING) {
             breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
+        }
+    }
+
+    // Phase 2: Multi-word phrase matching (for entries containing spaces).
+    // Requires `std` for Vec allocation. no_std users get single-word detection only.
+    #[cfg(feature = "std")]
+    {
+        let tokens: Vec<&str> = text
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c: char| c.is_ascii_punctuation()))
+            .collect();
+
+        let mut negated_positions = vec![false; tokens.len()];
+        let mut neg_ttl = 0u8;
+        for (i, token) in tokens.iter().enumerate() {
+            let is_neg = word_in_list(token, NEGATION_WORDS);
+            let curr_negated = neg_ttl > 0;
+            if is_neg {
+                neg_ttl = 6;
+            } else {
+                neg_ttl = neg_ttl.saturating_sub(1);
+            }
+            negated_positions[i] = curr_negated;
+        }
+
+        for phrase in SEMANTIC_TRAPS {
+            if !phrase.contains(' ') {
+                continue;
+            }
+            if tokens
+                .windows(phrase.split_whitespace().count())
+                .enumerate()
+                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
+            {
+                breakdown.semantic_traps = breakdown.semantic_traps.saturating_add(100);
+            }
+        }
+
+        for phrase in TEMPLATE_FITTING {
+            if !phrase.contains(' ') {
+                continue;
+            }
+            if tokens
+                .windows(phrase.split_whitespace().count())
+                .enumerate()
+                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
+            {
+                breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
+            }
         }
     }
 
@@ -430,6 +492,20 @@ pub fn sift_perceptions(observations: &[&str], objective: &str) -> SiftedSynapse
     synapse.set_raw_surprise(surprise);
     synapse.set_has_bias(has_bias);
 
+    // Shadow validator: invariants that must hold at sift → memory boundary
+    debug_assert!(
+        synapse.has_bias() == (best_halo > 0),
+        "CMIT: has_bias={} but best_halo={}",
+        synapse.has_bias(),
+        best_halo,
+    );
+    debug_assert!(
+        entropy >= 0,
+        "CMIT: sifter produced negative entropy {} from best_score={}",
+        entropy,
+        best_score,
+    );
+
     let anchor_hash = adler32::adler32(best_obs.as_bytes());
     synapse.set_anchor_hash(anchor_hash & 0x7FFFFFFF);
 
@@ -510,6 +586,24 @@ mod tests {
         assert_eq!(breakdown.emotional_appeal, 100);
         assert_eq!(breakdown.expertise_signaling, 100);
         assert_eq!(calculate_halo_signal(text), 600);
+    }
+
+    #[test]
+    fn test_multi_word_phrases_detected() {
+        // "as an ai" and "i cannot" both fire template_fitting
+        // "instead of" fires semantic_traps
+        let text = "As an AI, I cannot comply, instead of helping you";
+        let breakdown = get_bias_breakdown(text);
+        assert_eq!(breakdown.template_fitting, 200);
+        assert_eq!(breakdown.semantic_traps, 100);
+    }
+
+    #[test]
+    fn test_template_fitting_phrases() {
+        // Each multi-word phrase should fire independently
+        let text = "As an AI, my purpose is to note that I am programmed to follow";
+        let breakdown = get_bias_breakdown(text);
+        assert_eq!(breakdown.template_fitting, 300);
     }
 
     #[test]
@@ -609,5 +703,34 @@ mod tests {
 
         assert!(sifted.validate().is_ok());
         assert!(sifted.anchor_hash() != 0);
+    }
+
+    #[test]
+    fn test_negation_ttl_covers_six_tokens() {
+        // "not a very well known expert" — "expert" is 5 words after "not"
+        let breakdown = get_bias_breakdown("not a very well known expert");
+        assert_eq!(breakdown.authority, 0, "authority should be 0 when negated");
+
+        // Without negation, same content triggers authority
+        let breakdown2 = get_bias_breakdown("a very well known expert");
+        assert_eq!(breakdown2.authority, 100);
+    }
+
+    #[test]
+    fn test_phase2_negation_multi_word() {
+        // "not as an ai" — negation should prevent template_fitting match
+        let breakdown = get_bias_breakdown("not as an ai");
+        assert_eq!(breakdown.template_fitting, 0, "template_fitting should be 0 when negated");
+
+        // "not as an ai" — also check semantic_traps (no multi-word trap match)
+        let breakdown2 = get_bias_breakdown("not as an ai");
+        assert_eq!(breakdown2.semantic_traps, 0);
+    }
+
+    #[test]
+    fn test_while_not_a_semantic_trap() {
+        // "while" was removed from SEMANTIC_TRAPS — should not trigger
+        let breakdown = get_bias_breakdown("while processing data");
+        assert_eq!(breakdown.semantic_traps, 0, "while should not trigger semantic_traps");
     }
 }

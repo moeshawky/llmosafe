@@ -25,7 +25,7 @@ mod tests {
         for i in 0..1000 {
             let mut s = Synapse::new();
             s.set_raw_entropy(i as u16 % 1000);
-            let sifted = SiftedSynapse::new(s);
+            let sifted = SiftedSynapse::from_synapse(s);
             let _ = memory.update(sifted);
         }
         // If we get here without panic, overflow protection works
@@ -56,7 +56,7 @@ mod tests {
         for i in 0..1000 {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy((i % 100) as u16);
-            let sifted = SiftedSynapse::new(synapse);
+            let sifted = SiftedSynapse::from_synapse(synapse);
             memory.update(sifted).unwrap();
         }
 
@@ -132,14 +132,14 @@ mod tests {
         let mut synapse = Synapse::new();
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(1000);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
         assert!(memory.update(sifted).is_ok(), "At threshold should succeed");
 
         // Test above threshold
         let mut synapse = Synapse::new();
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(1001);
-        let sifted = SiftedSynapse::new(synapse);
+        let sifted = SiftedSynapse::from_synapse(synapse);
         assert!(
             memory.update(sifted).is_err(),
             "Above threshold should fail"
