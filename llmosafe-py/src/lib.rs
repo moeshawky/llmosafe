@@ -45,6 +45,7 @@ use ::llmosafe::llmosafe_memory::cognitive_memory::process_state_update;
 /// | Social Proof       | popular, trending, consensus, everyone   |
 /// | Scarcity           | limited, exclusive, rare, only           |
 /// | Urgency            | now, fast, deadline, act-now             |
+/// | Emotional Appeal   | shocking, miracle, tragic, desperate     |
 /// | Expertise Signal   | cutting-edge, proprietary, sophisticated|
 /// | Semantic Traps     | not but, instead of, rather than         |
 /// | Template Fitting   | as an ai, i cannot, my purpose is        |

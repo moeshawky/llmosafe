@@ -7,8 +7,8 @@
 //! # Architecture
 //!
 //! Drawing from MemSifter and Selective Attention (SCS) research:
-//! - **Bias detection**: 7 categories (authority, social proof, scarcity,
-//!   urgency, expertise signaling, semantic traps,
+//! - **Bias detection**: 8 categories (authority, social proof, scarcity,
+//!   urgency, emotional_appeal, expertise signaling, semantic traps,
 //!   template fitting)
 //! - **Utility ranking**: Contextual utility measurement via keyword
 //!   overlap with objective
@@ -133,6 +133,27 @@ pub const URGENCY: &[&str] = &[
     "final",
 ];
 
+/// Emotional Appeal Keywords: Red flags for emotional manipulation bias.
+/// Pruned of high-frequency words (love, joy, happy, sad, angry) that trigger
+/// on everyday speech. Retains fearmongering, hyperbolic, and sentiment-charged
+/// terms that signal manipulative rhetoric.
+pub const EMOTIONAL_APPEAL: &[&str] = &[
+    "fear",
+    "worry",
+    "shocking",
+    "miracle",
+    "incredible",
+    "tragic",
+    "desperate",
+    "hopeful",
+    "heartwarming",
+    "passionate",
+    "inspiring",
+    "touching",
+    "devastating",
+    "thrilling",
+];
+
 /// Expertise Signaling Keywords: Red flags for jargon/complexity bias.
 pub const EXPERTISE_SIGNALING: &[&str] = &[
     "sophisticated",
@@ -182,13 +203,15 @@ pub const TEMPLATE_FITTING: &[&str] = &[
 ];
 
 /// Fixed-size bias breakdown. Zero allocation.
-/// Each field corresponds to one of the 7 bias categories.
+/// Each field corresponds to one of the 8 bias categories.
+/// `emotional_appeal` is keyword-sifter-inert for the classifier pathway.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BiasBreakdown {
     pub authority: u16,
     pub social_proof: u16,
     pub scarcity: u16,
     pub urgency: u16,
+    pub emotional_appeal: u16,
     pub expertise_signaling: u16,
     pub semantic_traps: u16,
     pub template_fitting: u16,
@@ -201,6 +224,7 @@ impl BiasBreakdown {
             .saturating_add(self.social_proof)
             .saturating_add(self.scarcity)
             .saturating_add(self.urgency)
+            .saturating_add(self.emotional_appeal)
             .saturating_add(self.expertise_signaling)
             .saturating_add(self.semantic_traps)
             .saturating_add(self.template_fitting)
@@ -260,6 +284,9 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
         }
         if word_in_list(trimmed, URGENCY) {
             breakdown.urgency = breakdown.urgency.saturating_add(100);
+        }
+        if word_in_list(trimmed, EMOTIONAL_APPEAL) {
+            breakdown.emotional_appeal = breakdown.emotional_appeal.saturating_add(100);
         }
         if word_in_list(trimmed, EXPERTISE_SIGNALING) {
             breakdown.expertise_signaling = breakdown.expertise_signaling.saturating_add(100);
@@ -547,14 +574,15 @@ mod tests {
 
     #[test]
     fn test_halo_signal_all_categories_detected() {
-        let text = "expert popular limited now sophisticated";
+        let text = "expert popular limited now incredible sophisticated";
         let breakdown = get_bias_breakdown(text);
         assert_eq!(breakdown.authority, 100);
         assert_eq!(breakdown.social_proof, 100);
         assert_eq!(breakdown.scarcity, 100);
         assert_eq!(breakdown.urgency, 100);
+        assert_eq!(breakdown.emotional_appeal, 100);
         assert_eq!(breakdown.expertise_signaling, 100);
-        assert_eq!(calculate_halo_signal(text), 500);
+        assert_eq!(calculate_halo_signal(text), 600);
     }
 
     #[test]
