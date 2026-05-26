@@ -555,5 +555,15 @@ mod tests {
         } else {
             panic!("Expected Halt decision");
         }
+
+        // Pressure override Escalate case should have 5000ms cooldown
+        if let SafetyDecision::Escalate { cooldown_ms, .. } =
+            policy.decide_with_pressure(400, 100, false, PressureLevel::Critical)
+        {
+            assert_ne!(cooldown_ms, 0, "Pressure Escalate cooldown should be non-zero");
+            assert_eq!(cooldown_ms, 5000, "Pressure Escalate cooldown should be 5000ms");
+        } else {
+            panic!("Expected Escalate decision from pressure");
+        }
     }
 }
