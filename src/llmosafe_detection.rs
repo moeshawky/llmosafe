@@ -113,6 +113,16 @@ impl RepetitionDetector {
         hash
     }
 
+    /// Simple FNV-1a hash for pattern matching (case-insensitive).
+    pub fn hash_str_ignore_case(s: &str) -> u32 {
+        let mut hash: u32 = 2_166_136_261;
+        for byte in s.bytes() {
+            hash ^= byte.to_ascii_lowercase() as u32;
+            hash = hash.wrapping_mul(16_777_619);
+        }
+        hash
+    }
+
     /// Observe a new input and update repetition tracking.
     pub fn observe(&mut self, input: &str) {
         let hash = Self::hash_str(input);
@@ -337,7 +347,7 @@ impl AdversarialDetector {
 
     /// Add a known adversarial pattern.
     pub fn add_pattern(&mut self, pattern: &str) {
-        let hash = RepetitionDetector::hash_str(&pattern.to_ascii_lowercase());
+        let hash = RepetitionDetector::hash_str_ignore_case(pattern);
         self.patterns.push(hash);
     }
 
@@ -353,7 +363,7 @@ impl AdversarialDetector {
         } else {
             input
         };
-        let input_hash = RepetitionDetector::hash_str(&bounded.to_ascii_lowercase());
+        let input_hash = RepetitionDetector::hash_str_ignore_case(bounded);
         self.patterns.iter().any(|&p| p == input_hash)
     }
 
