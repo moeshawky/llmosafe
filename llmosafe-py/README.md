@@ -220,4 +220,4 @@ From spam filtering:
 
 ---
 
-**llmosafe v0.6.1** • MIT licensed • [Python API docs](#) • [Rust crate](https://crates.io/crates/llmosafe)
+**llmosafe v0.6.2** • MIT licensed • [Python API docs](#) • [Rust crate](https://crates.io/crates/llmosafe)

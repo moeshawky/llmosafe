@@ -73,7 +73,7 @@ match decision {
 
 ```toml
 [dependencies]
-llmosafe = "0.6.1"
+llmosafe = "0.6.2"
 ```
 
 ### Basic Usage
@@ -335,7 +335,7 @@ See [llmosafe-py/README.md](llmosafe-py/README.md) for the full Python API refer
 
 ---
 
-## Witness Token Pipeline (v0.6.1)
+## Witness Token Pipeline (v0.6.2)
 
 The type system enforces a three-stage pipeline via zero-cost witness tokens:
 
@@ -485,4 +485,4 @@ When any gauge redlines, execution halts. Simple.
 
 ---
 
-*llmosafe v0.6.1 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*
+*llmosafe v0.6.2 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*

@@ -1,4 +1,11 @@
 fn main() {
+    // Only generate C headers when the `ffi` feature is active.
+    // During `cargo publish`, ffi is not enabled, so cbindgen won't
+    // run and won't create files outside OUT_DIR.
+    if std::env::var("CARGO_FEATURE_FFI").is_err() {
+        return;
+    }
+
     extern crate cbindgen;
     use std::env;
     use std::path::PathBuf;
