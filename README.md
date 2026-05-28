@@ -36,18 +36,18 @@ When any gauge redlines, execution halts. Simple.
 use llmosafe::{sift_perceptions, WorkingMemory, EscalationPolicy, SafetyDecision};
 
 // 1. Bias gauge: Detect manipulation patterns
-let synapse = sift_perceptions(&[
+let (sifted, sifted_proof) = sift_perceptions(&[
     "The expert recommended this official solution",
     "System operating normally"
 ], "safety");
 
-if synapse.has_bias() {
-    println!("⚠ Bias detected: manipulation attempt");
+if sifted.has_bias() {
+    println!("Bias detected: manipulation attempt");
 }
 
 // 2. Surprise gauge: Reject unexpected results
 let mut memory = WorkingMemory::<64>::new(500); // threshold
-let validated = memory.update(synapse)?; // Err if too surprising
+let (validated, validated_proof) = memory.update(sifted, sifted_proof)?;
 
 // 3. Entropy gauge: Halt on chaotic state
 let policy = EscalationPolicy::default();
@@ -58,10 +58,10 @@ let decision = policy.decide(
 );
 
 match decision {
-    SafetyDecision::Halt(err, _) => println!("✗ Stopping: {}", err),
-    SafetyDecision::Escalate { reason, .. } => println!("↑ Escalating: {:?}", reason),
-    SafetyDecision::Warn(msg) => println!("⚠ Warning: {}", msg),
-    SafetyDecision::Proceed => println!("✓ Safe to continue"),
+    SafetyDecision::Halt(err, _) => println!("Stopping: {}", err),
+    SafetyDecision::Escalate { reason, .. } => println!("Escalating: {:?}", reason),
+    SafetyDecision::Warn(msg) => println!("Warning: {}", msg),
+    SafetyDecision::Proceed => println!("Safe to continue"),
 }
 ```
 
@@ -73,7 +73,7 @@ match decision {
 
 ```toml
 [dependencies]
-llmosafe = "0.6.0"
+llmosafe = "0.6.1"
 ```
 
 ### Basic Usage
@@ -82,15 +82,15 @@ llmosafe = "0.6.0"
 use llmosafe::{sift_perceptions, WorkingMemory, ReasoningLoop};
 
 // Tier 3: Sift through bias detection
-let synapse = sift_perceptions(&["observation"], "objective");
+let (sifted, sifted_proof) = sift_perceptions(&["observation"], "objective");
 
 // Tier 2: Validate through surprise gating
 let mut memory = WorkingMemory::<64>::new(1000);
-let validated = memory.update(synapse)?;
+let (validated, validated_proof) = memory.update(sifted, sifted_proof)?;
 
 // Tier 1: Execute with bounded reasoning
 let mut loop_guard = ReasoningLoop::<10>::new();
-loop_guard.next_step(validated)?;
+loop_guard.next_step(validated, validated_proof)?;
 ```
 
 ### What This Prevents
@@ -123,7 +123,7 @@ loop_guard.next_step(validated)?;
 │ • Negation-aware: "not an expert" → no false positive  │
 │ • Zero allocation: stack-only processing               │
 └───────────────────────┬─────────────────────────────────┘
-                        │ Synapse (128-bit)
+                        │ (SiftedSynapse, SiftedProof)
                         ▼
 ┌─────────────────────────────────────────────────────────┐
 │ WORKING MEMORY (Tier 2) — The Surprise Gauge           │
@@ -131,7 +131,7 @@ loop_guard.next_step(validated)?;
 │ • Fixed-size ring buffer: no heap allocation           │
 │ • Statistics: mean, variance, trend, drift             │
 └───────────────────────┬─────────────────────────────────┘
-                        │ ValidatedSynapse
+                        │ (ValidatedSynapse, ValidatedProof)
                         ▼
 ┌─────────────────────────────────────────────────────────┐
 │ DETERMINISTIC KERNEL (Tier 1) — The Entropy Gauge      │
@@ -178,7 +178,8 @@ if halo > 500 {
 
 ```rust
 // Before applying treatment
-let validated = memory.update(sensor_reading)?;
+let (sifted, sifted_proof) = sift_perceptions(&[sensor_reading], "treatment safety");
+let (validated, _) = memory.update(sifted, sifted_proof)?;
 if validated.entropy().mantissa() > threshold {
     return Err("Sensor readings unstable, require human confirmation");
 }
@@ -190,8 +191,8 @@ if validated.entropy().mantissa() > threshold {
 
 ```rust
 // Before processing user upload
-let synapse = sift_perceptions(&user_inputs, "process safely")?;
-if synapse.has_bias() {
+let (sifted, _proof) = sift_perceptions(&user_inputs, "process safely");
+if sifted.has_bias() {
     return Err("Manipulation patterns detected in input");
 }
 ```
@@ -202,8 +203,10 @@ if synapse.has_bias() {
 
 ```rust
 // Before action execution
-synapse.validate()?;
-guard.check()?; // Check resource pressure
+let (sifted, sifted_proof) = sift_perceptions(&[sensor_data], "safety");
+let (validated, validated_proof) = memory.update(sifted, sifted_proof)?;
+let mut loop_guard = ReasoningLoop::<5>::new();
+loop_guard.next_step(validated, validated_proof)?;
 
 if guard.pressure() > 80 {
     return Err("Resource pressure too high, entering safe mode");
@@ -233,9 +236,10 @@ Catches: runaway loops, recursive explosions, memory pressure cascades.
 When a result is too unexpected — it diverges significantly from historical patterns — it's rejected.
 
 ```rust
+let (sifted, sifted_proof) = sift_perceptions(&[result], "objective");
 let mut memory = WorkingMemory::<64>::new(500);
-match memory.update(result) {
-    Ok(validated) => { /* proceed */ },
+match memory.update(sifted, sifted_proof) {
+    Ok((validated, _proof)) => { /* proceed */ },
     Err(KernelError::HallucinationDetected) => {
         // Reject: result too surprising
     }
@@ -300,6 +304,59 @@ if !patterns.is_empty() { /* Adversarial input */ }
 
 ---
 
+## Python Bindings
+
+llmosafe is also available as a Python package:
+
+```bash
+pip install llmosafe
+```
+
+```python
+from llmosafe import calculate_halo, process_synapse, make_synapse, check_resources
+
+# Bias detection
+halo = calculate_halo("The expert recommends this")
+print(halo)  # 100 = authority bias detected
+
+# Full pipeline: surprise gating + entropy check
+bits = make_synapse(entropy=400, surprise=100, has_bias=False)
+result = process_synapse(bits)
+print(result)  # 0 = OK, negative = rejected
+
+# Resource enforcement
+try:
+    check_resources(1024)  # 1GB RSS ceiling
+except ResourceExhaustedError:
+    print("Memory ceiling breached")
+```
+
+See [llmosafe-py/README.md](llmosafe-py/README.md) for the full Python API reference.
+
+---
+
+## Witness Token Pipeline (v0.6.1)
+
+The type system enforces a three-stage pipeline via zero-cost witness tokens:
+
+```
+sift_perceptions() → (SiftedSynapse, SiftedProof)
+        ↓
+WorkingMemory::update(sifted, proof) → (ValidatedSynapse, ValidatedProof)
+        ↓
+ReasoningLoop::next_step(validated, proof)
+```
+
+Each stage produces a ZST proof token. The next stage consumes it. No code outside
+the crate can forge a proof — `SiftedProof(())` and `ValidatedProof(())` are
+`pub(crate)`. The only bypass path is `from_synapse()`, which creates an
+unusable `SiftedSynapse` without proof — a deliberate dead end.
+
+**Property:** You cannot pass unsifted data through the pipeline. The compiler
+enforces this at zero runtime cost.
+
+---
+
 ## C Integration
 
 ```c
@@ -314,6 +371,7 @@ int32_t stability = llmosafe_get_stability(synapse_bits);
 Build:
 ```bash
 cargo build --release --features ffi
+# Header generated at: target/release/build/llmosafe-*/out/llmosafe.h
 gcc -o my_app main.c -L./target/release -lllmosafe
 ```
 
@@ -372,14 +430,15 @@ Bias detection categories borrowed from email spam filters — the same patterns
 | `std` (default) | Resource monitoring, thread-local contexts |
 | `ffi` | C-ABI exports, header generation |
 | `serde` | Serialization for all public types |
+| `testing` | Enables `for_testing()` constructors for witness tokens |
 | `full` | All features enabled |
 
 ```toml
 # Embedded / no_std
-llmosafe = { version = "0.5", default-features = false }
+llmosafe = { version = "0.6", default-features = false }
 
 # Full integration
-llmosafe = { version = "0.5", features = ["full"] }
+llmosafe = { version = "0.6", features = ["full"] }
 ```
 
 ---
@@ -407,7 +466,7 @@ let mut memory = WorkingMemory::<64>::new(750);
 Enable `ffi` feature:
 ```bash
 cargo build --release --features ffi
-# Header at: include/llmosafe.h
+# Header generated by cbindgen in target/ build output
 ```
 
 ---
@@ -426,4 +485,4 @@ When any gauge redlines, execution halts. Simple.
 
 ---
 
-*llmosafe v0.6.0 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*
+*llmosafe v0.6.1 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*

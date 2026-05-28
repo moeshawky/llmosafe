@@ -40,12 +40,17 @@ class TestCalculateHalo:
         assert result >= 300  # At least 3 patterns × 100
 
     def test_case_insensitive(self):
-        """Bias detection should be case-insensitive."""
+        """Keyword matching is case-insensitive. ALL-CAPS emphasis is an
+        independent signal (typographic manipulation), not a case-sensitivity
+        failure — it adds +50 per all-caps word >= 2 chars."""
         lower = llmosafe.calculate_halo("the expert")
         upper = llmosafe.calculate_halo("THE EXPERT")
         mixed = llmosafe.calculate_halo("ThE ExPeRt")
-        assert lower == upper == mixed
+        # Lower and mixed match — keyword detection is case-insensitive
+        assert lower == mixed
         assert lower > 0
+        # Upper adds emphasis: "THE" (+50, not a keyword) + "EXPERT" (+100 keyword +50 emphasis) = 200
+        assert upper > lower
 
     def test_negation_awareness(self):
         """'not an expert' should produce 0 authority score."""

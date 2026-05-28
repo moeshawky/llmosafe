@@ -237,11 +237,12 @@ fn get_environmental_entropy() -> u16 {
     llmosafe_get_environmental_entropy()
 }
 
-/// Process a cognitive state update through the full safety pipeline.
+/// Process a cognitive state update through the safety pipeline.
 ///
-/// Pipeline: bias detection → surprise gating → entropy check.
-/// Uses the global WorkingMemory (64-entry ring buffer, surprise
-/// threshold 500).
+/// Pipeline: surprise gating → entropy check (via the global WorkingMemory,
+/// 64-entry ring buffer, surprise threshold 500). Does NOT run the Rust-side
+/// sifter — call `calculate_halo()` to detect manipulation patterns
+/// before constructing the synapse.
 ///
 /// **Bit layout** for synapse_bits — same as get_stability():
 ///

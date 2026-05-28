@@ -37,7 +37,11 @@ checkpoints/
 training/
 kaggle_dataset/
 kaggle_upload/
+kaggle_output/
+kaggle_backup.tar.gz
 llmosafe_new/
+notebook_cells/
+*.xpynb
 
 # Python - NOT PART OF RUST LIBRARY
 /*.py
@@ -45,6 +49,7 @@ llmosafe_new/
 __pycache__/
 *.ipynb
 .ipynb_checkpoints/
+.pytest_cache/
 !llmosafe-py/llmosafe/
 !examples/python_consumer/
 

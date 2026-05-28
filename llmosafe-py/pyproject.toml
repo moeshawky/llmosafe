@@ -6,12 +6,12 @@ build-backend = "maturin"
 name = "llmosafe"
 version = "0.6.1"
 description = "Predictive resource-pressure instrumentation and runtime guardrails for systems processing untrusted inputs"
-authors = [{name = "llmosafe team", email = "llmosafe@example.com"}]
+authors = [{name = "llmosafe team", email = "moe@libermoe.com"}]
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
+license = {file = "LICENSE"}
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
     "License :: OSI Approved :: MIT License",
