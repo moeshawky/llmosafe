@@ -81,15 +81,22 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
 
     pub fn trend(&self) -> f64 {
         let n = SIZE as f64;
-        let mut sum_y = 0.0;
-        let mut sum_x_times_y = 0.0;
+        // ⚡ Bolt Optimization: Use i128 integer arithmetic for loop accumulations.
+        // This avoids O(N) f64 conversions inside the loop, preventing redundant
+        // float arithmetic and eliminating floating-point roundoff errors.
+        // The results are cast to f64 only at the end.
+        let mut sum_y_i128: i128 = 0;
+        let mut sum_x_times_y_i128: i128 = 0;
 
         for (i, e) in self.state.iter().enumerate() {
-            let x = i as f64;
-            let y = e.mantissa() as f64;
-            sum_y += y;
-            sum_x_times_y += x * y;
+            let x = i as i128;
+            let y = e.mantissa();
+            sum_y_i128 += y;
+            sum_x_times_y_i128 += x * y;
         }
+
+        let sum_y = sum_y_i128 as f64;
+        let sum_x_times_y = sum_x_times_y_i128 as f64;
 
         let sum_x = (n * (n - 1.0)) / 2.0;
         let sum_xx = (n * (n - 1.0) * (2.0 * n - 1.0)) / 6.0;
@@ -98,7 +105,9 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
     }
 
     pub fn is_drifting(&self, threshold: f64) -> bool {
-        self.trend().abs() > threshold
+        let trend = self.trend();
+        let abs_trend = if trend < 0.0 { -trend } else { trend };
+        abs_trend > threshold
     }
 }
 
