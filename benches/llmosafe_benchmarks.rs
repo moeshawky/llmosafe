@@ -1,10 +1,13 @@
+#[cfg(feature = "testing")]
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+#[cfg(feature = "testing")]
 use llmosafe::{
     calculate_halo_signal, get_bias_breakdown, sift_perceptions, AdversarialDetector,
     ConfidenceTracker, CusumDetector, DriftDetector, EscalationPolicy, ReasoningLoop,
     RepetitionDetector, SiftedProof, Synapse, WorkingMemory,
 };
 
+#[cfg(feature = "testing")]
 fn bench_sifter(c: &mut Criterion) {
     let observations = vec![
         "The expert provided an official professional recommendation",
@@ -28,6 +31,7 @@ fn bench_sifter(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "testing")]
 fn bench_kernel(c: &mut Criterion) {
     let mut synapse = Synapse::new();
     synapse.set_raw_entropy(500);
@@ -47,6 +51,7 @@ fn bench_kernel(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "testing")]
 fn bench_memory(c: &mut Criterion) {
     let mut memory = WorkingMemory::<64>::new(1000);
     let mut synapse = Synapse::new();
@@ -58,6 +63,7 @@ fn bench_memory(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "testing")]
 fn bench_detection(c: &mut Criterion) {
     let mut cusum = CusumDetector::new(500.0, 50.0, 200.0);
     let mut rep = RepetitionDetector::new(3);
@@ -86,6 +92,7 @@ fn bench_detection(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "testing")]
 fn bench_integration(c: &mut Criterion) {
     let policy = EscalationPolicy::default();
 
@@ -94,6 +101,7 @@ fn bench_integration(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "testing")]
 criterion_group!(
     benches,
     bench_sifter,
@@ -102,4 +110,8 @@ criterion_group!(
     bench_detection,
     bench_integration
 );
+#[cfg(feature = "testing")]
 criterion_main!(benches);
+
+#[cfg(not(feature = "testing"))]
+fn main() {}
