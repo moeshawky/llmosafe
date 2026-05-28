@@ -344,13 +344,22 @@ fn semantic_trap_phrases_detected() {
         "'instead of' and 'rather than' should both fire"
     );
 
-    // Negation should suppress single-word traps but phrases pass through
-    let breakdown_negated = get_bias_breakdown("it is not however relevant");
-    // "not" negates "however" (3-token window) — single-word trap suppressed
-    // But "however" is single-word so it gets caught in the negation window
+    // Negation should suppress multi-word trap phrases within TTL window
+    let breakdown_negated =
+        get_bias_breakdown("it is not instead of that now but rather than this");
+    // "not" negates "instead of" (within 6-token TTL)
+    // "now" is not in any list — filler to push "rather than" outside the window
+    // Actually, both "instead of" and "rather than" are caught in the 6-token window.
     assert_eq!(
         breakdown_negated.semantic_traps, 0,
-        "'however' should be negated by preceding 'not'"
+        "both multi-word traps should be negated by preceding 'not'"
+    );
+
+    // Without negation, both fire
+    let breakdown_clean = get_bias_breakdown("it is instead of that, rather than this");
+    assert_eq!(
+        breakdown_clean.semantic_traps, 200,
+        "'instead of' and 'rather than' should both fire without negation"
     );
 }
 

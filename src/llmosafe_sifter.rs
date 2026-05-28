@@ -20,27 +20,23 @@ use crate::llmosafe_kernel::Synapse;
 
 /// Authority bias keyword detection list.
 /// Matches terms that signal expertise/position appeals.
+/// Pruned of high-frequency academic terms (research, study, professional).
+/// Keeps 2-3 representatives per semantic cluster:
+///   claims: guaranteed, certified, proven
+///   roles: expert, official, government, doctor, scientist
 pub const AUTHORITY_BIAS: &[&str] = &[
     "expert",
+    "experts",
     "official",
+    "officials",
     "government",
     "doctor",
-    "professor",
+    "doctors",
     "scientist",
-    "research",
-    "study",
+    "scientists",
     "guaranteed",
     "certified",
-    "authorized",
     "proven",
-    "reliable",
-    "trusted",
-    "professional",
-    "specialist",
-    "veteran",
-    "master",
-    "guru",
-    "authority",
 ];
 
 pub const NEGATION_WORDS: &[&str] = &[
@@ -62,43 +58,33 @@ pub const NEGATION_WORDS: &[&str] = &[
 ];
 
 /// Social Proof Keywords: Red flags for crowd/popularity bias.
+/// Pruned of everyday community terms (common, standard, users, reviews, ratings, joined, peer, social).
+/// Kept: high-signal crowd-manipulation markers.
 pub const SOCIAL_PROOF: &[&str] = &[
-    "popular",
     "everyone",
     "thousands",
     "millions",
     "trending",
-    "bestseller",
     "viral",
-    "community",
-    "joined",
-    "users",
+    "bestseller",
+    "bestsellers",
     "testimonials",
-    "reviews",
-    "ratings",
-    "common",
-    "standard",
     "consensus",
     "majority",
     "crowd",
-    "peer",
-    "social",
 ];
 
 /// Scarcity Keywords: Red flags for restricted availability bias.
+/// Pruned of hyper-common words (only, special, private, unique, few, select).
+/// Kept: domain-specific scarcity markers that are rare outside manipulation.
 pub const SCARCITY: &[&str] = &[
     "limited",
     "rare",
     "exclusive",
-    "only",
-    "few",
-    "unique",
-    "special",
     "handcrafted",
     "small-batch",
     "collectible",
     "once-in-a-lifetime",
-    "select",
     "restricted",
     "shortage",
     "vanishing",
@@ -106,90 +92,64 @@ pub const SCARCITY: &[&str] = &[
     "while-supplies-last",
     "sold-out",
     "member-only",
-    "private",
 ];
 
 /// Urgency Keywords: Red flags for time-pressure bias.
+/// Pruned of universal time adjectives (now, today, fast, quick, soon, final, rapid, speedy).
+/// Kept: genuine urgency-manipulation signals.
 pub const URGENCY: &[&str] = &[
-    "now",
-    "today",
-    "fast",
-    "quick",
-    "instant",
     "hurry",
     "rush",
     "deadline",
     "expiring",
-    "ending",
-    "soon",
     "immediately",
-    "pronto",
-    "rapid",
-    "speedy",
     "limited-time",
     "last-chance",
     "act-now",
     "don't-wait",
-    "final",
 ];
 
 /// Emotional Appeal Keywords: Red flags for emotional manipulation bias.
 /// Pruned of high-frequency words (love, joy, happy, sad, angry) that trigger
-/// on everyday speech. Retains fearmongering, hyperbolic, and sentiment-charged
-/// terms that signal manipulative rhetoric.
+/// on everyday speech. Pruned further of remaining common sentiment words
+/// (worry, hopeful, inspiring, passionate, touching).
+/// Retains fearmongering, hyperbolic, and sentiment-charged terms.
 pub const EMOTIONAL_APPEAL: &[&str] = &[
     "fear",
-    "worry",
     "shocking",
     "miracle",
     "incredible",
     "tragic",
     "desperate",
-    "hopeful",
     "heartwarming",
-    "passionate",
-    "inspiring",
-    "touching",
     "devastating",
     "thrilling",
+    "terrifying",
 ];
 
 /// Expertise Signaling Keywords: Red flags for jargon/complexity bias.
+/// Pruned of business/engineering buzzwords (advanced, complex, technical, leverage,
+/// optimize, agile, lean, scalable, high-performance).
+/// Kept: genuine novelty-claim and proprietary-signaling terms.
 pub const EXPERTISE_SIGNALING: &[&str] = &[
     "sophisticated",
-    "advanced",
     "cutting-edge",
     "state-of-the-art",
     "revolutionary",
-    "innovative",
+    "revolutionaries",
     "patented",
     "breakthrough",
+    "breakthroughs",
     "proprietary",
-    "complex",
-    "technical",
     "paradigm",
     "holistic",
     "synergy",
-    "leverage",
-    "optimize",
-    "agile",
-    "lean",
-    "scalable",
-    "high-performance",
 ];
 
 /// Semantic Traps: Inversion patterns that flip safety predicates.
-pub const SEMANTIC_TRAPS: &[&str] = &[
-    "not but",
-    "instead of",
-    "rather than",
-    "unless",
-    "however",
-    "conversely",
-    "on the other hand",
-    "despite",
-    "although",
-];
+/// Single-word contrast markers removed (unless, however, although, despite, conversely)
+/// — too common in everyday English. Multi-word inversion phrases retained.
+pub const SEMANTIC_TRAPS: &[&str] = &["not but", "instead of", "rather than", "on the other hand"];
 
 /// Template Fitting: Common AI-specific template markers.
 pub const TEMPLATE_FITTING: &[&str] = &[
@@ -203,7 +163,7 @@ pub const TEMPLATE_FITTING: &[&str] = &[
 ];
 
 /// Fixed-size bias breakdown. Zero allocation.
-/// Each field corresponds to one of the 8 bias categories.
+/// Each field corresponds to one of the 8 bias categories plus typographic emphasis.
 /// `emotional_appeal` is keyword-sifter-inert for the classifier pathway.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BiasBreakdown {
@@ -215,6 +175,10 @@ pub struct BiasBreakdown {
     pub expertise_signaling: u16,
     pub semantic_traps: u16,
     pub template_fitting: u16,
+    /// Typographic emphasis signal: ALL CAPS words (attention-seeking formatting).
+    /// Independent of keyword membership — catches shouting patterns that keywords miss.
+    /// camelCase/PascalCase excluded (technical notation, not manipulation).
+    pub emphasis: u16,
 }
 
 impl BiasBreakdown {
@@ -228,6 +192,7 @@ impl BiasBreakdown {
             .saturating_add(self.expertise_signaling)
             .saturating_add(self.semantic_traps)
             .saturating_add(self.template_fitting)
+            .saturating_add(self.emphasis)
     }
 }
 
@@ -296,6 +261,14 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
         }
         if word_in_list(trimmed, TEMPLATE_FITTING) {
             breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
+        }
+
+        // Attention-emphasis signal: ALL CAPS words (len >= 2) indicate
+        // typographic manipulation independent of keyword membership.
+        // Only fires on ASCII-uppercase — excludes emoji, Unicode scripts,
+        // and camelCase/PascalCase (technical notation, not manipulation).
+        if !negated && trimmed.len() >= 2 && trimmed.chars().all(|c| c.is_ascii_uppercase()) {
+            breakdown.emphasis = breakdown.emphasis.saturating_add(50);
         }
     }
 
@@ -566,19 +539,19 @@ mod tests {
     #[test]
     fn test_halo_signal() {
         assert_eq!(
-            calculate_halo_signal("The lead expert is professional and official."),
+            calculate_halo_signal("The lead expert is certified and official."),
             300
         );
         assert_eq!(
             calculate_halo_signal("This is a random sentence without flags."),
             0
         );
-        assert_eq!(calculate_halo_signal("limited and exclusive special"), 300);
+        assert_eq!(calculate_halo_signal("limited and exclusive rare"), 300);
     }
 
     #[test]
     fn test_halo_signal_all_categories_detected() {
-        let text = "expert popular limited now incredible sophisticated";
+        let text = "expert trending limited hurry incredible sophisticated";
         let breakdown = get_bias_breakdown(text);
         assert_eq!(breakdown.authority, 100);
         assert_eq!(breakdown.social_proof, 100);
@@ -650,7 +623,7 @@ mod tests {
 
     #[test]
     fn test_halo_signal_keyword_density() {
-        let text = "expert professional authorized reliable trusted specialist veteran master guru authority";
+        let text = "expert official government doctor scientist guaranteed certified proven experts officials scientists";
         let signal = calculate_halo_signal(text);
         assert!(signal >= 1000);
     }

@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn test_bias_breakdown_multiple_categories() {
-        let text = "The expert says this is a popular limited offer";
+        let text = "The expert says this is a trending limited offer";
         let breakdown = get_bias_breakdown(text);
 
         assert!(
@@ -100,7 +100,7 @@ mod tests {
         );
         assert!(
             breakdown.social_proof > 0,
-            "Should detect social proof (popular)"
+            "Should detect social proof (trending)"
         );
         assert!(breakdown.scarcity > 0, "Should detect scarcity (limited)");
         // Multiple categories detected
@@ -117,7 +117,12 @@ mod tests {
         assert!(upper > 0, "Uppercase should detect bias");
         assert!(mixed > 0, "Mixed case should detect bias");
 
-        assert_eq!(lower, upper, "Case should not affect detection");
+        // ALL CAPS adds emphasis weight (+50/word). Case IS a signal.
+        assert!(
+            upper > lower,
+            "ALL CAPS should score higher than lowercase (emphasis signal)"
+        );
+        assert_eq!(lower, mixed, "Title Case should match lowercase");
     }
 
     #[test]
