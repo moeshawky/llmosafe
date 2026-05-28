@@ -17,49 +17,54 @@ use std::time::Duration;
 pub struct EnvironmentalVitals {
     pub iowait: u64,
     pub load_avg: f64,
+    pub vitals_available: bool,
 }
 
 impl EnvironmentalVitals {
     /// Captures current system vitals.
     pub fn capture() -> Self {
+        let iowait = Self::read_iowait();
+        let load_avg = Self::read_loadavg();
+        let vitals_available = iowait.is_some() && load_avg.is_some();
         Self {
-            iowait: Self::read_iowait(),
-            load_avg: Self::read_loadavg(),
+            iowait: iowait.unwrap_or(0),
+            load_avg: load_avg.unwrap_or(0.0),
+            vitals_available,
         }
     }
 
     #[cfg(target_os = "linux")]
-    fn read_iowait() -> u64 {
+    fn read_iowait() -> Option<u64> {
         if let Ok(file) = fs::File::open("/proc/stat") {
             if let Some(Ok(line)) = BufReader::new(file).lines().next() {
                 if let Some(iowait_str) = line.split_whitespace().nth(5) {
-                    return iowait_str.parse().unwrap_or(0);
+                    return Some(iowait_str.parse().unwrap_or(0));
                 }
             }
         }
-        0
+        None
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn read_iowait() -> u64 {
-        0
+    fn read_iowait() -> Option<u64> {
+        None
     }
 
     #[cfg(target_os = "linux")]
-    fn read_loadavg() -> f64 {
+    fn read_loadavg() -> Option<f64> {
         if let Ok(file) = fs::File::open("/proc/loadavg") {
             if let Some(Ok(line)) = BufReader::new(file).lines().next() {
                 if let Some(first_part) = line.split_whitespace().next() {
-                    return first_part.parse().unwrap_or(0.0);
+                    return Some(first_part.parse().unwrap_or(0.0));
                 }
             }
         }
-        0.0
+        None
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn read_loadavg() -> f64 {
-        0.0
+    fn read_loadavg() -> Option<f64> {
+        None
     }
 }
 
@@ -90,7 +95,7 @@ impl ResourceGuard {
     /// the cap (1000) triggers Escalate, not Halt. Use Halt for entropy values
     /// > 1000 from composite/synthetic sources outside the resource body.
     pub fn raw_entropy(&self) -> u16 {
-        let current_rss = Self::current_rss_bytes();
+        let current_rss = Self::try_current_rss_bytes().unwrap_or(self.memory_ceiling_bytes);
         let rss_ratio = if self.memory_ceiling_bytes > 0 {
             (current_rss as f64 / self.memory_ceiling_bytes as f64).min(1.0)
         } else {
@@ -99,8 +104,12 @@ impl ResourceGuard {
 
         let vitals = EnvironmentalVitals::capture();
 
-        // Map Load Average to 0-1.0 (capped at 10.0 for scaling)
-        let load_ratio = (vitals.load_avg / 10.0).min(1.0);
+        // Fail-closed: if /proc is unavailable, assume worst-case load and IO pressure.
+        let load_ratio = if vitals.vitals_available {
+            (vitals.load_avg / 10.0).min(1.0)
+        } else {
+            1.0
+        };
 
         // IO Wait: use delta-based measurement on Linux, fallback to 0 elsewhere
         #[cfg(target_os = "linux")]
@@ -114,10 +123,10 @@ impl ResourceGuard {
 
     /// Returns the current resource pressure as a percentage of the ceiling (0-100).
     pub fn pressure(&self) -> u8 {
-        let current_rss = Self::current_rss_bytes();
         if self.memory_ceiling_bytes == 0 {
             return 100;
         }
+        let current_rss = Self::try_current_rss_bytes().unwrap_or(self.memory_ceiling_bytes);
         let ratio = current_rss as f64 / self.memory_ceiling_bytes as f64;
         (ratio * 100.0).min(100.0) as u8
     }
@@ -132,7 +141,10 @@ impl ResourceGuard {
         if self.memory_ceiling_bytes == 0 {
             return Err(KernelError::ResourceExhaustion);
         }
-        let current_rss = Self::current_rss_bytes();
+        let current_rss = match Self::try_current_rss_bytes() {
+            Some(rss) => rss,
+            None => return Err(KernelError::ResourceExhaustion),
+        };
         let ratio = current_rss as f64 / self.memory_ceiling_bytes as f64;
 
         if ratio >= 1.0 {
@@ -160,7 +172,10 @@ impl ResourceGuard {
         if self.memory_ceiling_bytes == 0 {
             return Err(KernelError::ResourceExhaustion);
         }
-        let current_rss = Self::current_rss_bytes();
+        let current_rss = match Self::try_current_rss_bytes() {
+            Some(rss) => rss,
+            None => return Err(KernelError::ResourceExhaustion),
+        };
         let ratio = current_rss as f64 / self.memory_ceiling_bytes as f64;
 
         if ratio >= 1.0 {
@@ -284,7 +299,7 @@ impl ResourceGuard {
                 usage.ru_maxrss as usize
             }
         } else {
-            Self::read_rss_from_proc()
+            Self::read_rss_from_proc().unwrap_or(0)
         }
     }
 
@@ -316,26 +331,79 @@ impl ResourceGuard {
         0
     }
 
+    /// Like current_rss_bytes() but returns None when RSS measurement is
+    /// unavailable. Callers should fail-closed (return ResourceExhaustion
+    /// or max pressure) when None is returned.
+    #[cfg(target_os = "linux")]
+    fn try_current_rss_bytes() -> Option<usize> {
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+        if ret == 0 {
+            Some((usage.ru_maxrss as usize).saturating_mul(1024))
+        } else {
+            Self::read_rss_from_proc()
+        }
+    }
+
+    #[cfg(unix)]
+    #[cfg(not(target_os = "linux"))]
+    fn try_current_rss_bytes() -> Option<usize> {
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+        if ret == 0 {
+            Some(usage.ru_maxrss as usize)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(windows)]
+    fn try_current_rss_bytes() -> Option<usize> {
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::System::ProcessStatus::{
+            GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
+        let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+        let handle: HANDLE = unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() };
+        let ret = unsafe {
+            GetProcessMemoryInfo(
+                handle,
+                &mut counters,
+                std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            )
+        };
+        if ret != 0 {
+            Some(counters.WorkingSetSize as usize)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn try_current_rss_bytes() -> Option<usize> {
+        None
+    }
+
     /// Helper: parse RSS from /proc/self/status (Linux fallback)
     #[cfg(target_os = "linux")]
-    fn read_rss_from_proc() -> usize {
+    fn read_rss_from_proc() -> Option<usize> {
         if let Ok(file) = fs::File::open("/proc/self/status") {
             for line in BufReader::new(file).lines().map_while(Result::ok) {
                 if line.starts_with("VmRSS:") {
                     if let Some(size_str) = line.split_whitespace().nth(1) {
                         if let Ok(kb) = size_str.parse::<usize>() {
-                            return kb.saturating_mul(1024);
+                            return Some(kb.saturating_mul(1024));
                         }
                     }
                 }
             }
         }
-        0
+        None
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn read_rss_from_proc() -> usize {
-        0
+    fn read_rss_from_proc() -> Option<usize> {
+        None
     }
 
     /// Returns system memory in bytes.

@@ -1,9 +1,11 @@
 //! G-ERR tests for all KernelError variants
 
 #[cfg(test)]
+#[cfg(feature = "testing")]
 mod tests {
     use llmosafe::{
-        KernelError, ReasoningLoop, SiftedSynapse, Synapse, WorkingMemory, STABILITY_THRESHOLD,
+        KernelError, ReasoningLoop, SiftedProof, SiftedSynapse, Synapse, WorkingMemory,
+        STABILITY_THRESHOLD,
     };
 
     #[test]
@@ -15,12 +17,13 @@ mod tests {
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::from_synapse(synapse);
         let mut memory = WorkingMemory::<64>::new(1000);
-        let validated = memory.update(sifted).unwrap();
+        let proof = SiftedProof::for_testing();
+        let (validated, vproof) = memory.update(sifted, proof).unwrap();
 
-        loop_guard.next_step(validated).unwrap();
-        loop_guard.next_step(validated).unwrap();
+        loop_guard.next_step(validated, vproof).unwrap();
+        loop_guard.next_step(validated, vproof).unwrap();
 
-        let result = loop_guard.next_step(validated);
+        let result = loop_guard.next_step(validated, vproof);
         match result {
             Err(KernelError::DepthExceeded) => (),
             Err(e) => panic!("Expected DepthExceeded, got {:?}", e),
@@ -37,8 +40,9 @@ mod tests {
         synapse.set_raw_surprise(50);
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::from_synapse(synapse);
+        let proof = SiftedProof::for_testing();
 
-        match memory.update(sifted) {
+        match memory.update(sifted, proof) {
             Err(KernelError::CognitiveInstability) => (),
             Err(e) => panic!("Expected CognitiveInstability, got {:?}", e),
             Ok(_) => panic!("Expected error, got Ok"),
@@ -54,8 +58,9 @@ mod tests {
         synapse.set_raw_surprise(50);
         synapse.set_has_bias(true);
         let sifted = SiftedSynapse::from_synapse(synapse);
+        let proof = SiftedProof::for_testing();
 
-        match memory.update(sifted) {
+        match memory.update(sifted, proof) {
             Err(KernelError::BiasHaloDetected) => (),
             Err(e) => panic!("Expected BiasHaloDetected, got {:?}", e),
             Ok(_) => panic!("Expected error, got Ok"),
@@ -71,8 +76,9 @@ mod tests {
         synapse.set_raw_surprise(501);
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::from_synapse(synapse);
+        let proof = SiftedProof::for_testing();
 
-        match memory.update(sifted) {
+        match memory.update(sifted, proof) {
             Err(KernelError::HallucinationDetected) => (),
             Err(e) => panic!("Expected HallucinationDetected, got {:?}", e),
             Ok(_) => panic!("Expected error, got Ok"),
@@ -105,9 +111,12 @@ mod tests {
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(501);
         let sifted = SiftedSynapse::from_synapse(synapse);
-        assert_eq!(
-            memory.update(sifted),
-            Err(KernelError::HallucinationDetected),
+        let proof = SiftedProof::for_testing();
+        assert!(
+            matches!(
+                memory.update(sifted, proof),
+                Err(KernelError::HallucinationDetected)
+            ),
             "High surprise should trigger HallucinationDetected"
         );
 
@@ -116,9 +125,12 @@ mod tests {
         synapse.set_raw_entropy(1001);
         synapse.set_raw_surprise(100);
         let sifted = SiftedSynapse::from_synapse(synapse);
-        assert_eq!(
-            memory.update(sifted),
-            Err(KernelError::CognitiveInstability),
+        let proof = SiftedProof::for_testing();
+        assert!(
+            matches!(
+                memory.update(sifted, proof),
+                Err(KernelError::CognitiveInstability)
+            ),
             "High entropy should trigger CognitiveInstability"
         );
 
@@ -128,9 +140,12 @@ mod tests {
         synapse.set_raw_surprise(100);
         synapse.set_has_bias(true);
         let sifted = SiftedSynapse::from_synapse(synapse);
-        assert_eq!(
-            memory.update(sifted),
-            Err(KernelError::BiasHaloDetected),
+        let proof = SiftedProof::for_testing();
+        assert!(
+            matches!(
+                memory.update(sifted, proof),
+                Err(KernelError::BiasHaloDetected)
+            ),
             "Bias flag should trigger BiasHaloDetected"
         );
     }

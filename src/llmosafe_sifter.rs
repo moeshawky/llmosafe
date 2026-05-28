@@ -14,7 +14,7 @@
 //!   overlap with objective
 //! - **Think-and-Rank**: Scores observations by (utility - halo) and
 //!   returns the highest-scoring perception
-
+use crate::llmosafe_kernel::SiftedProof;
 use crate::llmosafe_kernel::SiftedSynapse;
 use crate::llmosafe_kernel::Synapse;
 
@@ -410,16 +410,16 @@ fn calculate_utility_with_cache(
 /// use llmosafe::sift_perceptions;
 /// let objective = "Safety";
 /// let observations = &["Observation 1", "Observation 2"];
-/// let sifted = sift_perceptions(observations, objective);
+/// let (sifted, proof) = sift_perceptions(observations, objective);
 /// ```
-pub fn sift_perceptions(observations: &[&str], objective: &str) -> SiftedSynapse {
+pub fn sift_perceptions(observations: &[&str], objective: &str) -> (SiftedSynapse, SiftedProof) {
     if observations.is_empty() {
         let mut synapse = Synapse::new();
         synapse.set_raw_entropy(0xFFFF);
         synapse.set_raw_surprise(0);
         synapse.set_has_bias(false);
         synapse.set_anchor_hash(0);
-        return SiftedSynapse::new(synapse);
+        return (SiftedSynapse::new(synapse), SiftedProof(()));
     }
 
     let mut obj_words = [""; 64];
@@ -483,7 +483,7 @@ pub fn sift_perceptions(observations: &[&str], objective: &str) -> SiftedSynapse
     let anchor_hash = adler32::adler32(best_obs.as_bytes());
     synapse.set_anchor_hash(anchor_hash & 0x7FFFFFFF);
 
-    SiftedSynapse::new(synapse)
+    (SiftedSynapse::new(synapse), SiftedProof(()))
 }
 
 mod adler32 {
@@ -585,7 +585,7 @@ mod tests {
         let objective = "test";
         let observations: &[&str] = &[];
 
-        let sifted = sift_perceptions(observations, objective);
+        let (sifted, _) = sift_perceptions(observations, objective);
         assert_eq!(sifted.raw_entropy(), 0xFFFF);
         assert_eq!(
             sifted.validate().unwrap_err(),
@@ -597,7 +597,7 @@ mod tests {
     fn test_sift_perceptions_single_observation() {
         let objective = "test";
         let observations = &["stable observation"];
-        let sifted = sift_perceptions(observations, objective);
+        let (sifted, _) = sift_perceptions(observations, objective);
         assert!(sifted.validate().is_ok());
     }
 
@@ -660,7 +660,7 @@ mod tests {
         let objective = "Safety";
         let observations = &["Safety is paramount"];
 
-        let sifted = sift_perceptions(observations, objective);
+        let (sifted, _) = sift_perceptions(observations, objective);
         assert_eq!(sifted.raw_entropy(), 900);
     }
 
@@ -673,7 +673,7 @@ mod tests {
             "C is exclusive because it is limited but unsafe",
         ];
 
-        let sifted = sift_perceptions(observations, objective);
+        let (sifted, _) = sift_perceptions(observations, objective);
 
         assert!(sifted.validate().is_ok());
         assert!(sifted.anchor_hash() != 0);

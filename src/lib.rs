@@ -1,4 +1,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+// modular-bitfield's `#[bitfield]` proc macro generates field definitions
+// with parenthesized types (e.g., `pub raw_entropy: B16`), which triggers
+// the `unused_parens` lint on all 8 fields. Struct-level #[allow] does not
+// suppress proc-macro-originated warnings — the crate-level attribute is
+// required by the upstream crate's code generation.
 #![allow(unused_parens)]
 
 //! LLMOSAFE: A Safety-Critical AI Agent Library
@@ -39,8 +44,9 @@ pub use llmosafe_detection::{
 pub use llmosafe_integration::SafetyContext;
 pub use llmosafe_integration::{EscalationPolicy, EscalationReason, PressureLevel, SafetyDecision};
 pub use llmosafe_kernel::{
-    CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedSynapse,
-    StabilityResult, Synapse, ValidatedSynapse, PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
+    CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedProof,
+    SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse,
+    PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
 };
 pub use llmosafe_memory::WorkingMemory;
 pub use llmosafe_sifter::{

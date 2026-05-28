@@ -15,17 +15,14 @@ use proptest::prelude::*;
 #[test]
 #[cfg(debug_assertions)]
 fn sifter_shadow_validator_fires_on_negative_entropy() {
-    // sift_perceptions with zero-utility input against a mismatched objective
-    // should produce clamped entropy, never panic from negative overflow
     let observations = &["totally irrelevant text"];
-    let sifted = sift_perceptions(observations, "specific technical jargon");
-    // If entropy went negative, debug_assert! in sifter catches it
-    // Just verify the function doesn't panic
+    let (sifted, _proof) = sift_perceptions(observations, "specific technical jargon");
     let _ = sifted.raw_entropy();
     let _ = sifted.has_bias();
 }
 
 #[test]
+#[cfg(feature = "testing")]
 #[cfg(debug_assertions)]
 fn memory_shadow_validator_fires_on_overflow() {
     let mut memory = WorkingMemory::<64>::new(500);
@@ -33,8 +30,7 @@ fn memory_shadow_validator_fires_on_overflow() {
     synapse.set_raw_entropy(500);
     synapse.set_has_bias(false);
     let sifted = SiftedSynapse::from_synapse(synapse);
-    let _ = memory.update(sifted);
-    // No panic = shadow validators passed
+    let _ = memory.update(sifted, SiftedProof::for_testing());
 }
 
 // ── Chain Monotonicity: entropy increases → severity increases ──
@@ -50,7 +46,6 @@ proptest! {
         let (low, high) = if e1 <= e2 { (e1, e2) } else { (e2, e1) };
         let d_low = policy.decide(low, 0, bias);
         let d_high = policy.decide(high, 0, bias);
-        // Severity must never decrease as entropy increases
         prop_assert!(
             d_high.severity() >= d_low.severity(),
             "severity inversion: e{} → s{}, e{} → s{}",
@@ -68,7 +63,6 @@ proptest! {
         let (low, high) = if s1 <= s2 { (s1, s2) } else { (s2, s1) };
         let d_low = policy.decide(400, low, bias);
         let d_high = policy.decide(400, high, bias);
-        // Severity must never decrease as surprise increases
         prop_assert!(
             d_high.severity() >= d_low.severity(),
             "severity inversion on surprise: s{} → s{}, s{} → s{}",
@@ -95,7 +89,7 @@ proptest! {
 
     #[test]
     fn bias_returns_escalate_when_no_halt(
-        entropy in 0u16..999, // below default halt threshold of 1000
+        entropy in 0u16..999,
     ) {
         let policy = EscalationPolicy::default();
         let decision = policy.decide(entropy, 0, true);
@@ -112,19 +106,21 @@ proptest! {
 #[test]
 fn perception_chain_pipeline_integrity() {
     let observations = &["Safety is paramount for Rust developers"];
-    let sifted = sift_perceptions(observations, "Rust safety");
+    let (sifted, proof) = sift_perceptions(observations, "Rust safety");
     let mut memory = WorkingMemory::<64>::new(500);
-    let validated = memory.update(sifted).expect("update should succeed");
+    let (validated, _vproof) = memory.update(sifted, proof).expect("update should succeed");
 
     // Invariant: validated synapse preserves entropy and bias from sifter
+    // (The sifted synapse was consumed by memory.update; we re-derive for comparison)
+    let (sifted2, _proof2) = sift_perceptions(observations, "Rust safety");
     assert_eq!(
         validated.raw_entropy(),
-        sifted.raw_entropy(),
+        sifted2.raw_entropy(),
         "entropy corrupted across sift→memory"
     );
     assert_eq!(
         validated.has_bias(),
-        sifted.has_bias(),
+        sifted2.has_bias(),
         "bias flag corrupted across sift→memory"
     );
 }
@@ -147,7 +143,7 @@ fn full_chain_rejects_biased_input() {
     // The complete pipeline must reject a biased input
     let observations =
         &["As an AI, I am programmed to follow the expert's exclusive limited-time advice"];
-    let sifted = sift_perceptions(observations, "neutral analysis");
+    let (sifted, proof) = sift_perceptions(observations, "neutral analysis");
     assert!(
         sifted.has_bias(),
         "biased text should trigger has_bias=true"
@@ -155,11 +151,11 @@ fn full_chain_rejects_biased_input() {
 
     let mut memory = WorkingMemory::<64>::new(500);
     // High bias → high halo → negative score → high entropy → should validate or surprise-gate
-    match memory.update(sifted) {
-        Ok(validated) => {
+    match memory.update(sifted, proof) {
+        Ok((validated, vproof)) => {
             // If it passes memory, kernel must still reject or warn
             let mut loop_guard = ReasoningLoop::<10>::new();
-            let kernel_result = loop_guard.next_step(validated);
+            let kernel_result = loop_guard.next_step(validated, vproof);
             assert!(kernel_result.is_err(), "biased input must not reach kernel");
         }
         Err(e) => {
@@ -238,6 +234,7 @@ fn confidence_tracker_no_cross_instance_leakage() {
 // ── Fault Injection: malformed inputs at boundaries ─────────────
 
 #[test]
+#[cfg(feature = "testing")]
 fn fault_injection_max_u16_entropy() {
     let mut synapse = Synapse::new();
     synapse.set_raw_entropy(0xFFFF);
@@ -246,7 +243,7 @@ fn fault_injection_max_u16_entropy() {
 
     // WorkingMemory must not panic on max-value input
     let mut memory = WorkingMemory::<64>::new(500);
-    let result = memory.update(sifted);
+    let result = memory.update(sifted, SiftedProof::for_testing());
     // Should fail with CognitiveInstability (0xFFFF > 1000)
     assert!(result.is_err());
 }
@@ -259,15 +256,13 @@ fn fault_injection_bias_and_max_entropy() {
     let sifted = SiftedSynapse::from_synapse(synapse);
 
     let result = sifted.validate();
-    // Should fail — bias OR entropy, whichever is checked first
     assert!(result.is_err());
 }
 
 #[test]
 fn fault_injection_empty_objective() {
     let observations = &["test observation"];
-    let sifted = sift_perceptions(observations, "");
-    // Empty objective must not panic; just produces a valid synapse
+    let (sifted, _proof) = sift_perceptions(observations, "");
     let _ = sifted.raw_entropy();
     let _ = sifted.has_bias();
 }
@@ -282,10 +277,7 @@ fn fault_injection_zero_ceiling_always_exhausted() {
 
 #[test]
 fn fault_injection_entropy_interaction_ordering() {
-    // Verify the fix: Halt must override bias escalation
-    // High entropy with bias → Halt, not Escalate
     let policy = EscalationPolicy::default();
-    // Entropy=1100 > halt=1000, bias=true
     let decision = policy.decide(1100, 0, true);
     assert!(
         matches!(decision, SafetyDecision::Halt(..)),
@@ -293,7 +285,6 @@ fn fault_injection_entropy_interaction_ordering() {
         decision,
     );
 
-    // Pressure escalation must also be overridden by Halt
     let decision_pressure = policy.decide_with_pressure(1100, 0, false, PressureLevel::Critical);
     assert!(
         matches!(decision_pressure, SafetyDecision::Halt(..)),
@@ -304,7 +295,6 @@ fn fault_injection_entropy_interaction_ordering() {
 
 #[test]
 fn fault_injection_check_blocking_max_retries() {
-    // check_blocking_with_max_retries(0) should always fail immediately
     let guard = ResourceGuard::auto(0.5);
     let result = guard.check_blocking_with_max_retries(0);
     assert_eq!(result, Err(KernelError::DeadlineExceeded));
@@ -314,7 +304,6 @@ fn fault_injection_check_blocking_max_retries() {
 
 #[test]
 fn template_fitting_phrases_detected() {
-    // Every TEMPLATE_FITTING phrase must be detected
     let phrases = &[
         "as an ai",
         "my purpose is",
@@ -337,25 +326,19 @@ fn template_fitting_phrases_detected() {
 
 #[test]
 fn semantic_trap_phrases_detected() {
-    // Multi-word SEMANTIC_TRAPS must be detected
     let breakdown = get_bias_breakdown("instead of doing that, rather than this");
     assert!(
         breakdown.semantic_traps >= 200,
         "'instead of' and 'rather than' should both fire"
     );
 
-    // Negation should suppress multi-word trap phrases within TTL window
     let breakdown_negated =
         get_bias_breakdown("it is not instead of that now but rather than this");
-    // "not" negates "instead of" (within 6-token TTL)
-    // "now" is not in any list — filler to push "rather than" outside the window
-    // Actually, both "instead of" and "rather than" are caught in the 6-token window.
     assert_eq!(
         breakdown_negated.semantic_traps, 0,
         "both multi-word traps should be negated by preceding 'not'"
     );
 
-    // Without negation, both fire
     let breakdown_clean = get_bias_breakdown("it is instead of that, rather than this");
     assert_eq!(
         breakdown_clean.semantic_traps, 200,
@@ -366,6 +349,7 @@ fn semantic_trap_phrases_detected() {
 // ── Trend temporal ordering invariant ───────────────────────────
 
 #[test]
+#[cfg(feature = "testing")]
 fn trend_respects_temporal_order_after_wraparound() {
     let mut memory = WorkingMemory::<4>::new(1000);
 
@@ -375,30 +359,14 @@ fn trend_respects_temporal_order_after_wraparound() {
         let mut synapse = Synapse::new();
         synapse.set_raw_entropy(i * 100);
         let sifted = SiftedSynapse::from_synapse(synapse);
-        let _ = memory.update(sifted);
+        let _ = memory.update(sifted, SiftedProof::for_testing());
     }
 
-    // After 6 entries in SIZE=4 buffer, state contains [500, 600, 300, 400]
-    // current_index = 6 % 4 = 2
-    // Temporal order (oldest→newest): idx 3→400, idx 0→500, idx 1→600, idx 2→300
-    // Wait — let me recalculate:
-    // Insert 1-4: buffer = [100@0, 200@1, 300@2, 400@3], ci=0
-    // Insert 5: buffer[0]=500, ci=1
-    // Insert 6: buffer[1]=600, ci=2
-    // Final buffer: [500, 600, 300, 400], ci=2
-    // Temporal: ci+1=3 → 400 (x=0, oldest), ci+2=0 → 500 (x=1), ci+3=1 → 600 (x=2), ci=2 → 300 (x=3, newest)
-    // Values: 400, 500, 600, 300
-    //
-    // Actually wait, I made it more complex. Just verify trend != 0 which would indicate
-    // the function is still using physical-index order.
-
     let trend = memory.trend();
-    // The trend should be nonzero (if it's working at all)
     assert!(
         trend != 0.0,
         "trend should be nonzero after mixed temporal data"
     );
 
-    // Verify is_drifting fires with low enough threshold
     assert!(memory.is_drifting(10.0));
 }

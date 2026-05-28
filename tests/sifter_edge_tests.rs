@@ -64,7 +64,7 @@ mod tests {
     #[test]
     fn test_sift_perceptions_empty_vec() {
         let observations: Vec<&str> = vec![];
-        let result = sift_perceptions(&observations, "test");
+        let (result, _) = sift_perceptions(&observations, "test");
 
         assert!(
             result.validate().is_err(),
@@ -75,7 +75,7 @@ mod tests {
     #[test]
     fn test_sift_perceptions_single_element() {
         let observations = vec!["single observation"];
-        let result = sift_perceptions(&observations, "test");
+        let (result, _) = sift_perceptions(&observations, "test");
 
         assert!(
             result.raw_entropy() < 65535,

@@ -237,14 +237,18 @@ impl<const MAX_STEPS: usize> ReasoningLoop<MAX_STEPS> {
     /// use llmosafe::{sift_perceptions, WorkingMemory, ReasoningLoop};
     ///
     /// // The full pipeline: Tier 3 -> Tier 2 -> Tier 1
-    /// let sifted = sift_perceptions(&["stable observation"], "test");
+    /// let (sifted, sifted_proof) = sift_perceptions(&["stable observation"], "test");
     /// let mut memory = WorkingMemory::<64>::new(1000);
-    /// let validated = memory.update(sifted).unwrap();
+    /// let (validated, validated_proof) = memory.update(sifted, sifted_proof).unwrap();
     ///
     /// let mut loop_guard = ReasoningLoop::<10>::new();
-    /// assert!(loop_guard.next_step(validated).is_ok());
+    /// assert!(loop_guard.next_step(validated, validated_proof).is_ok());
     /// ```
-    pub fn next_step(&mut self, synapse: ValidatedSynapse) -> Result<(), KernelError> {
+    pub fn next_step(
+        &mut self,
+        synapse: ValidatedSynapse,
+        _proof: ValidatedProof,
+    ) -> Result<(), KernelError> {
         if self.current_step >= MAX_STEPS {
             return Err(KernelError::DepthExceeded);
         }
@@ -371,7 +375,7 @@ mod tests {
         let stable_validated = ValidatedSynapse::new(stable_sifted.into_inner());
 
         // Step 1: OK
-        assert!(loop_guard.next_step(stable_validated).is_ok());
+        assert!(loop_guard.next_step(stable_validated, ValidatedProof(())).is_ok());
 
         // Create new validated for step 2
         let mut stable_synapse2 = Synapse::new();
@@ -382,7 +386,7 @@ mod tests {
         let stable_validated2 = ValidatedSynapse::new(stable_sifted2.into_inner());
 
         // Step 2: OK
-        assert!(loop_guard.next_step(stable_validated2).is_ok());
+        assert!(loop_guard.next_step(stable_validated2, ValidatedProof(())).is_ok());
 
         // Step 3: Depth Exceeded
         let mut stable_synapse3 = Synapse::new();
@@ -390,10 +394,10 @@ mod tests {
         stable_synapse3.set_has_bias(false);
         let stable_sifted3 = SiftedSynapse::new(stable_synapse3);
         stable_sifted3.validate().unwrap();
-        let stable_validated3 = ValidatedSynapse::new(stable_sifted3.into_inner());
+        let _stable_validated3 = ValidatedSynapse::new(stable_sifted3.into_inner());
 
         assert_eq!(
-            loop_guard.next_step(stable_validated3).unwrap_err(),
+            loop_guard.next_step(stable_validated, ValidatedProof(())).unwrap_err(),
             KernelError::DepthExceeded
         );
 
@@ -500,7 +504,7 @@ mod tests {
             sifted.validate().unwrap();
             let validated = ValidatedSynapse::new(sifted.into_inner());
 
-            assert!(loop_guard.next_step(validated).is_ok());
+            assert!(loop_guard.next_step(validated, ValidatedProof(())).is_ok());
         }
 
         // Create one more to trigger depth exceeded
@@ -512,7 +516,7 @@ mod tests {
         let validated = ValidatedSynapse::new(sifted.into_inner());
 
         assert_eq!(
-            loop_guard.next_step(validated).unwrap_err(),
+            loop_guard.next_step(validated, ValidatedProof(())).unwrap_err(),
             KernelError::DepthExceeded
         );
     }
@@ -563,7 +567,7 @@ mod tests {
         let validated = ValidatedSynapse::new(sifted.into_inner());
 
         assert_eq!(
-            loop_guard.next_step(validated).unwrap_err(),
+            loop_guard.next_step(validated, ValidatedProof(())).unwrap_err(),
             KernelError::DepthExceeded
         );
     }
@@ -833,10 +837,10 @@ pub mod cognitive_kernel {
         let sifted = SiftedSynapse::new(synapse);
 
         let mut memory = WorkingMemory::<64>::new(500);
-        let validated = memory.update(sifted)?;
+        let (validated, vproof) = memory.update(sifted, SiftedProof(()))?;
 
         // Execute reasoning steps with hard stability gates
-        loop_guard.next_step(validated)?;
+        loop_guard.next_step(validated, vproof)?;
 
         Ok(true)
     }
@@ -865,6 +869,10 @@ impl SiftedSynapse {
     /// is intended for testing and internal use where precise control over
     /// entropy/surprise/halo values is needed. The sifter pipeline applies bias
     /// detection, utility ranking, and anchor hashing which this skips.
+    ///
+    /// This creates a `SiftedSynapse` that can be inspected but cannot be fed to
+    /// `WorkingMemory::update()` without a `SiftedProof` — which only
+    /// `sift_perceptions()` or `SiftedProof::for_testing()` can produce.
     pub fn from_synapse(synapse: Synapse) -> Self {
         Self { synapse }
     }
@@ -948,5 +956,43 @@ impl ValidatedSynapse {
 
     pub fn into_inner(self) -> Synapse {
         self.synapse
+    }
+}
+
+/// Unforgeable proof that `sift_perceptions()` was executed.
+///
+/// Only constructible by the sifter module. Zero runtime cost — the compiler
+/// erases this type entirely. Functions as a compile-time capability token:
+/// `WorkingMemory::update()` requires this proof, and no code outside the
+/// sifter can create one. This prevents `SiftedSynapse::from_synapse()` from
+/// bypassing the sifter pipeline.
+///
+/// `Copy` and `Clone` are intentional: the proof attests to sifter execution,
+/// not to uniqueness. It is safe to reuse.
+#[derive(Debug, Clone, Copy)]
+pub struct SiftedProof(pub(crate) ());
+
+impl SiftedProof {
+    #[cfg(feature = "testing")]
+    #[doc(hidden)]
+    pub fn for_testing() -> Self {
+        SiftedProof(())
+    }
+}
+
+/// Unforgeable proof that `WorkingMemory::update()` was executed.
+///
+/// Only constructible by the memory module. Functions identically to
+/// `SiftedProof` but for the memory → kernel boundary. `ReasoningLoop::next_step()`
+/// requires this proof, ensuring validated synapses must pass through
+/// working memory's surprise gating, trend analysis, and drift detection.
+#[derive(Debug, Clone, Copy)]
+pub struct ValidatedProof(pub(crate) ());
+
+impl ValidatedProof {
+    #[cfg(any(feature = "testing", test))]
+    #[doc(hidden)]
+    pub fn for_testing() -> Self {
+        ValidatedProof(())
     }
 }

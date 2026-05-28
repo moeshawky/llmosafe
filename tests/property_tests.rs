@@ -3,10 +3,11 @@
 //! These tests verify invariants hold across a wide range of inputs.
 use llmosafe::{
     calculate_halo_signal, get_bias_breakdown, sift_perceptions, ConfidenceTracker, DriftDetector,
-    EscalationPolicy, PressureLevel, RepetitionDetector, Synapse, WorkingMemory,
+    EscalationPolicy, PressureLevel, RepetitionDetector, SiftedProof, Synapse, WorkingMemory,
 };
 use proptest::prelude::*;
 
+#[cfg(feature = "testing")]
 proptest! {
     /// Halo signal should be non-negative for any input
     #[test]
@@ -34,7 +35,7 @@ proptest! {
     #[test]
     fn sift_always_produces_synapse(observations in prop::collection::vec(".*", 0..10)) {
         let obs_refs: Vec<&str> = observations.iter().map(|s| s.as_str()).collect();
-        let _sifted = sift_perceptions(&obs_refs, "test");
+        let (_sifted, _proof) = sift_perceptions(&obs_refs, "test");
 
         // Should always produce some entropy value
     }
@@ -48,7 +49,7 @@ proptest! {
         synapse.set_raw_surprise(100);
         synapse.set_has_bias(false);
         let sifted = llmosafe::SiftedSynapse::from_synapse(synapse);
-        prop_assert!(memory.update(sifted).is_ok());
+        prop_assert!(memory.update(sifted, SiftedProof::for_testing()).is_ok());
     }
 
     /// Pressure level from percentage should be monotonic

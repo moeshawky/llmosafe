@@ -1,10 +1,12 @@
 //! G-EDGE tests for kernel module - comprehensive boundary testing
 
 #[cfg(test)]
+#[cfg(feature = "testing")]
 mod tests {
     use llmosafe::{
         CognitiveEntropy, CusumDetector, DynamicStabilityMonitor, KernelError, ReasoningLoop,
-        SiftedSynapse, StabilityResult, Synapse, PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
+        SiftedProof, SiftedSynapse, StabilityResult, Synapse,
+        PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
     };
 
     #[test]
@@ -17,13 +19,13 @@ mod tests {
         let sifted = SiftedSynapse::from_synapse(synapse);
 
         let mut memory = llmosafe::WorkingMemory::<64>::new(1000);
-        let validated = memory.update(sifted).unwrap();
+        let (validated, vproof) = memory.update(sifted, SiftedProof::for_testing()).unwrap();
 
-        assert!(loop_guard.next_step(validated).is_ok());
-        assert!(loop_guard.next_step(validated).is_ok());
-        assert!(loop_guard.next_step(validated).is_ok());
+        assert!(loop_guard.next_step(validated, vproof).is_ok());
+        assert!(loop_guard.next_step(validated, vproof).is_ok());
+        assert!(loop_guard.next_step(validated, vproof).is_ok());
 
-        let result = loop_guard.next_step(validated);
+        let result = loop_guard.next_step(validated, vproof);
         assert_eq!(result, Err(KernelError::DepthExceeded));
     }
 
@@ -34,17 +36,17 @@ mod tests {
         synapse.set_raw_entropy(100);
         let sifted = SiftedSynapse::from_synapse(synapse);
         let mut memory = llmosafe::WorkingMemory::<64>::new(1000);
-        let validated = memory.update(sifted).unwrap();
+        let (validated, vproof) = memory.update(sifted, SiftedProof::for_testing()).unwrap();
 
         for i in 0..5 {
             assert!(
-                loop_guard.next_step(validated).is_ok(),
+                loop_guard.next_step(validated, vproof).is_ok(),
                 "Step {} should succeed",
                 i
             );
         }
         assert_eq!(
-            loop_guard.next_step(validated),
+            loop_guard.next_step(validated, vproof),
             Err(KernelError::DepthExceeded)
         );
     }
@@ -147,11 +149,11 @@ mod tests {
         synapse.set_raw_entropy(100);
         let sifted = SiftedSynapse::from_synapse(synapse);
         let mut memory = llmosafe::WorkingMemory::<64>::new(1000);
-        let validated = memory.update(sifted).unwrap();
+        let (validated, vproof) = memory.update(sifted, SiftedProof::for_testing()).unwrap();
 
-        assert!(loop_guard.next_step(validated).is_ok());
+        assert!(loop_guard.next_step(validated, vproof).is_ok());
         assert_eq!(
-            loop_guard.next_step(validated),
+            loop_guard.next_step(validated, vproof),
             Err(KernelError::DepthExceeded)
         );
     }

@@ -1,9 +1,11 @@
 //! G-SEC security tests - fuzz and injection resilience
 
 #[cfg(test)]
+#[cfg(feature = "testing")]
 mod tests {
     use llmosafe::{
-        calculate_halo_signal, sift_perceptions, SiftedSynapse, Synapse, WorkingMemory,
+        calculate_halo_signal, sift_perceptions, SiftedProof, SiftedSynapse, Synapse,
+        WorkingMemory,
     };
 
     #[test]
@@ -26,7 +28,7 @@ mod tests {
             let mut s = Synapse::new();
             s.set_raw_entropy(i as u16 % 1000);
             let sifted = SiftedSynapse::from_synapse(s);
-            let _ = memory.update(sifted);
+            let _ = memory.update(sifted, SiftedProof::for_testing());
         }
         // If we get here without panic, overflow protection works
     }
@@ -57,7 +59,7 @@ mod tests {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy((i % 100) as u16);
             let sifted = SiftedSynapse::from_synapse(synapse);
-            memory.update(sifted).unwrap();
+            memory.update(sifted, SiftedProof::for_testing()).unwrap();
         }
 
         // State should still be bounded to SIZE
@@ -119,9 +121,11 @@ mod tests {
     #[test]
     fn test_empty_array_handling() {
         let empty: Vec<&str> = vec![];
-        let result = std::panic::catch_unwind(|| sift_perceptions(&empty, "test"));
+        let result = std::panic::catch_unwind(|| {
+            let _ = sift_perceptions(&empty, "test");
+        });
 
-        if let Ok(_synapse) = result {}
+        let _ = result.is_ok();
     }
 
     #[test]
@@ -133,7 +137,7 @@ mod tests {
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(1000);
         let sifted = SiftedSynapse::from_synapse(synapse);
-        assert!(memory.update(sifted).is_ok(), "At threshold should succeed");
+        assert!(memory.update(sifted, SiftedProof::for_testing()).is_ok(), "At threshold should succeed");
 
         // Test above threshold
         let mut synapse = Synapse::new();
@@ -141,7 +145,7 @@ mod tests {
         synapse.set_raw_surprise(1001);
         let sifted = SiftedSynapse::from_synapse(synapse);
         assert!(
-            memory.update(sifted).is_err(),
+            memory.update(sifted, SiftedProof::for_testing()).is_err(),
             "Above threshold should fail"
         );
     }

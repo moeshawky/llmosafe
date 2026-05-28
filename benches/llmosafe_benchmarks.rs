@@ -2,7 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use llmosafe::{
     calculate_halo_signal, get_bias_breakdown, sift_perceptions, AdversarialDetector,
     ConfidenceTracker, CusumDetector, DriftDetector, EscalationPolicy, ReasoningLoop,
-    RepetitionDetector, Synapse, WorkingMemory,
+    RepetitionDetector, SiftedProof, Synapse, WorkingMemory,
 };
 
 fn bench_sifter(c: &mut Criterion) {
@@ -22,7 +22,9 @@ fn bench_sifter(c: &mut Criterion) {
     });
 
     c.bench_function("sift_perceptions", |b| {
-        b.iter(|| sift_perceptions(black_box(&observations), black_box(objective)))
+        b.iter(|| {
+            let _ = sift_perceptions(black_box(&observations), black_box(objective));
+        })
     });
 }
 
@@ -38,9 +40,10 @@ fn bench_kernel(c: &mut Criterion) {
 
     let mut memory = WorkingMemory::<64>::new(1000);
     let sifted = llmosafe::SiftedSynapse::from_synapse(synapse);
-    let validated = memory.update(sifted).unwrap();
+    let (validated, vproof) =
+        memory.update(sifted, SiftedProof::for_testing()).unwrap();
     c.bench_function("reasoning_loop_next", |b| {
-        b.iter(|| loop_guard.next_step(black_box(validated)))
+        b.iter(|| loop_guard.next_step(black_box(validated), black_box(vproof)))
     });
 }
 
@@ -51,7 +54,7 @@ fn bench_memory(c: &mut Criterion) {
     let sifted = llmosafe::SiftedSynapse::from_synapse(synapse);
 
     c.bench_function("memory_update", |b| {
-        b.iter(|| memory.update(black_box(sifted)))
+        b.iter(|| memory.update(black_box(sifted), black_box(SiftedProof::for_testing())))
     });
 }
 

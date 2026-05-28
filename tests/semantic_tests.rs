@@ -1,10 +1,11 @@
 //! G-SEM semantic correctness tests - math verification
 
 #[cfg(test)]
+#[cfg(feature = "testing")]
 mod tests {
     use llmosafe::{
         calculate_halo_signal, get_bias_breakdown, CusumDetector, DynamicStabilityMonitor,
-        SiftedSynapse, StabilityResult, Synapse, WorkingMemory,
+        SiftedProof, SiftedSynapse, StabilityResult, Synapse, WorkingMemory,
     };
 
     #[test]
@@ -87,7 +88,7 @@ mod tests {
         synapse1.set_raw_surprise(500);
         let sifted1 = SiftedSynapse::from_synapse(synapse1);
         assert!(
-            memory.update(sifted1).is_ok(),
+            memory.update(sifted1, SiftedProof::for_testing()).is_ok(),
             "surprise == threshold should pass"
         );
 
@@ -97,7 +98,7 @@ mod tests {
         synapse2.set_raw_surprise(501);
         let sifted2 = SiftedSynapse::from_synapse(synapse2);
         assert!(
-            memory.update(sifted2).is_err(),
+            memory.update(sifted2, SiftedProof::for_testing()).is_err(),
             "surprise > threshold should fail"
         );
     }
@@ -112,7 +113,7 @@ mod tests {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(v);
             let sifted = SiftedSynapse::from_synapse(synapse);
-            memory.update(sifted).unwrap();
+            memory.update(sifted, SiftedProof::for_testing()).unwrap();
         }
 
         let mean = memory.mean_entropy();
@@ -132,11 +133,11 @@ mod tests {
 
         let mut s1 = Synapse::new();
         s1.set_raw_entropy(100);
-        memory.update(SiftedSynapse::from_synapse(s1)).unwrap();
+        memory.update(SiftedSynapse::from_synapse(s1), SiftedProof::for_testing()).unwrap();
 
         let mut s2 = Synapse::new();
         s2.set_raw_entropy(200);
-        memory.update(SiftedSynapse::from_synapse(s2)).unwrap();
+        memory.update(SiftedSynapse::from_synapse(s2), SiftedProof::for_testing()).unwrap();
 
         // Variance of [100, 200] = ((100-150)^2 + (200-150)^2) / 2 = 2500
         let variance = memory.entropy_variance();
@@ -157,7 +158,7 @@ mod tests {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(i * 100);
             let sifted = SiftedSynapse::from_synapse(synapse);
-            memory.update(sifted).unwrap();
+            memory.update(sifted, SiftedProof::for_testing()).unwrap();
         }
 
         // Temporal order is [100, 200, 300, 400] (oldest→newest)

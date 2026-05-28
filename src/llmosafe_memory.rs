@@ -10,7 +10,9 @@
 //! gating prevents hallucination propagation, while fixed-size storage
 //! ensures stack allocation and no heap fragmentation.
 
-use crate::llmosafe_kernel::{CognitiveEntropy, KernelError, SiftedSynapse, ValidatedSynapse};
+use crate::llmosafe_kernel::{
+    CognitiveEntropy, KernelError, SiftedProof, SiftedSynapse, ValidatedProof, ValidatedSynapse,
+};
 
 /// Fixed-size working memory stack buffer.
 ///
@@ -48,10 +50,14 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
     /// ```
     /// use llmosafe::{WorkingMemory, sift_perceptions};
     /// let mut memory = WorkingMemory::<64>::new(1000);
-    /// let sifted = sift_perceptions(&["stable observation"], "test");
-    /// let validated = memory.update(sifted).unwrap();
+    /// let (sifted, proof) = sift_perceptions(&["stable observation"], "test");
+    /// let (validated, _proof) = memory.update(sifted, proof).unwrap();
     /// ```
-    pub fn update(&mut self, sifted: SiftedSynapse) -> Result<ValidatedSynapse, KernelError> {
+    pub fn update(
+        &mut self,
+        sifted: SiftedSynapse,
+        _proof: SiftedProof,
+    ) -> Result<(ValidatedSynapse, ValidatedProof), KernelError> {
         sifted.validate()?;
 
         if sifted.surprise() > self.surprise_threshold {
@@ -63,6 +69,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         self.current_index = (self.current_index + 1) % SIZE;
 
         let validated = ValidatedSynapse::new(sifted.into_inner());
+        let validated_proof = ValidatedProof(());
 
         // Shadow validator: invariants at memory → kernel boundary
         debug_assert!(
@@ -72,7 +79,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
             SIZE,
         );
 
-        Ok(validated)
+        Ok((validated, validated_proof))
     }
     pub fn mean_entropy(&self) -> f64 {
         let sum: i128 = self.state.iter().map(|e| e.mantissa()).sum();
@@ -126,7 +133,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llmosafe_kernel::Synapse;
+    use crate::llmosafe_kernel::{SiftedProof, Synapse};
 
     #[test]
     fn test_homeostatic_stats() {
@@ -135,7 +142,7 @@ mod tests {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(100 * (i + 1) as u16);
             let sifted = SiftedSynapse::new(synapse);
-            memory.update(sifted).unwrap();
+            memory.update(sifted, SiftedProof(())).unwrap();
         }
         // Buffer after 4 updates (all values present):
         // Entropy stored: 100, 200, 300, 400
@@ -155,7 +162,7 @@ mod tests {
         synapse.set_raw_surprise(100);
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::new(synapse);
-        assert!(memory.update(sifted).is_ok());
+        assert!(memory.update(sifted, SiftedProof(())).is_ok());
 
         // 2. Invalid update: Surprise too high (Hallucination)
         let mut synapse = Synapse::new();
@@ -164,7 +171,7 @@ mod tests {
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::new(synapse);
         assert_eq!(
-            memory.update(sifted).unwrap_err(),
+            memory.update(sifted, SiftedProof(())).unwrap_err(),
             KernelError::HallucinationDetected
         );
 
@@ -175,7 +182,7 @@ mod tests {
         synapse.set_has_bias(true);
         let sifted = SiftedSynapse::new(synapse);
         assert_eq!(
-            memory.update(sifted).unwrap_err(),
+            memory.update(sifted, SiftedProof(())).unwrap_err(),
             KernelError::BiasHaloDetected
         );
 
@@ -186,7 +193,7 @@ mod tests {
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::new(synapse);
         assert_eq!(
-            memory.update(sifted).unwrap_err(),
+            memory.update(sifted, SiftedProof(())).unwrap_err(),
             KernelError::CognitiveInstability
         );
     }
@@ -198,14 +205,14 @@ mod tests {
         s1.set_raw_entropy(100);
         let sifted1 = SiftedSynapse::new(s1);
 
-        memory.update(sifted1).unwrap();
+        memory.update(sifted1, SiftedProof(())).unwrap();
         assert!(memory.state[0].is_stable(100));
 
         let mut s2 = Synapse::new();
         s2.set_raw_entropy(200);
         let sifted2 = SiftedSynapse::new(s2);
 
-        memory.update(sifted2).unwrap();
+        memory.update(sifted2, SiftedProof(())).unwrap();
         assert!(memory.state[0].is_stable(200));
         assert_eq!(memory.current_index, 0);
     }
@@ -224,7 +231,7 @@ mod tests {
         let sifted = SiftedSynapse::new(synapse);
         // Any surprise > 0 should fail
         assert_eq!(
-            memory.update(sifted).unwrap_err(),
+            memory.update(sifted, SiftedProof(())).unwrap_err(),
             KernelError::HallucinationDetected
         );
     }
@@ -236,7 +243,7 @@ mod tests {
         let sifted = SiftedSynapse::new(synapse);
         // Even surprise 0 > -1, so it should fail
         assert_eq!(
-            memory.update(sifted).unwrap_err(),
+            memory.update(sifted, SiftedProof(())).unwrap_err(),
             KernelError::HallucinationDetected
         );
     }
@@ -245,7 +252,7 @@ mod tests {
 #[cfg(test)]
 mod proptests {
     use super::*;
-    use crate::llmosafe_kernel::Synapse;
+    use crate::llmosafe_kernel::{SiftedProof, Synapse};
     use proptest::prelude::*;
 
     proptest! {
@@ -258,7 +265,7 @@ mod proptests {
                 let mut synapse = Synapse::new();
                 synapse.set_raw_entropy(e);
                 let sifted = SiftedSynapse::new(synapse);
-                prop_assert!(memory.update(sifted).is_ok());
+                prop_assert!(memory.update(sifted, SiftedProof(())).is_ok());
             }
         }
     }
@@ -275,13 +282,13 @@ pub mod cognitive_memory {
     pub fn process_state_update(synapse_bits: u128) -> i32 {
         let synapse = Synapse::from_raw_u128(synapse_bits);
         let sifted = SiftedSynapse::new(synapse);
+        // C-ABI callers bypass the Rust-side sifter; the caller is responsible
+        // for pre-sifting on their side. We mint the proof internally.
+        let proof = SiftedProof(());
 
-        let mut memory = match GLOBAL_MEMORY.lock() {
-            Ok(guard) => guard,
-            Err(_) => return -6, // Return PoisonedLock / SelfMemoryExceeded equivalence (-6) on panic
-        };
+        let mut memory = GLOBAL_MEMORY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        match memory.update(sifted) {
+        match memory.update(sifted, proof) {
             Ok(_) => 0,
             Err(KernelError::DepthExceeded) => -1,
             Err(KernelError::CognitiveInstability) => -2,

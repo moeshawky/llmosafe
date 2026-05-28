@@ -1,8 +1,9 @@
 //! G-EDGE tests for memory module - comprehensive boundary testing
 
 #[cfg(test)]
+#[cfg(feature = "testing")]
 mod tests {
-    use llmosafe::{KernelError, SiftedSynapse, Synapse, WorkingMemory};
+    use llmosafe::{KernelError, SiftedProof, SiftedSynapse, Synapse, WorkingMemory};
 
     #[test]
     fn test_memory_size_one() {
@@ -12,13 +13,13 @@ mod tests {
         s1.set_raw_entropy(100);
         s1.set_raw_surprise(50);
         let sifted1 = SiftedSynapse::from_synapse(s1);
-        memory.update(sifted1).unwrap();
+        memory.update(sifted1, SiftedProof::for_testing()).unwrap();
 
         let mut s2 = Synapse::new();
         s2.set_raw_entropy(200);
         s2.set_raw_surprise(50);
         let sifted2 = SiftedSynapse::from_synapse(s2);
-        memory.update(sifted2).unwrap();
+        memory.update(sifted2, SiftedProof::for_testing()).unwrap();
 
         assert_eq!(memory.mean_entropy(), 200.0);
     }
@@ -34,7 +35,7 @@ mod tests {
         let sifted = SiftedSynapse::from_synapse(synapse);
 
         assert!(
-            memory.update(sifted).is_ok(),
+            memory.update(sifted, SiftedProof::for_testing()).is_ok(),
             "Surprise == threshold should succeed"
         );
     }
@@ -49,9 +50,11 @@ mod tests {
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::from_synapse(synapse);
 
-        assert_eq!(
-            memory.update(sifted),
-            Err(KernelError::HallucinationDetected),
+        assert!(
+            matches!(
+                memory.update(sifted, SiftedProof::for_testing()),
+                Err(KernelError::HallucinationDetected)
+            ),
             "Surprise > threshold should fail"
         );
     }
@@ -67,7 +70,7 @@ mod tests {
         let sifted = SiftedSynapse::from_synapse(synapse);
 
         assert!(
-            memory.update(sifted).is_ok(),
+            memory.update(sifted, SiftedProof::for_testing()).is_ok(),
             "Entropy == STABILITY_THRESHOLD should succeed"
         );
     }
@@ -82,9 +85,11 @@ mod tests {
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::from_synapse(synapse);
 
-        assert_eq!(
-            memory.update(sifted),
-            Err(KernelError::CognitiveInstability),
+        assert!(
+            matches!(
+                memory.update(sifted, SiftedProof::for_testing()),
+                Err(KernelError::CognitiveInstability)
+            ),
             "Entropy > STABILITY_THRESHOLD should fail"
         );
     }
@@ -99,9 +104,11 @@ mod tests {
         synapse.set_has_bias(true);
         let sifted = SiftedSynapse::from_synapse(synapse);
 
-        assert_eq!(
-            memory.update(sifted),
-            Err(KernelError::BiasHaloDetected),
+        assert!(
+            matches!(
+                memory.update(sifted, SiftedProof::for_testing()),
+                Err(KernelError::BiasHaloDetected)
+            ),
             "has_bias=true should fail"
         );
     }
@@ -121,7 +128,7 @@ mod tests {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(100);
             let sifted = SiftedSynapse::from_synapse(synapse);
-            memory.update(sifted).unwrap();
+            memory.update(sifted, SiftedProof::for_testing()).unwrap();
         }
 
         let trend = memory.trend();
@@ -140,7 +147,7 @@ mod tests {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(100 * (i + 1) as u16);
             let sifted = SiftedSynapse::from_synapse(synapse);
-            memory.update(sifted).unwrap();
+            memory.update(sifted, SiftedProof::for_testing()).unwrap();
         }
 
         assert!(
@@ -155,11 +162,11 @@ mod tests {
 
         let mut s1 = Synapse::new();
         s1.set_raw_entropy(100);
-        memory.update(SiftedSynapse::from_synapse(s1)).unwrap();
+        memory.update(SiftedSynapse::from_synapse(s1), SiftedProof::for_testing()).unwrap();
 
         let mut s2 = Synapse::new();
         s2.set_raw_entropy(200);
-        memory.update(SiftedSynapse::from_synapse(s2)).unwrap();
+        memory.update(SiftedSynapse::from_synapse(s2), SiftedProof::for_testing()).unwrap();
 
         let variance = memory.entropy_variance();
         assert!(
@@ -176,7 +183,7 @@ mod tests {
         for i in 1..=3 {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(i * 100);
-            memory.update(SiftedSynapse::from_synapse(synapse)).unwrap();
+            memory.update(SiftedSynapse::from_synapse(synapse), SiftedProof::for_testing()).unwrap();
         }
 
         assert!(

@@ -2,13 +2,13 @@
 //!
 //! These tests verify that all tiers work together correctly.
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "testing"))]
 mod std_tests {
     use llmosafe::{
         calculate_halo_signal, get_bias_breakdown, sift_perceptions, AdversarialDetector,
         ConfidenceTracker, CusumDetector, DriftDetector, EscalationPolicy, PressureLevel,
         ReasoningLoop, RepetitionDetector, ResourceGuard, SafetyContext, SafetyDecision,
-        WorkingMemory,
+        SiftedProof, WorkingMemory,
     };
 
     #[test]
@@ -20,15 +20,15 @@ mod std_tests {
             "All checks passed",
             "No anomalies detected",
         ];
-        let sifted = sift_perceptions(&observations, objective);
+        let (sifted, sproof) = sift_perceptions(&observations, objective);
 
         // Tier 2: Working memory validation
         let mut memory = WorkingMemory::<64>::new(1000);
-        let validated = memory.update(sifted).expect("validation should succeed");
+        let (validated, vproof) = memory.update(sifted, sproof).expect("validation should succeed");
 
         // Tier 1: Reasoning loop
         let mut loop_guard = ReasoningLoop::<10>::new();
-        let result = loop_guard.next_step(validated);
+        let result = loop_guard.next_step(validated, vproof);
         assert!(result.is_ok());
 
         // Integration: Decision
@@ -47,7 +47,7 @@ mod std_tests {
     #[test]
     fn biased_input_rejected() {
         let observations = vec!["The expert says this is the best official solution"];
-        let sifted = sift_perceptions(&observations, "analysis");
+        let (sifted, _) = sift_perceptions(&observations, "analysis");
 
         // Should have bias detected
         assert!(sifted.has_bias());
@@ -166,6 +166,7 @@ mod std_tests {
     }
 
     #[test]
+    #[cfg(feature = "testing")]
     fn working_memory_stats_integration() {
         let mut memory = WorkingMemory::<4>::new(1000);
         // Add varying entropy values
@@ -173,7 +174,7 @@ mod std_tests {
             let mut synapse = llmosafe::Synapse::new();
             synapse.set_raw_entropy(100 * i as u16);
             let sifted = llmosafe::SiftedSynapse::from_synapse(synapse);
-            memory.update(sifted).unwrap();
+            let (_, _) = memory.update(sifted, SiftedProof::for_testing()).unwrap();
         }
         // Check statistics
         let mean = memory.mean_entropy();
