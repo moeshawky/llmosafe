@@ -107,7 +107,7 @@ impl RepetitionDetector {
     pub fn hash_str(s: &str) -> u32 {
         let mut hash: u32 = 2_166_136_261;
         for byte in s.bytes() {
-            hash ^= byte as u32;
+            hash ^= byte.to_ascii_lowercase() as u32;
             hash = hash.wrapping_mul(16_777_619);
         }
         hash
@@ -337,7 +337,7 @@ impl AdversarialDetector {
 
     /// Add a known adversarial pattern.
     pub fn add_pattern(&mut self, pattern: &str) {
-        let hash = RepetitionDetector::hash_str(&pattern.to_ascii_lowercase());
+        let hash = RepetitionDetector::hash_str(pattern);
         self.patterns.push(hash);
     }
 
@@ -353,7 +353,7 @@ impl AdversarialDetector {
         } else {
             input
         };
-        let input_hash = RepetitionDetector::hash_str(&bounded.to_ascii_lowercase());
+        let input_hash = RepetitionDetector::hash_str(bounded);
         self.patterns.iter().any(|&p| p == input_hash)
     }
 

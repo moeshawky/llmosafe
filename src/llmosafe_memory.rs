@@ -105,7 +105,9 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
     }
 
     pub fn is_drifting(&self, threshold: f64) -> bool {
-        self.trend().abs() > threshold
+        let trend = self.trend();
+        let abs_trend = if trend < 0.0 { -trend } else { trend };
+        abs_trend > threshold
     }
 }
 
