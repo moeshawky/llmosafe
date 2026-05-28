@@ -511,6 +511,7 @@ impl DetectionResult {
         self.is_stuck
             || self.is_drifting
             || self.is_low_confidence
+            || self.is_decaying
             || !self.adversarial_patterns.is_empty()
     }
 

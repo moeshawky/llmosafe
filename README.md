@@ -58,7 +58,7 @@ let decision = policy.decide(
 );
 
 match decision {
-    SafetyDecision::Halt(err) => println!("✗ Stopping: {}", err),
+    SafetyDecision::Halt(err, _) => println!("✗ Stopping: {}", err),
     SafetyDecision::Escalate { reason, .. } => println!("↑ Escalating: {:?}", reason),
     SafetyDecision::Warn(msg) => println!("⚠ Warning: {}", msg),
     SafetyDecision::Proceed => println!("✓ Safe to continue"),
@@ -159,7 +159,8 @@ loop_guard.next_step(validated)?;
 
 ```rust
 // Before executing a trade
-let entropy = system_entropy();
+let guard = ResourceGuard::auto(0.5);
+let entropy = guard.raw_entropy();
 if entropy > 800 {
     return Err("Market state too chaotic, halting trades");
 }

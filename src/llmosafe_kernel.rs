@@ -249,6 +249,10 @@ impl<const MAX_STEPS: usize> ReasoningLoop<MAX_STEPS> {
             return Err(KernelError::DepthExceeded);
         }
 
+        if synapse.has_bias() {
+            return Err(KernelError::BiasHaloDetected);
+        }
+
         // Concentric Container Check: Is the cognitive flow still within stable bounds?
         // (Inspired by Robust Model Predictive Control)
         if !synapse.entropy().is_stable(STABILITY_THRESHOLD) {

@@ -84,6 +84,11 @@ impl ResourceGuard {
     /// Returns a weighted metabolic entropy score (0-1000).
     /// Weighted by: RSS (50%), IO Wait (25%), Load Average (25%).
     /// IO Wait uses delta-based measurement on Linux for responsiveness.
+    ///
+    /// Returns a value in [0, 1000]. The Halt threshold in EscalationPolicy
+    /// uses strict greater-than (> self.halt_entropy), so resource entropy at
+    /// the cap (1000) triggers Escalate, not Halt. Use Halt for entropy values
+    /// > 1000 from composite/synthetic sources outside the resource body.
     pub fn raw_entropy(&self) -> u16 {
         let current_rss = Self::current_rss_bytes();
         let rss_ratio = if self.memory_ceiling_bytes > 0 {
@@ -257,10 +262,27 @@ impl ResourceGuard {
         let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
 
         if ret == 0 {
-            #[cfg(target_os = "linux")]
-            { (usage.ru_maxrss as usize).saturating_mul(1024) }
-            #[cfg(not(target_os = "linux"))]
-            { usage.ru_maxrss as usize }
+            // ru_maxrss is in KB on Linux and BSDs, bytes on macOS/iOS.
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "freebsd",
+                target_os = "openbsd",
+                target_os = "netbsd",
+                target_os = "dragonfly",
+            ))]
+            {
+                (usage.ru_maxrss as usize).saturating_mul(1024)
+            }
+            #[cfg(not(any(
+                target_os = "linux",
+                target_os = "freebsd",
+                target_os = "openbsd",
+                target_os = "netbsd",
+                target_os = "dragonfly",
+            )))]
+            {
+                usage.ru_maxrss as usize
+            }
         } else {
             Self::read_rss_from_proc()
         }

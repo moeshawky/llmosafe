@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-05-28
+
+### Added
+
+- **`SiftedSynapse::from_synapse()`** — public constructor replacing `new()` for external use. `new()` is now `pub(crate)` to prevent bypassing the sifter pipeline ([GH-1a2dcab](https://github.com/moeshawky/llmosafe/commit/1a2dcab)).
+- **`ResourceGuard::check_with_entropy()`** — reuses a previously-measured entropy value to prevent TOCTOU in `check_blocking()`.
+- **`ResourceGuard::check_blocking_with_max_retries()`** — configurable max retries for blocking resource checks. `check_blocking()` now defaults to 3 retries and returns `DeadlineExceeded` instead of spinning indefinitely.
+- **`EscalationPolicy::decide_from_detection()`** — maps `DetectionResult` fields (stuck, drifting, decaying, adversarial) to `SafetyDecision` severity levels.
+- **`From<StabilityResult> for CognitiveStability`** conversion.
+- **Multi-word phrase matching** — `SEMANTIC_TRAPS` and `TEMPLATE_FITTING` now detect phrases ("as an ai", "instead of", "rather than") via Phase 2 token-window matching. Single-word detection unchanged for no_std.
+- **New `EscalationReason` variants**: `StuckAgent`, `GoalDriftDetected`, `ConfidenceDecaying`, `AdversarialDetected`.
+- **Shadow validators** — `debug_assert!` checks at sift→memory boundary enforcing 8 CMIT invariants.
+- **`WorkingMemory::SIZE > 0`** compile-time assertion.
+- **Cross-Module Invariant Tracing (CMIT)** test suite: 21 property-based and fault-injection tests (`tests/cross_module_invariants.rs`).
+- **`invariants.toml`** — 18 documented cross-module invariants across the perception, resource, decision, and typestate chains.
+- **`AdversarialDetector::hash_lowercase()`** — FNV-1a hash with ASCII lowercase folding (no allocation), removing the dependency on `RepetitionDetector::hash_str`.
+
+### Fixed
+
+- **Decision priority inversion**: `decide()` and `decide_with_pressure()` now check Halt conditions BEFORE Escalate. Previously, high entropy with bias could return Escalate instead of Halt ([GH-1a1b05c](https://github.com/moeshawky/llmosafe/commit/1a1b05c)).
+- **Stability threshold off-by-one**: `Synapse::stability()` now uses `>` (not `>=`) for `STABILITY_THRESHOLD=1000`. Entropy=1000 is Stable, 1001+ is Unstable — consistent with `invariants.toml` and `CognitiveEntropy::is_stable()`.
+- **Trend temporal ordering**: `WorkingMemory::trend()` now walks the ring buffer in temporal order (oldest→newest) instead of physical index, producing correct regression slopes after wraparound.
+- **DynamicStabilityMonitor divide-by-zero**: `get_thresholds()` returns `(u32::MAX, 0, 0)` when `!seen`, preventing overflow on first update.
+- **Trend denominator zero guard**: Returns `0.0` instead of NaN when all buffer values are identical.
+- **Negation TTL window**: Extended from 3→6 tokens. `"not a very well known expert"` now correctly suppresses authority bias on "expert".
+- **TOCTOU in `check_blocking()`**: Now calls `check_with_entropy()` instead of `check()`, reusing the entropy value that was approved by the policy decision.
+- **`check_blocking` bounded retry**: No longer spins indefinitely under sustained pressure. Default 3 retries, then returns `DeadlineExceeded`.
+- **EMOTIONAL_APPEAL keywords pruned**: Removed high-frequency words (`love`, `joy`, `happy`, `sad`, `angry`, `exciting`, `amazing`, `beautiful`, `emotional`, `appealing`) that triggered on everyday speech. Retained fearmongering/hyperbolic terms.
+- **`"while"` removed from `SEMANTIC_TRAPS`**: False positive on everyday speech.
+- **FFI `llmosafe_check_resources` and `llmosafe_get_stability`** now handle `DeadlineExceeded` error code (-7).
+
+### Changed
+
+- **`SiftedSynapse::new()` now `pub(crate)`** — use `SiftedSynapse::from_synapse()` for external construction. This enforces the sifter pipeline boundary: production code must route through `sift_perceptions()`. Direct construction via `from_synapse()` is intended for testing and crate-internal use.
+- **`ResourceGuard::auto()` now fail-closed on non-Linux**: When `/proc/meminfo` is unreadable (macOS, Windows, containers), ceiling defaults to `0` (always `ResourceExhaustion`) instead of `usize::MAX/2` (unlimited). This is a safety improvement — callers should explicitly set a ceiling.
+- **`EscalationPolicy::decide()` reordered** for correct severity: Halt → Escalate → Warn (previously checked Bias Escalate before entropy Halt).
+- **`EscalationPolicy::decide()` threshold semantics**: Halt uses `>` (1001+), Escalate/Warn use `>=` (800+/400+). Consistent with stability threshold semantics.
+- All 41 test sites updated from `SiftedSynapse::new()` to `SiftedSynapse::from_synapse()`.
+
+### Security
+
+- **`check_blocking` bounded retry**: Prevents infinite spin under sustained resource pressure (DoS hardening).
+- **`ResourceGuard::auto()` fail-closed**: Non-Linux platforms no longer default to unlimited resources.
+
+### Verified
+
+- 237 tests (97 unit + 140 integration/edge/CMIT) — all pass
+- `cargo check` + `cargo check --no-default-features` — clean (std and no_std)
+- `cargo clippy -- -D warnings` — clean
+- 17 audit findings addressed (see `1a1b05c`)
+
+---
+
 ## [0.5.5] - 2026-05-13
 
 ### Added

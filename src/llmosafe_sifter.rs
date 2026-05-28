@@ -503,6 +503,10 @@ pub fn sift_perceptions(observations: &[&str], objective: &str) -> SiftedSynapse
         best_score,
     );
 
+    // Content-addressable hash of the best-matching observation.
+    // Reserved for future integrity verification (not currently consumed
+    // by WorkingMemory or ReasoningLoop). C-ABI synapses (from_raw_u64)
+    // zero the upper 64 bits, producing hash=0 for all C callers.
     let anchor_hash = adler32::adler32(best_obs.as_bytes());
     synapse.set_anchor_hash(anchor_hash & 0x7FFFFFFF);
 
@@ -717,7 +721,10 @@ mod tests {
     fn test_phase2_negation_multi_word() {
         // "not as an ai" — negation should prevent template_fitting match
         let breakdown = get_bias_breakdown("not as an ai");
-        assert_eq!(breakdown.template_fitting, 0, "template_fitting should be 0 when negated");
+        assert_eq!(
+            breakdown.template_fitting, 0,
+            "template_fitting should be 0 when negated"
+        );
 
         // "not as an ai" — also check semantic_traps (no multi-word trap match)
         let breakdown2 = get_bias_breakdown("not as an ai");
@@ -728,6 +735,9 @@ mod tests {
     fn test_while_not_a_semantic_trap() {
         // "while" was removed from SEMANTIC_TRAPS — should not trigger
         let breakdown = get_bias_breakdown("while processing data");
-        assert_eq!(breakdown.semantic_traps, 0, "while should not trigger semantic_traps");
+        assert_eq!(
+            breakdown.semantic_traps, 0,
+            "while should not trigger semantic_traps"
+        );
     }
 }

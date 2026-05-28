@@ -330,6 +330,12 @@ impl EscalationPolicy {
     /// Maps each detection signal to the appropriate escalation level based
     /// on severity: adversarial patterns and high risk → Halt,
     /// stuck/drifting → Escalate, decaying confidence → Warn.
+    ///
+    /// Checks are ordered by severity with first-match-wins semantics:
+    /// when multiple detection flags are active simultaneously, the
+    /// highest-severity result is returned and lower-severity signals
+    /// are not aggregated into the decision. Inspect `DetectionResult`
+    /// directly to see the full set of active alarms.
     #[cfg(feature = "std")]
     pub fn decide_from_detection(
         &self,
