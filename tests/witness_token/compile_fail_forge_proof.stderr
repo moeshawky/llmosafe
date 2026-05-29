@@ -1,16 +1,16 @@
 error[E0603]: tuple struct constructor `SiftedProof` is private
  --> tests/witness_token/compile_fail_forge_proof.rs:3:28
   |
-  3 |     let forged = llmosafe::SiftedProof(());
-    |                            ^^^^^^^^^^^ private tuple struct constructor
-    |
-   ::: src/llmosafe_kernel.rs
-    |
-    | pub struct SiftedProof(pub(crate) ());
-    |                        ------------- a constructor is private if any of the fields is private
-    |
+3 |     let forged = llmosafe::SiftedProof(());
+  |                            ^^^^^^^^^^^ private tuple struct constructor
+  |
+ ::: src/llmosafe_kernel.rs
+  |
+  | pub struct SiftedProof(pub(crate) ());
+  |                        ------------- a constructor is private if any of the fields is private
+  |
 note: the tuple struct constructor `SiftedProof` is defined here
-   --> src/lib.rs
-    |
- 47 | ...KernelError, ReasoningLoop, SiftedProof,
-    |                                ^^^^^^^^^^^
+ --> src/lib.rs
+  |
+  |     CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedProof,
+  |                                                                            ^^^^^^^^^^^
