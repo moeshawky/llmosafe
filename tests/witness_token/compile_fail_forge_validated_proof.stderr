@@ -1,27 +1,27 @@
 error[E0603]: tuple struct constructor `ValidatedProof` is private
  --> tests/witness_token/compile_fail_forge_validated_proof.rs:3:28
   |
-3 |     let forged = llmosafe::ValidatedProof(());
-  |                            ^^^^^^^^^^^^^^ private tuple struct constructor
-  |
- ::: src/llmosafe_kernel.rs
-  |
-  | pub struct ValidatedProof(pub(crate) ());
-  |                           ------------- a constructor is private if any of the fields is private
-  |
+  3 |     let forged = llmosafe::ValidatedProof(());
+    |                            ^^^^^^^^^^^^^^ private tuple struct constructor
+    |
+   ::: src/llmosafe_kernel.rs
+    |
+    | pub struct ValidatedProof(pub(crate) ());
+    |                           ------------- a constructor is private if any of the fields is private
+    |
 note: the tuple struct constructor `ValidatedProof` is defined here
- --> src/lib.rs
-  |
-  |     SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse,
-  |                                              ^^^^^^^^^^^^^^
+   --> src/lib.rs
+    |
+ 48 |     SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedS...
+    |                                              ^^^^^^^^^^^^^^
 
 error[E0624]: associated function `new` is private
  --> tests/witness_token/compile_fail_forge_validated_proof.rs:5:49
   |
-5 |     let validated = llmosafe::ValidatedSynapse::new(synapse);  // also pub(crate)
-  |                                                 ^^^ private associated function
-  |
- ::: src/llmosafe_kernel.rs
-  |
-  |     pub(crate) fn new(synapse: Synapse) -> Self {
-  |     ------------------------------------------- private associated function defined here
+  5 | ...ValidatedSynapse::new(synapse);  // also pub(crate)
+    |                      ^^^ private associated function
+    |
+   ::: src/llmosafe_kernel.rs
+    |
+    |     pub(crate) fn new(synapse: Synapse) -> Self {
+    |     ------------------------------------------- private associated function defined here

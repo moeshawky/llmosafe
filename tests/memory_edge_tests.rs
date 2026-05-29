@@ -162,11 +162,15 @@ mod tests {
 
         let mut s1 = Synapse::new();
         s1.set_raw_entropy(100);
-        memory.update(SiftedSynapse::from_synapse(s1), SiftedProof::for_testing()).unwrap();
+        memory
+            .update(SiftedSynapse::from_synapse(s1), SiftedProof::for_testing())
+            .unwrap();
 
         let mut s2 = Synapse::new();
         s2.set_raw_entropy(200);
-        memory.update(SiftedSynapse::from_synapse(s2), SiftedProof::for_testing()).unwrap();
+        memory
+            .update(SiftedSynapse::from_synapse(s2), SiftedProof::for_testing())
+            .unwrap();
 
         let variance = memory.entropy_variance();
         assert!(
@@ -183,7 +187,12 @@ mod tests {
         for i in 1..=3 {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(i * 100);
-            memory.update(SiftedSynapse::from_synapse(synapse), SiftedProof::for_testing()).unwrap();
+            memory
+                .update(
+                    SiftedSynapse::from_synapse(synapse),
+                    SiftedProof::for_testing(),
+                )
+                .unwrap();
         }
 
         assert!(
