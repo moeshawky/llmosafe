@@ -24,7 +24,9 @@ mod std_tests {
 
         // Tier 2: Working memory validation
         let mut memory = WorkingMemory::<64>::new(1000);
-        let (validated, vproof) = memory.update(sifted, sproof).expect("validation should succeed");
+        let (validated, vproof) = memory
+            .update(sifted, sproof)
+            .expect("validation should succeed");
 
         // Tier 1: Reasoning loop
         let mut loop_guard = ReasoningLoop::<10>::new();

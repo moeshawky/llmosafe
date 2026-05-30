@@ -225,11 +225,11 @@ impl ResourceGuard {
                 }
                 SafetyDecision::Escalate { cooldown_ms, .. } => {
                     retries += 1;
-                    thread::sleep(Duration::from_millis(cooldown_ms as u64));
+                    thread::sleep(Duration::from_millis(cooldown_ms.max(1) as u64));
                 }
                 SafetyDecision::Halt(_, cooldown_ms) => {
                     retries += 1;
-                    thread::sleep(Duration::from_millis(cooldown_ms as u64));
+                    thread::sleep(Duration::from_millis(cooldown_ms.max(1) as u64));
                 }
                 SafetyDecision::Exit(err) => {
                     return Err(err);
@@ -258,10 +258,10 @@ impl ResourceGuard {
                     return self.check_with_entropy(entropy);
                 }
                 SafetyDecision::Escalate { cooldown_ms, .. } => {
-                    thread::sleep(Duration::from_millis(cooldown_ms as u64));
+                    thread::sleep(Duration::from_millis(cooldown_ms.max(1) as u64));
                 }
                 SafetyDecision::Halt(_, cooldown_ms) => {
-                    thread::sleep(Duration::from_millis(cooldown_ms as u64));
+                    thread::sleep(Duration::from_millis(cooldown_ms.max(1) as u64));
                 }
                 SafetyDecision::Exit(err) => {
                     return Err(err);
