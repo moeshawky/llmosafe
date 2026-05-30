@@ -1,0 +1,30 @@
+[advisories]
+version = 2
+db-path = "$CARGO_HOME/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = [
+    "RUSTSEC-2024-0375",  # atty unmaintained, transitive via cbindgen (build-dep only)
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.8
+exceptions = [
+    { name = "cbindgen", allow = ["MPL-2.0"] },
+]
+
+[bans]
+multiple-versions = "warn"
+deny = []
+skip = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

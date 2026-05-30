@@ -273,6 +273,9 @@ impl ResourceGuard {
     /// Returns current RSS memory usage in bytes.
     #[cfg(unix)]
     pub fn current_rss_bytes() -> usize {
+        // SAFETY: libc::rusage is a repr(C) struct suitable for zero-initialization.
+        // getrusage fills a correctly-sized buffer; all fields are valid after a
+        // successful call (ret == 0) and the struct is never read on failure paths.
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
         let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
 
@@ -310,6 +313,10 @@ impl ResourceGuard {
             GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
         };
 
+        // SAFETY: PROCESS_MEMORY_COUNTERS is a repr(C) struct suitable for
+        // zero-initialization. GetCurrentProcess returns a valid pseudo-handle.
+        // GetProcessMemoryInfo fills the buffer with the correct size; counters
+        // is only read from on success (ret != 0).
         let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
         let handle: HANDLE = unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() };
         let ret = unsafe {
@@ -336,6 +343,8 @@ impl ResourceGuard {
     /// or max pressure) when None is returned.
     #[cfg(target_os = "linux")]
     fn try_current_rss_bytes() -> Option<usize> {
+        // SAFETY: libc::rusage is a repr(C) struct suitable for zero-initialization.
+        // getrusage fills a correctly-sized buffer; ru_maxrss is only read on success.
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
         let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
         if ret == 0 {
@@ -348,6 +357,7 @@ impl ResourceGuard {
     #[cfg(unix)]
     #[cfg(not(target_os = "linux"))]
     fn try_current_rss_bytes() -> Option<usize> {
+        // SAFETY: Same invariants as the Linux variant above.
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
         let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
         if ret == 0 {
@@ -363,6 +373,7 @@ impl ResourceGuard {
         use windows_sys::Win32::System::ProcessStatus::{
             GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
         };
+        // SAFETY: Same invariants as current_rss_bytes Windows variant above.
         let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
         let handle: HANDLE = unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() };
         let ret = unsafe {

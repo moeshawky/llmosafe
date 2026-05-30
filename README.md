@@ -71,9 +71,33 @@ match decision {
 
 ### Installation
 
+**Cargo (any platform):**
+
 ```toml
 [dependencies]
 llmosafe = "0.6.2"
+```
+
+**Arch Linux (AUR):**
+
+```bash
+# Release version (stable)
+paru -S llmosafe
+# or
+yay -S llmosafe
+
+# Git HEAD (development)
+paru -S llmosafe-git
+```
+
+The AUR package installs the C shared library (`libllmosafe.so`), header (`llmosafe.h`), and `pkg-config` file for C/FFI consumers.
+
+**Building from source (Arch):**
+
+```bash
+git clone https://github.com/moeshawky/llmosafe.git
+cd llmosafe
+makepkg -si  # uses pkg/PKGBUILD
 ```
 
 ### Basic Usage
@@ -145,7 +169,7 @@ loop_guard.next_step(validated, validated_proof)?;
 │ RESOURCE BODY (Tier 0) — The Pressure Gauge            │
 │ • RSS memory monitoring                                 │
 │ • CPU load tracking                                     │
-│ • Cross-platform: Linux + Windows                      │
+│ • Cross-platform: Linux (incl. Arch) + Windows         │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -373,6 +397,9 @@ Build:
 cargo build --release --features ffi
 # Header generated at: target/release/build/llmosafe-*/out/llmosafe.h
 gcc -o my_app main.c -L./target/release -lllmosafe
+
+# On Arch Linux (system-installed via AUR):
+gcc -o my_app main.c $(pkg-config --cflags --libs llmosafe)
 ```
 
 ---

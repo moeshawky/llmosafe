@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: llmosafe
+Description: Safety-critical cognitive safety library — runtime guardrails with entropy, surprise, and bias gauges
+Version: @VERSION@
+URL: https://github.com/moeshawky/llmosafe
+Libs: -L${libdir} -lllmosafe
+Cflags: -I${includedir}

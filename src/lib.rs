@@ -45,8 +45,8 @@ pub use llmosafe_integration::SafetyContext;
 pub use llmosafe_integration::{EscalationPolicy, EscalationReason, PressureLevel, SafetyDecision};
 pub use llmosafe_kernel::{
     CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedProof,
-    SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse,
-    PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
+    SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse, PRESSURE_THRESHOLD,
+    STABILITY_THRESHOLD,
 };
 pub use llmosafe_memory::WorkingMemory;
 pub use llmosafe_sifter::{
@@ -66,6 +66,11 @@ mod c_abi {
     }
 
     #[no_mangle]
+    // SAFETY: This is a C-ABI entry point. Raw pointer safety is the
+    // caller's responsibility; validated on lines 72-78 before
+    // dereference. The function cannot be annotated `unsafe` because
+    // that conveys Rust-side UB responsibility, which C callers cannot
+    // honor.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub extern "C" fn llmosafe_calculate_halo(text_ptr: *const u8, text_len: usize) -> u16 {
         let max_text_len = 10 * 1024 * 1024;
@@ -76,7 +81,9 @@ mod c_abi {
         {
             return 0;
         }
-        // Securely bound memory reads instead of unbounded null-terminator scan
+        // SAFETY: text_ptr is validated non-null and text_len is bounded to
+        // [1, 10 MiB] on lines 72-78. The slice lives only for the duration of
+        // from_utf8_lossy below.
         let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
         let text = String::from_utf8_lossy(slice);
         crate::llmosafe_sifter::calculate_halo_signal(&text)

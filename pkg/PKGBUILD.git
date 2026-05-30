@@ -1,0 +1,58 @@
+# Maintainer: llmosafe contributors
+
+pkgname=llmosafe-git
+pkgver=0.6.2.r0.g$(git rev-list --count HEAD 2>/dev/null || echo 0)
+pkgrel=1
+pkgdesc="Safety-critical cognitive safety library — runtime guardrails with entropy/surprise/bias gauges (git)"
+arch=('x86_64')
+url="https://github.com/moeshawky/llmosafe"
+license=('MIT')
+makedepends=('rust' 'cargo' 'git')
+provides=('llmosafe' 'libllmosafe.so')
+conflicts=('llmosafe')
+source=("git+${url}.git")
+
+pkgver() {
+    cd "${srcdir}/llmosafe"
+    git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' || \
+        printf "0.0.0.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+sha256sums=('SKIP')
+
+prepare() {
+    cd "${srcdir}/llmosafe"
+    cargo fetch --locked
+}
+
+build() {
+    cd "${srcdir}/llmosafe"
+    export CARGO_TARGET_DIR=target
+    cargo build --release --features ffi
+}
+
+check() {
+    cd "${srcdir}/llmosafe"
+    export CARGO_TARGET_DIR=target
+    cargo test --release --all-features
+}
+
+package() {
+    cd "${srcdir}/llmosafe"
+
+    install -Dm755 "target/release/libllmosafe.so" \
+        "${pkgdir}/usr/lib/libllmosafe.so"
+
+    local header_path
+    header_path=$(find target/release/build -name 'llmosafe.h' -path '*/out/*' | head -1)
+    install -Dm644 "${header_path}" \
+        "${pkgdir}/usr/include/llmosafe.h"
+
+    install -Dm644 "${srcdir}/pkg/llmosafe.pc.in" \
+        "${srcdir}/llmosafe.pc.in"
+    sed "s|@VERSION@|${pkgver}|g; s|@PREFIX@|/usr|g" \
+        "${srcdir}/llmosafe.pc.in" \
+        > "${srcdir}/llmosafe.pc"
+    install -Dm644 "${srcdir}/llmosafe.pc" \
+        "${pkgdir}/usr/lib/pkgconfig/llmosafe.pc"
+}

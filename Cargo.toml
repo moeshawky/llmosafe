@@ -5,7 +5,7 @@ edition = "2021"
 description = "Safety-critical cognitive safety library for AI agents. 4-tier architecture (Resource Body, Kernel, Working Memory, Sifter) with formal verification primitives, detection layer, and integration primitives."
 license = "MIT"
 repository = "https://github.com/moeshawky/llmosafe"
-rust-version = "1.70"
+rust-version = "1.85"
 documentation = "https://docs.rs/llmosafe"
 readme = "README.md"
 homepage = "https://github.com/moeshawky/llmosafe"
@@ -42,11 +42,22 @@ harness = false
 name = "llmosafe"
 crate-type = ["rlib", "cdylib"]
 
+[lints.clippy]
+perf = "warn"
+correctness = "deny"
+suspicious = "deny"
+complexity = "warn"
+style = "warn"
+
 [profile.dev]
 panic = "abort"
 
 [profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
 panic = "abort"
+opt-level = 3
 
 [build-dependencies]
 cbindgen = "0.26.0"

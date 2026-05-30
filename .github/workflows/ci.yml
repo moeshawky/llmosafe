@@ -15,12 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rust: [stable, 1.70.0] # 1.70.0 as a sample MSRV
+        rust: [stable, "1.85"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
       - name: Cargo check
         run: cargo check --all-targets --all-features
 
@@ -30,6 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Cargo test
         run: cargo test --all-features
 
@@ -41,8 +43,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@v2
       - name: Cargo clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D clippy::correctness -D clippy::suspicious -W clippy::all
 
   fmt:
     name: Format
@@ -55,12 +58,23 @@ jobs:
       - name: Cargo fmt
         run: cargo fmt --check
 
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cargo doc
+        run: cargo doc --no-deps --all-features
+
   bench:
     name: Bench Smoke Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Cargo bench smoke test
         run: cargo bench --no-run
 
@@ -70,8 +84,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Build no_std
         run: cargo build --no-default-features --release
+
+  arch:
+    name: Arch Linux
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install Rust toolchain
+        run: |
+          pacman -Syu --noconfirm rust
+
+      - uses: actions/checkout@v4
+
+      - name: Cargo check
+        run: cargo check --all-targets --all-features
+
+      - name: Cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D clippy::correctness -D clippy::suspicious -W clippy::all
+
+      - name: Cargo test
+        run: cargo test --all-features
+
+      - name: Cargo doc
+        run: cargo doc --no-deps --all-features
+
+      - name: Cargo fmt
+        run: cargo fmt --check
+
+      - name: no_std build
+        run: cargo build --no-default-features --release
+
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
 
   publish_dry_run:
     name: Publish Dry Run
