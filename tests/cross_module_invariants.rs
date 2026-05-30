@@ -7,7 +7,7 @@
 //! Run: `cargo test --test cross_module_invariants` or
 //! `cargo test proptest` for the property-based tests
 
-use llmosafe::*;
+use llmosafe::{*, SiftedProof};
 use proptest::prelude::*;
 
 // ── Shadow validator tests ──────────────────────────────────────
