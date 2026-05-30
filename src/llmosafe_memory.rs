@@ -101,19 +101,26 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
 
     pub fn trend(&self) -> f64 {
         let n = SIZE as f64;
-        let mut sum_y = 0.0;
-        let mut sum_x_times_y = 0.0;
+        // Optimization: Defer floating-point conversions to the final reduction
+        // step to avoid redundant conversions within the hot loop.
+        // `sum_y` and `sum_x_times_y` accumulate using `i128` matching `mantissa()`,
+        // safely avoiding overflow since `SIZE` is strictly bounded and small.
+        let mut sum_y: i128 = 0;
+        let mut sum_x_times_y: i128 = 0;
 
         // Walk the ring buffer in temporal order: oldest first, newest last.
         // After wraparound, buffer order is [current_index, ..., SIZE-1, 0, ..., current_index-1].
         // Assign x=0 to oldest, x=SIZE-1 to newest.
         for offset in 0..SIZE {
             let idx = (self.current_index + offset) % SIZE;
-            let x = offset as f64;
-            let y = self.state[idx].mantissa() as f64;
+            let x = offset as i128;
+            let y = self.state[idx].mantissa();
             sum_y += y;
             sum_x_times_y += x * y;
         }
+
+        let sum_y_f64 = sum_y as f64;
+        let sum_x_times_y_f64 = sum_x_times_y as f64;
 
         let sum_x = (n * (n - 1.0)) / 2.0;
         let sum_xx = (n * (n - 1.0) * (2.0 * n - 1.0)) / 6.0;
@@ -122,7 +129,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         if denominator == 0.0 {
             return 0.0;
         }
-        (n * sum_x_times_y - sum_x * sum_y) / denominator
+        (n * sum_x_times_y_f64 - sum_x * sum_y_f64) / denominator
     }
 
     pub fn is_drifting(&self, threshold: f64) -> bool {
@@ -286,7 +293,9 @@ pub mod cognitive_memory {
         // for pre-sifting on their side. We mint the proof internally.
         let proof = SiftedProof(());
 
-        let mut memory = GLOBAL_MEMORY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut memory = GLOBAL_MEMORY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         match memory.update(sifted, proof) {
             Ok(_) => 0,
