@@ -375,7 +375,9 @@ mod tests {
         let stable_validated = ValidatedSynapse::new(stable_sifted.into_inner());
 
         // Step 1: OK
-        assert!(loop_guard.next_step(stable_validated, ValidatedProof(())).is_ok());
+        assert!(loop_guard
+            .next_step(stable_validated, ValidatedProof(()))
+            .is_ok());
 
         // Create new validated for step 2
         let mut stable_synapse2 = Synapse::new();
@@ -386,7 +388,9 @@ mod tests {
         let stable_validated2 = ValidatedSynapse::new(stable_sifted2.into_inner());
 
         // Step 2: OK
-        assert!(loop_guard.next_step(stable_validated2, ValidatedProof(())).is_ok());
+        assert!(loop_guard
+            .next_step(stable_validated2, ValidatedProof(()))
+            .is_ok());
 
         // Step 3: Depth Exceeded
         let mut stable_synapse3 = Synapse::new();
@@ -397,7 +401,9 @@ mod tests {
         let _stable_validated3 = ValidatedSynapse::new(stable_sifted3.into_inner());
 
         assert_eq!(
-            loop_guard.next_step(stable_validated, ValidatedProof(())).unwrap_err(),
+            loop_guard
+                .next_step(stable_validated, ValidatedProof(()))
+                .unwrap_err(),
             KernelError::DepthExceeded
         );
 
@@ -516,7 +522,9 @@ mod tests {
         let validated = ValidatedSynapse::new(sifted.into_inner());
 
         assert_eq!(
-            loop_guard.next_step(validated, ValidatedProof(())).unwrap_err(),
+            loop_guard
+                .next_step(validated, ValidatedProof(()))
+                .unwrap_err(),
             KernelError::DepthExceeded
         );
     }
@@ -567,7 +575,9 @@ mod tests {
         let validated = ValidatedSynapse::new(sifted.into_inner());
 
         assert_eq!(
-            loop_guard.next_step(validated, ValidatedProof(())).unwrap_err(),
+            loop_guard
+                .next_step(validated, ValidatedProof(()))
+                .unwrap_err(),
             KernelError::DepthExceeded
         );
     }
