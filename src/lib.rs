@@ -45,8 +45,8 @@ pub use llmosafe_integration::SafetyContext;
 pub use llmosafe_integration::{EscalationPolicy, EscalationReason, PressureLevel, SafetyDecision};
 pub use llmosafe_kernel::{
     CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedProof,
-    SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse, PRESSURE_THRESHOLD,
-    STABILITY_THRESHOLD,
+    SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse,
+    PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
 };
 pub use llmosafe_memory::WorkingMemory;
 pub use llmosafe_sifter::{

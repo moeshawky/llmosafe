@@ -5,8 +5,8 @@
 mod tests {
     use llmosafe::{
         CognitiveEntropy, CusumDetector, DynamicStabilityMonitor, KernelError, ReasoningLoop,
-        SiftedProof, SiftedSynapse, StabilityResult, Synapse, PRESSURE_THRESHOLD,
-        STABILITY_THRESHOLD,
+        SiftedProof, SiftedSynapse, StabilityResult, Synapse,
+        PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
     };
 
     #[test]

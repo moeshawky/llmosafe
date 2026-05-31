@@ -286,9 +286,7 @@ pub mod cognitive_memory {
         // for pre-sifting on their side. We mint the proof internally.
         let proof = SiftedProof(());
 
-        let mut memory = GLOBAL_MEMORY
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut memory = GLOBAL_MEMORY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
         match memory.update(sifted, proof) {
             Ok(_) => 0,
