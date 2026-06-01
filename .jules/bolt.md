@@ -1,0 +1,6 @@
+## 2024-06-01 - Optimizing floating point trend calculations
+**Learning:** In LLMOSafe's working memory, floating point calculations for `sum_x`, `sum_xx`, and trend accumulations are expensive. We can optimize numerical calculations in tight loops by deferring conversions to `f64` and doing as much of the integer math iteratively before converting to floating point calculations.
+**Action:** Optimize iterative index-based calculations over fixed-size arrays by replacing the loop accumulations with O(1) closed-form arithmetic progression formulas or using integers for accumulations and doing `f64` conversions later.
+## 2024-06-01 - Avoid premature optimization via type casts without careful conversion
+**Learning:** Optimizing floating point mathematical operations by deferring `f64` conversions and using `i128` types inside loops requires ensuring the proper value is being returned from nested types. Type conversion via `as` to an incompatible type like from `i128` to `i128` causes clippy warnings or build failures. Ensure all calculations are actually taking an `i128` type naturally without superfluous casts.
+**Action:** Review types returned from structs and ensure matching cast logic is sound.

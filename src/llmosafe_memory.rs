@@ -101,19 +101,26 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
 
     pub fn trend(&self) -> f64 {
         let n = SIZE as f64;
-        let mut sum_y = 0.0;
-        let mut sum_x_times_y = 0.0;
+
+        // ⚡ Bolt: Optimize by deferring f64 conversion.
+        // Accumulate using integer math (i128) in the tight loop to avoid
+        // floating-point overhead and roundoff errors, converting only for the final slope.
+        let mut sum_y = 0_i128;
+        let mut sum_x_times_y = 0_i128;
 
         // Walk the ring buffer in temporal order: oldest first, newest last.
         // After wraparound, buffer order is [current_index, ..., SIZE-1, 0, ..., current_index-1].
         // Assign x=0 to oldest, x=SIZE-1 to newest.
         for offset in 0..SIZE {
             let idx = (self.current_index + offset) % SIZE;
-            let x = offset as f64;
-            let y = self.state[idx].mantissa() as f64;
+            let x = offset as i128;
+            let y = self.state[idx].mantissa();
             sum_y += y;
             sum_x_times_y += x * y;
         }
+
+        let sum_y_f64 = sum_y as f64;
+        let sum_x_times_y_f64 = sum_x_times_y as f64;
 
         let sum_x = (n * (n - 1.0)) / 2.0;
         let sum_xx = (n * (n - 1.0) * (2.0 * n - 1.0)) / 6.0;
@@ -122,7 +129,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         if denominator == 0.0 {
             return 0.0;
         }
-        (n * sum_x_times_y - sum_x * sum_y) / denominator
+        (n * sum_x_times_y_f64 - sum_x * sum_y_f64) / denominator
     }
 
     pub fn is_drifting(&self, threshold: f64) -> bool {
