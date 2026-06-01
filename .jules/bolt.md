@@ -4,3 +4,7 @@
 ## 2024-06-01 - Avoid premature optimization via type casts without careful conversion
 **Learning:** Optimizing floating point mathematical operations by deferring `f64` conversions and using `i128` types inside loops requires ensuring the proper value is being returned from nested types. Type conversion via `as` to an incompatible type like from `i128` to `i128` causes clippy warnings or build failures. Ensure all calculations are actually taking an `i128` type naturally without superfluous casts.
 **Action:** Review types returned from structs and ensure matching cast logic is sound.
+
+## 2024-06-01 - Avoid dependency issues causing CI failure
+**Learning:** Adding or updating tools/packages that introduce newer editions or formats (like the `edition` field introduced in Cargo 1.70.0 for dependencies that break CI building against older target `rustc`) might cause failing tests.
+**Action:** When working with old CI builds or checking against older rustc versions (e.g. 1.70.0), make sure to force-commit downgraded transitive dependencies to avoid edition mismatch failures on dependencies, using `cargo update -p <crate> --precise <version>`.
