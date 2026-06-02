@@ -4,8 +4,7 @@
 #[cfg(feature = "testing")]
 mod tests {
     use llmosafe::{
-        calculate_halo_signal, sift_perceptions, SiftedProof, SiftedSynapse, Synapse,
-        WorkingMemory,
+        calculate_halo_signal, sift_perceptions, SiftedProof, SiftedSynapse, Synapse, WorkingMemory,
     };
 
     #[test]
@@ -137,7 +136,10 @@ mod tests {
         synapse.set_raw_entropy(100);
         synapse.set_raw_surprise(1000);
         let sifted = SiftedSynapse::from_synapse(synapse);
-        assert!(memory.update(sifted, SiftedProof::for_testing()).is_ok(), "At threshold should succeed");
+        assert!(
+            memory.update(sifted, SiftedProof::for_testing()).is_ok(),
+            "At threshold should succeed"
+        );
 
         // Test above threshold
         let mut synapse = Synapse::new();

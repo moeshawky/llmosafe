@@ -44,8 +44,7 @@ fn bench_kernel(c: &mut Criterion) {
 
     let mut memory = WorkingMemory::<64>::new(1000);
     let sifted = llmosafe::SiftedSynapse::from_synapse(synapse);
-    let (validated, vproof) =
-        memory.update(sifted, SiftedProof::for_testing()).unwrap();
+    let (validated, vproof) = memory.update(sifted, SiftedProof::for_testing()).unwrap();
     c.bench_function("reasoning_loop_next", |b| {
         b.iter(|| loop_guard.next_step(black_box(validated), black_box(vproof)))
     });

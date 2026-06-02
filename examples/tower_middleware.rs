@@ -16,8 +16,7 @@ impl MockService {
     /// Process a request with cognitive safety checks.
     fn process(&self, request: &str) -> Result<String, llmosafe::KernelError> {
         // Tier 3: Sift the input
-        let (sifted, sifted_proof) =
-            sift_perceptions(&[request], "safe response");
+        let (sifted, sifted_proof) = sift_perceptions(&[request], "safe response");
 
         // Tier 2: Validate through working memory
         let mut memory = WorkingMemory::<64>::new(1000);
