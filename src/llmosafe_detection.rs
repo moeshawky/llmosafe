@@ -179,6 +179,7 @@ pub struct DriftDetector {
 
 impl DriftDetector {
     /// Create a new drift detector with the given goal.
+    /// Returns a detector with drift_score=0.0 (no drift possible) if goal is empty.
     pub fn new(goal: &str, drift_threshold: f32) -> Self {
         let mut goal_hashes = ArrayVec::new();
         for word in goal.split_whitespace().take(MAX_CONTEXT_LEN) {
@@ -193,26 +194,29 @@ impl DriftDetector {
 
     /// Update with a new observation and compute drift.
     pub fn observe(&mut self, observation: &str) {
+        if self.goal_hashes.is_empty() {
+            return;
+        }
+
         let mut obs_words = ArrayVec::<u32, MAX_CONTEXT_LEN>::new();
         for word in observation.split_whitespace().take(MAX_CONTEXT_LEN) {
             obs_words.push(RepetitionDetector::hash_str(word));
         }
 
-        // Calculate overlap
         let mut matches = 0usize;
         for &obs_hash in obs_words.iter() {
             if self.goal_hashes.iter().any(|&g| g == obs_hash) {
                 matches += 1;
             }
         }
-        let overlap = matches as f32 / self.goal_hashes.len().max(1) as f32;
-        // Drift increases when overlap decreases
+        let overlap = matches as f32 / self.goal_hashes.len() as f32;
         self.drift_score = 1.0 - overlap;
     }
 
     /// Check if drift exceeds threshold.
+    /// Returns false if no goal was provided (nothing to drift from).
     pub fn is_drifting(&self) -> bool {
-        self.drift_score > self.drift_threshold
+        !self.goal_hashes.is_empty() && self.drift_score > self.drift_threshold
     }
 
     /// Get current drift score (0.0 = perfectly aligned, 1.0 = completely drifted).

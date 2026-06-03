@@ -80,7 +80,7 @@ mod tests {
         let mut memory = WorkingMemory::<64>::new(1000);
 
         let mut synapse = Synapse::new();
-        synapse.set_raw_entropy(1001);
+        synapse.set_raw_entropy(50001);
         synapse.set_raw_surprise(100);
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::from_synapse(synapse);

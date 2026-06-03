@@ -122,7 +122,7 @@ mod tests {
 
         // Test cognitive instability
         let mut synapse = Synapse::new();
-        synapse.set_raw_entropy(1001);
+        synapse.set_raw_entropy(50001);
         synapse.set_raw_surprise(100);
         let sifted = SiftedSynapse::from_synapse(synapse);
         let proof = SiftedProof::for_testing();

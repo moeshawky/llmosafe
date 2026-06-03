@@ -24,6 +24,7 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
+pub mod llmosafe_classifier;
 pub mod llmosafe_detection;
 pub mod llmosafe_integration;
 pub mod llmosafe_kernel;
@@ -209,7 +210,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn test_c_abi_get_stability_unstable() {
-        let unstable_bits = 1100u64;
+        let unstable_bits = 50001u64;
         let result = crate::c_abi::llmosafe_get_stability(unstable_bits);
         assert_eq!(result, -2);
     }

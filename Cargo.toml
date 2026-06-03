@@ -24,9 +24,8 @@ windows-sys = { version = "0.52", features = ["Win32_System_ProcessStatus", "Win
 [features]
 default = ["std"]
 std = ["libc", "dep:windows-sys"]
-ffi = ["std"]
 serde = ["dep:serde"]
-full = ["std", "serde", "ffi"]
+full = ["std", "serde"]
 testing = []
 
 [dev-dependencies]

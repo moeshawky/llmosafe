@@ -209,7 +209,7 @@ impl ResourceGuard {
         &self,
         max_retries: u32,
     ) -> Result<Synapse, KernelError> {
-        use crate::llmosafe_integration::{EscalationPolicy, SafetyDecision};
+        use crate::llmosafe_integration::{EscalationPolicy, PressureLevel, SafetyDecision};
 
         let policy = EscalationPolicy::default();
         let mut retries = 0u32;
@@ -218,7 +218,9 @@ impl ResourceGuard {
                 return Err(KernelError::DeadlineExceeded);
             }
             let entropy = self.raw_entropy();
-            let decision = policy.decide(entropy, 0, false);
+            let pressure_pct = self.pressure();
+            let pressure_level = PressureLevel::from_percentage(pressure_pct);
+            let decision = policy.decide_with_pressure(entropy, 0, false, pressure_level);
             match decision {
                 SafetyDecision::Proceed | SafetyDecision::Warn(_) => {
                     return self.check_with_entropy(entropy);
@@ -244,23 +246,31 @@ impl ResourceGuard {
         &self,
         deadline: std::time::Instant,
     ) -> Result<Synapse, KernelError> {
-        use crate::llmosafe_integration::{EscalationPolicy, SafetyDecision};
+        use crate::llmosafe_integration::{EscalationPolicy, PressureLevel, SafetyDecision};
 
         let policy = EscalationPolicy::default();
+        let mut retries = 0u32;
         loop {
             if std::time::Instant::now() >= deadline {
                 return Err(KernelError::DeadlineExceeded);
             }
+            if retries >= 3 {
+                return Err(KernelError::DeadlineExceeded);
+            }
             let entropy = self.raw_entropy();
-            let decision = policy.decide(entropy, 0, false);
+            let pressure_pct = self.pressure();
+            let pressure_level = PressureLevel::from_percentage(pressure_pct);
+            let decision = policy.decide_with_pressure(entropy, 0, false, pressure_level);
             match decision {
                 SafetyDecision::Proceed | SafetyDecision::Warn(_) => {
                     return self.check_with_entropy(entropy);
                 }
                 SafetyDecision::Escalate { cooldown_ms, .. } => {
+                    retries += 1;
                     thread::sleep(Duration::from_millis(cooldown_ms as u64));
                 }
                 SafetyDecision::Halt(_, cooldown_ms) => {
+                    retries += 1;
                     thread::sleep(Duration::from_millis(cooldown_ms as u64));
                 }
                 SafetyDecision::Exit(err) => {

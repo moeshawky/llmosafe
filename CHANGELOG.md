@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] — Unreleased
+
+### Added
+
+- **TF-IDF classifier** (`llmosafe_classifier`): streaming FNV-1a tokenizer (unigrams + bigrams), binary search in sorted vocab array, 256-entry sigmoid LUT, zero-alloc, no_std. Replaces keyword-based halo scoring with learned weights from 42,845 real samples (ShieldLM + neuralchemy + deepset). 93.4% accuracy, 91.0% F1 on held-out data.
+- **build.rs vocabulary generation**: compiles `vocab_model.bin` into embedded `VOCAB` const array. Validates sort order, hash uniqueness, and NaN. Fail-closed fallback on model corruption.
+- **Training pipeline** (`tools/train_tfidf_classifier.py`): mutual information feature selection, boolean TF-IDF, logistic regression (sklearn), JSONL input, binary model output.
+
+### Fixed
+
+- **Entropy formula corrected** (`sifter.rs`): replaced `65535*(1-p)` with binary entropy `65535*4*p*(1-p)`. Old formula assigned maximum entropy to safe-confident text and zero entropy to dangerous-confident text, inverting the stability gate. Binary entropy peaks at p=0.5 (true uncertainty) and drops to 0 at both extremes.
+- **Surprise thresholds recalibrated**: `warn_surprise` 300→42600, `escalate_surprise` 500→55700. Old thresholds were calibrated for keyword-halo [0,1000] range; classifier uses probability*65535 [0,65535].
+- **Body→policy mismatch**: `check_blocking()` and `check_with_deadline()` now call `decide_with_pressure()` instead of `decide()`, adding resource pressure signal. Body entropy [0,1000] was ~50x below policy thresholds [30000,50000], making resource pressure invisible.
+- **DriftDetector empty-objective fix**: `observe()` returns early, `is_drifting()` returns false when objective is empty. Previously caused perpetual drift.
+
+### Changed
+
+- **STABILITY_THRESHOLD**: 1000→50000 for classifier probability space [0,65535]
+- **EscalationPolicy thresholds recalibrated**: `warn_entropy` 600→30000, `escalate_entropy` 800→40000, `halt_entropy` 1000→50000
+- **`raw_surprise` carries `classifier_score`**: `probability * 65535` stored in surprise field
+- **`has_bias` from classifier**: `is_manipulation = score > THRESHOLD`, not keyword breakdown
+- **4 invariants.toml entries updated**: threshold references, `best_halo`→`is_manipulation`, `last_entropy()`→`mean_entropy()`, pressure zone range
+- **`.gitignore` hardened**: excludes audit analysis artifacts, generated training data, model binaries
+
 ## [0.6.0] - 2026-05-28
 
 ### Added

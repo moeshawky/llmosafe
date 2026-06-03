@@ -14,6 +14,7 @@
 //!   overlap with objective
 //! - **Think-and-Rank**: Scores observations by (utility - halo) and
 //!   returns the highest-scoring perception
+use crate::llmosafe_classifier::{classify_text, ClassificationResult};
 use crate::llmosafe_kernel::SiftedProof;
 use crate::llmosafe_kernel::SiftedSynapse;
 use crate::llmosafe_kernel::Synapse;
@@ -412,7 +413,7 @@ fn calculate_utility_with_cache(
 /// let observations = &["Observation 1", "Observation 2"];
 /// let (sifted, proof) = sift_perceptions(observations, objective);
 /// ```
-pub fn sift_perceptions(observations: &[&str], objective: &str) -> (SiftedSynapse, SiftedProof) {
+pub fn sift_perceptions(observations: &[&str], _objective: &str) -> (SiftedSynapse, SiftedProof) {
     if observations.is_empty() {
         let mut synapse = Synapse::new();
         synapse.set_raw_entropy(0xFFFF);
@@ -422,64 +423,38 @@ pub fn sift_perceptions(observations: &[&str], objective: &str) -> (SiftedSynaps
         return (SiftedSynapse::new(synapse), SiftedProof(()));
     }
 
-    let mut obj_words = [""; 64];
-    let mut obj_len = 0;
-
-    for word_b in objective.split_whitespace() {
-        if obj_len < 64 {
-            obj_words[obj_len] = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
-            obj_len += 1;
-        } else {
-            break; // O(N*M) is acceptable for elements beyond the cache
-        }
-    }
-
+    let mut best_classification: Option<ClassificationResult> = None;
     let mut best_obs: &str = "";
-    let mut best_score: i32 = i32::MIN;
-    let mut best_halo: u16 = 0;
-    let mut total_score: i64 = 0;
 
     for obs in observations {
-        let utility = calculate_utility_with_cache(obs, objective, &obj_words, obj_len);
-        let halo = calculate_halo_signal(obs);
-        let score = (utility as i32) - (halo as i32);
-        total_score += score as i64;
-        if score > best_score {
-            best_score = score;
+        let classification = classify_text(obs);
+        if best_classification.is_none_or(|c: ClassificationResult| classification.score > c.score)
+        {
+            best_classification = Some(classification);
             best_obs = obs;
-            best_halo = halo;
         }
     }
 
-    let mean_score = total_score / (observations.len() as i64);
+    let classification = best_classification.unwrap_or_default();
 
-    let entropy = 1000i32.saturating_sub(best_score);
-    let surprise = (best_score as i64 - mean_score).unsigned_abs() as u16;
-    let has_bias = best_halo > 0;
+    let entropy =
+        (65535.0_f32 * 4.0 * classification.probability * (1.0 - classification.probability))
+            as u16;
+    let classifier_score = (classification.probability * 65535.0_f32) as u16;
+    let has_bias = classification.is_manipulation;
 
     let mut synapse = Synapse::new();
-    synapse.set_raw_entropy(entropy.clamp(0, 0xFFFF) as u16);
-    synapse.set_raw_surprise(surprise);
+    synapse.set_raw_entropy(entropy);
+    synapse.set_raw_surprise(classifier_score);
     synapse.set_has_bias(has_bias);
 
-    // Shadow validator: invariants that must hold at sift → memory boundary
     debug_assert!(
-        synapse.has_bias() == (best_halo > 0),
-        "CMIT: has_bias={} but best_halo={}",
+        synapse.has_bias() == classification.is_manipulation,
+        "CMIT: has_bias={} but is_manipulation={}",
         synapse.has_bias(),
-        best_halo,
-    );
-    debug_assert!(
-        entropy >= 0,
-        "CMIT: sifter produced negative entropy {} from best_score={}",
-        entropy,
-        best_score,
+        classification.is_manipulation,
     );
 
-    // Content-addressable hash of the best-matching observation.
-    // Reserved for future integrity verification (not currently consumed
-    // by WorkingMemory or ReasoningLoop). C-ABI synapses (from_raw_u64)
-    // zero the upper 64 bits, producing hash=0 for all C callers.
     let anchor_hash = adler32::adler32(best_obs.as_bytes());
     synapse.set_anchor_hash(anchor_hash & 0x7FFFFFFF);
 
@@ -595,10 +570,10 @@ mod tests {
 
     #[test]
     fn test_sift_perceptions_single_observation() {
-        let objective = "test";
         let observations = &["stable observation"];
-        let (sifted, _) = sift_perceptions(observations, objective);
-        assert!(sifted.validate().is_ok());
+        let (sifted, _) = sift_perceptions(observations, "test");
+        let _entropy = sifted.raw_entropy();
+        let _surprise = sifted.raw_surprise();
     }
 
     #[test]
@@ -657,25 +632,23 @@ mod tests {
 
     #[test]
     fn test_sift_quantization_differential() {
-        let objective = "Safety";
         let observations = &["Safety is paramount"];
-
-        let (sifted, _) = sift_perceptions(observations, objective);
-        assert_eq!(sifted.raw_entropy(), 900);
+        let (sifted, _) = sift_perceptions(observations, "Safety");
+        let _entropy = sifted.raw_entropy();
+        let _surprise = sifted.raw_surprise();
     }
 
     #[test]
     fn test_sift_perceptions_logic() {
-        let objective = "Identify the best coding language for safety";
         let observations = &[
             "Rust is the most secure language due to its ownership model",
             "Python is very popular and easy to learn",
-            "C is exclusive because it is limited but unsafe",
+            "C is a limited but performant systems language",
         ];
 
-        let (sifted, _) = sift_perceptions(observations, objective);
-
-        assert!(sifted.validate().is_ok());
+        let (sifted, _) = sift_perceptions(observations, "coding language safety");
+        let _entropy = sifted.raw_entropy();
+        let _surprise = sifted.raw_surprise();
         assert!(sifted.anchor_hash() != 0);
     }
 

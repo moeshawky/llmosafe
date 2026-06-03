@@ -454,11 +454,10 @@ Bias detection categories borrowed from email spam filters — the same patterns
 
 | Feature | Description |
 |:--------|:------------|
-| `std` (default) | Resource monitoring, thread-local contexts |
-| `ffi` | C-ABI exports, header generation |
+| `std` (default) | Resource monitoring, C-ABI exports, thread-local contexts |
 | `serde` | Serialization for all public types |
 | `testing` | Enables `for_testing()` constructors for witness tokens |
-| `full` | All features enabled |
+| `full` | All production features (`std` + `serde`, excludes `testing`) |
 
 ```toml
 # Embedded / no_std

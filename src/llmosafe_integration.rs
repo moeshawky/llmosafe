@@ -180,11 +180,11 @@ impl From<u8> for PressureLevel {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EscalationPolicy {
-    /// Entropy threshold for Warn (default: 600).
+    /// Entropy threshold for Warn (default: 30000, recalibrated for classifier probability space).
     pub warn_entropy: u16,
-    /// Entropy threshold for Escalate (default: 800).
+    /// Entropy threshold for Escalate (default: 40000).
     pub escalate_entropy: u16,
-    /// Entropy threshold for Halt (default: 1000).
+    /// Entropy threshold for Halt (default: 50000). Overrides Escalate and Warn.
     pub halt_entropy: u16,
     /// Surprise threshold for Warn (default: 300).
     pub warn_surprise: u16,
@@ -199,11 +199,11 @@ pub struct EscalationPolicy {
 impl Default for EscalationPolicy {
     fn default() -> Self {
         Self {
-            warn_entropy: 600,
-            escalate_entropy: 800,
-            halt_entropy: 1000,
-            warn_surprise: 300,
-            escalate_surprise: 500,
+            warn_entropy: 30000,
+            escalate_entropy: 40000,
+            halt_entropy: 50000,
+            warn_surprise: 42600,
+            escalate_surprise: 55700,
             bias_escalates: true,
             escalate_pressure: PressureLevel::Critical,
         }
@@ -481,17 +481,17 @@ mod tests {
     #[test]
     fn test_escalation_policy_default_decide() {
         let policy = EscalationPolicy::default();
-        // Safe input
+        // Safe input (below warn_entropy=30000)
         let decision = policy.decide(400, 100, false);
         assert!(matches!(decision, SafetyDecision::Proceed));
         // Warn entropy
-        let decision = policy.decide(650, 100, false);
+        let decision = policy.decide(31000, 100, false);
         assert!(matches!(decision, SafetyDecision::Warn(_)));
         // Escalate entropy
-        let decision = policy.decide(850, 100, false);
+        let decision = policy.decide(41000, 100, false);
         assert!(matches!(decision, SafetyDecision::Escalate { .. }));
         // Halt entropy
-        let decision = policy.decide(1100, 100, false);
+        let decision = policy.decide(51000, 100, false);
         assert!(matches!(decision, SafetyDecision::Halt(..)));
         // Bias escalation
         let decision = policy.decide(400, 100, true);
@@ -521,7 +521,7 @@ mod tests {
         ctx.observe(400, 250, false);
         assert_eq!(ctx.observation_count(), 3);
         let decision = ctx.finalize();
-        // Max entropy 500 < warn_threshold 600, max surprise 250 < warn_threshold 300
+        // Max entropy 500 < warn_threshold 30000, max surprise 250 < warn_surprise 300
         assert!(matches!(decision, SafetyDecision::Proceed));
     }
 
@@ -580,7 +580,7 @@ mod tests {
         let policy = EscalationPolicy::default();
 
         // Test Escalate cooldown (5000ms) for entropy-based escalation
-        let decision = policy.decide(850, 100, false);
+        let decision = policy.decide(41000, 100, false);
         assert!(matches!(
             decision,
             SafetyDecision::Escalate {
@@ -600,7 +600,7 @@ mod tests {
         ));
 
         // Test Escalate cooldown (5000ms) for surprise-based escalation
-        let decision = policy.decide(400, 550, false);
+        let decision = policy.decide(400, 55800, false);
         assert!(matches!(
             decision,
             SafetyDecision::Escalate {
@@ -610,7 +610,7 @@ mod tests {
         ));
 
         // Test Halt cooldown (30000ms) for entropy-based halt
-        let decision = policy.decide(1100, 100, false);
+        let decision = policy.decide(51000, 100, false);
         assert!(matches!(decision, SafetyDecision::Halt(_, 30000)));
     }
 
@@ -620,7 +620,7 @@ mod tests {
         let policy = EscalationPolicy::default();
 
         // Escalate cases should have 5000ms cooldown
-        if let SafetyDecision::Escalate { cooldown_ms, .. } = policy.decide(850, 100, false) {
+        if let SafetyDecision::Escalate { cooldown_ms, .. } = policy.decide(41000, 100, false) {
             assert_ne!(cooldown_ms, 0, "Escalate cooldown should be non-zero");
             assert_eq!(cooldown_ms, 5000, "Escalate cooldown should be 5000ms");
         } else {
@@ -628,7 +628,7 @@ mod tests {
         }
 
         // Halt case should have 30000ms cooldown
-        if let SafetyDecision::Halt(_, cooldown_ms) = policy.decide(1100, 100, false) {
+        if let SafetyDecision::Halt(_, cooldown_ms) = policy.decide(51000, 100, false) {
             assert_ne!(cooldown_ms, 0, "Halt cooldown should be non-zero");
             assert_eq!(cooldown_ms, 30000, "Halt cooldown should be 30000ms");
         } else {

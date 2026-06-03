@@ -49,9 +49,10 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
     ///
     /// ```
     /// use llmosafe::{WorkingMemory, sift_perceptions};
-    /// let mut memory = WorkingMemory::<64>::new(1000);
-    /// let (sifted, proof) = sift_perceptions(&["stable observation"], "test");
-    /// let (validated, _proof) = memory.update(sifted, proof).unwrap();
+    /// let mut memory = WorkingMemory::<64>::new(65535);
+    /// let (sifted, proof) = sift_perceptions(&["the weather is nice today"], "test");
+    /// let result = memory.update(sifted, proof);
+    /// assert!(result.is_ok());
     /// ```
     pub fn update(
         &mut self,
@@ -188,7 +189,7 @@ mod tests {
 
         // 4. Invalid update: Cognitive Instability
         let mut synapse = Synapse::new();
-        synapse.set_raw_entropy(1100);
+        synapse.set_raw_entropy(50001);
         synapse.set_raw_surprise(100);
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::new(synapse);

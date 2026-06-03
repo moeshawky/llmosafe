@@ -148,8 +148,8 @@ pub enum StabilityResult {
     Both, // Both directions unstable
 }
 
-pub const STABILITY_THRESHOLD: i128 = 1000;
-pub const PRESSURE_THRESHOLD: i128 = 800;
+pub const STABILITY_THRESHOLD: i128 = 50000;
+pub const PRESSURE_THRESHOLD: i128 = 40000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -236,9 +236,8 @@ impl<const MAX_STEPS: usize> ReasoningLoop<MAX_STEPS> {
     /// ```
     /// use llmosafe::{sift_perceptions, WorkingMemory, ReasoningLoop};
     ///
-    /// // The full pipeline: Tier 3 -> Tier 2 -> Tier 1
-    /// let (sifted, sifted_proof) = sift_perceptions(&["stable observation"], "test");
-    /// let mut memory = WorkingMemory::<64>::new(1000);
+    /// let (sifted, sifted_proof) = sift_perceptions(&["the weather is nice today"], "test");
+    /// let mut memory = WorkingMemory::<64>::new(65535);
     /// let (validated, validated_proof) = memory.update(sifted, sifted_proof).unwrap();
     ///
     /// let mut loop_guard = ReasoningLoop::<10>::new();
@@ -412,7 +411,7 @@ mod tests {
 
         // Create unstable synapse (high entropy)
         let mut unstable_synapse = Synapse::new();
-        unstable_synapse.set_raw_entropy(1100);
+        unstable_synapse.set_raw_entropy(50001);
         unstable_synapse.set_has_bias(false);
         let unstable_sifted = SiftedSynapse::new(unstable_synapse);
 
@@ -825,36 +824,6 @@ impl core::fmt::Display for KernelError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for KernelError {}
-
-/// TIER 1 SAFETY INVARIANTS:
-/// - Stack bounded: Enforced by no_std / no_alloc.
-/// - Loop bounds: Enforced by ReasoningLoop<MAX_STEPS>.
-/// - Stability: Enforced by CognitiveEntropy (RMPC Concentric Containers).
-/// - Unsafe: Forbidden.
-pub mod cognitive_kernel {
-    use super::*;
-
-    /// Internal reasoning flow using the typestate pipeline.
-    /// Routes through WorkingMemory for surprise gating, not direct synapse construction.
-    pub fn execute_reasoning_flow() -> Result<bool, KernelError> {
-        use crate::llmosafe_memory::WorkingMemory;
-
-        let mut loop_guard = ReasoningLoop::<10>::new();
-
-        // Route through sifter + memory for proper typestate gating
-        let mut synapse = Synapse::new();
-        synapse.set_raw_entropy(500);
-        let sifted = SiftedSynapse::new(synapse);
-
-        let mut memory = WorkingMemory::<64>::new(500);
-        let (validated, vproof) = memory.update(sifted, SiftedProof(()))?;
-
-        // Execute reasoning steps with hard stability gates
-        loop_guard.next_step(validated, vproof)?;
-
-        Ok(true)
-    }
-}
 
 /// SiftedSynapse: Output of Tier 3 (Sifter).
 /// Only constructible by sift_perceptions() - users cannot create this type directly.

@@ -31,6 +31,10 @@ libtest_mod.rlib
 # Test artifacts
 *.log
 
+# Generated training data and model binaries
+data/
+tools/vocab_model.bin
+
 # ML Training Artifacts - NOT PART OF RUST LIBRARY
 *.pt
 *.onnx
@@ -69,6 +73,9 @@ __pycache__/
 # --- AI-generated audit/analysis artifacts ---
 COMPREHENSIVE_ANALYSIS.md
 /audit_*.yaml
+ARCHITECTURE_*.md
+SUBAGENT_*.md
+TEST_PROTOCOL_*.md
 
 # --- ML training scripts (not part of Rust library) ---
 /scripts/
