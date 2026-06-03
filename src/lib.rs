@@ -25,7 +25,7 @@
 //!
 //! # Quick Usage
 //!
-//! ```no_compile
+//! ```ignore
 //! use llmosafe::{sift_perceptions, WorkingMemory, ReasoningLoop};
 //!
 //! let (sifted, proof) = sift_perceptions(&["observation"], "safety");

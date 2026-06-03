@@ -201,8 +201,8 @@ mod std_tests {
             "FM2/FM3: legitimate programming text must not trigger bias"
         );
         assert!(
-            sifted.raw_entropy() <= 0xFFFF,
-            "FM14: entropy must be in valid range"
+            sifted.raw_entropy() <= 50000,
+            "FM14: entropy must be below STABILITY_THRESHOLD for safe text"
         );
     }
 

@@ -14,7 +14,7 @@
 //!
 //! # Example
 //!
-//! ```no_compile
+//! ```ignore
 //! use llmosafe::{RepetitionDetector, DriftDetector};
 //!
 //! let mut rep = RepetitionDetector::new(3);

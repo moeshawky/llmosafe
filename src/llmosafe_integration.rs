@@ -8,7 +8,7 @@
 //! - `SafetyDecision` — typed decision outcome with cooldown
 //! - `PressureLevel` — resource pressure semantics
 //! - `EscalationPolicy` — configurable threshold-based decision engine.
-//!   Default thresholds calibrated for classifier [0,65535] range.
+//!   Default thresholds calibrated for classifier `` `[0, 65535]` `` range.
 //! - `SafetyContext` — thread-local decision tracking (`std` only)
 //!
 //! # EscalationPolicy Defaults
@@ -21,18 +21,12 @@
 //!
 //! # Example
 //!
-//! ```no_compile
+//! ```rust
 //! use llmosafe::{SafetyDecision, EscalationPolicy};
 //!
 //! let policy = EscalationPolicy::default();
 //! // Safe text: entropy=10000, surprise=800, no bias
 //! let decision = policy.decide(10000, 800, false);
-//! assert!(matches!(decision, SafetyDecision::Proceed));
-//! ```
-//! use llmosafe::{SafetyDecision, EscalationPolicy};
-//!
-//! let policy = EscalationPolicy::default();
-//! let decision = policy.decide(500, 100, false);
 //! assert!(matches!(decision, SafetyDecision::Proceed));
 //! ```
 

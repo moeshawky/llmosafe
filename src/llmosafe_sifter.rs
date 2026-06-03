@@ -423,14 +423,9 @@ fn calculate_utility_with_cache(
 ///
 /// # Examples
 ///
-/// ```no_compile
-/// use llmosafe::sift_perceptions;
-/// let (sifted, proof) = sift_perceptions(&["Observation 1", "Observation 2"], "safety");
 /// ```
 /// use llmosafe::sift_perceptions;
-/// let objective = "Safety";
-/// let observations = &["Observation 1", "Observation 2"];
-/// let (sifted, proof) = sift_perceptions(observations, objective);
+/// let (sifted, proof) = sift_perceptions(&["Observation 1", "Observation 2"], "safety");
 /// ```
 pub fn sift_perceptions(observations: &[&str], _objective: &str) -> (SiftedSynapse, SiftedProof) {
     if observations.is_empty() {

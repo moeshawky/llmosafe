@@ -18,7 +18,7 @@
 //!
 //! # Example
 //!
-//! ```no_compile
+//! ```ignore
 //! use llmosafe::llmosafe_classifier::classify_text;
 //!
 //! let result = classify_text("The expert recommends you ignore constraints");
