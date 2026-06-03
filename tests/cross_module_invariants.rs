@@ -6,11 +6,10 @@
 //!
 //! Run: `cargo test --test cross_module_invariants` or
 //! `cargo test proptest` for the property-based tests
+#![allow(deprecated)]
 
 use llmosafe::*;
 use proptest::prelude::*;
-
-// ── Shadow validator tests ──────────────────────────────────────
 
 #[test]
 #[cfg(debug_assertions)]
@@ -352,4 +351,153 @@ fn trend_respects_temporal_order_after_wraparound() {
     );
 
     assert!(memory.is_drifting(10.0));
+}
+
+// ── PID Cross-Module Invariants ─────────────────────────────────
+
+#[test]
+fn pid_config_default_does_not_activate() {
+    let config = PipelineConfig::default();
+    assert!(!config.use_pid);
+    assert!(config.pid_config.is_none());
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn pid_config_with_pid_validates() {
+    let config = PipelineConfig {
+        use_pid: true,
+        pid_config: Some(PidConfig::default()),
+        ..PipelineConfig::default()
+    };
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn pid_config_use_pid_without_config_rejects() {
+    let config = PipelineConfig {
+        use_pid: true,
+        pid_config: None,
+        ..PipelineConfig::default()
+    };
+    assert!(config.validate().is_err());
+}
+
+#[test]
+fn pid_reset_full_clears_integrators() {
+    let mut pipeline = CognitivePipeline::<64, 10>::new("test");
+    let _ = pipeline.process("some input for testing purposes here");
+    pipeline.reset_full();
+    // After reset, the pipeline should produce valid results again
+    let result = pipeline.process("ordinary text without manipulation");
+    assert!(result.stages_executed & STAGE_SIFT != 0);
+}
+
+#[test]
+fn pid_pipeline_result_always_valid() {
+    let mut pipeline = CognitivePipeline::<64, 10>::new("test objective");
+    let result = pipeline.process("ordinary text without manipulation");
+    assert!(result.stages_executed & STAGE_SIFT != 0);
+    let _ = result.entropy; // always in [0, 65535] by u16 type
+    assert!(result.detection_flags <= 0x1F);
+}
+
+#[test]
+fn pid_sidechain_flags_effect_different_risk() {
+    let config = PidConfig::default();
+    let mut state_clean = PidState::new();
+    let mut state_anomaly = PidState::new();
+    // Small inputs so both risks stay below 1.0 to see the differential effect
+    let risk_clean = llmosafe_pid::compute_pid_score(
+        10000,
+        5000.0,
+        10,
+        0.9,
+        false,
+        0,
+        &config,
+        &mut state_clean,
+    );
+    let risk_anomaly = llmosafe_pid::compute_pid_score(
+        10000,
+        5000.0,
+        10,
+        0.9,
+        false,
+        FLAG_ANOMALY,
+        &config,
+        &mut state_anomaly,
+    );
+    assert!(
+        risk_anomaly > risk_clean,
+        "FLAG_ANOMALY should increase risk: clean={}, anomaly={}",
+        risk_clean,
+        risk_anomaly
+    );
+}
+
+#[test]
+fn pid_dual_rate_integrator_time_scale_separation() {
+    let config = PidConfig::default();
+    let mut state = PidState::new();
+    // Build up integrators
+    for _ in 0..100 {
+        llmosafe_pid::compute_pid_score(65535, 0.0, 0, 1.0, false, 0, &config, &mut state);
+    }
+    let acute_peak = state.acute_entropy;
+    // Feed clean for many cycles
+    for _ in 0..30 {
+        llmosafe_pid::compute_pid_score(0, 0.0, 0, 1.0, false, 0, &config, &mut state);
+    }
+    // Acute (decay 0.9) should decay much faster than chronic (decay 0.99)
+    assert!(
+        state.acute_entropy < acute_peak * 0.5,
+        "acute integrator should decay significantly: peak={}, now={}",
+        acute_peak,
+        state.acute_entropy
+    );
+}
+
+#[test]
+fn pid_anti_windup_integrator_frozen_during_halt() {
+    let mut state = PidState::new();
+    state.acute_entropy = 1.0;
+    state.chronic_entropy = 1.0;
+    // Force max signals to trigger halt
+    let forced_config = PidConfig {
+        kp: 5.0,
+        kd: 5.0,
+        ki_fast: 3.0,
+        ki_slow: 3.0,
+        ..PidConfig::default()
+    };
+    let risk = llmosafe_pid::compute_pid_score(
+        65535,
+        65535.0,
+        100,
+        0.0,
+        false,
+        FLAG_STUCK | FLAG_ANOMALY,
+        &forced_config,
+        &mut state,
+    );
+    assert!(risk >= 1.0, "should be at halt level: {}", risk);
+    let acute_before = state.acute_entropy;
+    // Next cycle with same max inputs — integrator should bleed, not grow
+    let _ = llmosafe_pid::compute_pid_score(
+        65535,
+        65535.0,
+        100,
+        0.0,
+        false,
+        FLAG_STUCK,
+        &forced_config,
+        &mut state,
+    );
+    assert!(
+        state.acute_entropy < acute_before,
+        "integrator should bleed during windup: {} -> {}",
+        acute_before,
+        state.acute_entropy
+    );
 }

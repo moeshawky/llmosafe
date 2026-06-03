@@ -153,6 +153,19 @@ pub enum StabilityResult {
 pub const STABILITY_THRESHOLD: i128 = 50000;
 pub const PRESSURE_THRESHOLD: i128 = 40000;
 
+/// Detection flag: repetition count exceeded max_repetitions.
+pub const FLAG_STUCK: u8 = 0x01;
+/// Detection flag: drift_score exceeds drift_threshold.
+pub const FLAG_DRIFTING: u8 = 0x02;
+/// Detection flag: latest confidence below min_confidence.
+pub const FLAG_LOW_CONFIDENCE: u8 = 0x04;
+/// Detection flag: consecutive confidence drops exceed decay_threshold.
+pub const FLAG_DECAYING: u8 = 0x08;
+/// Detection flag: CUSUM s_high or s_low exceeds threshold h.
+pub const FLAG_ANOMALY: u8 = 0x10;
+/// All detection flag bits.
+pub const DETECTION_FLAGS_MASK: u8 = 0x1F;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CognitiveStability {
@@ -355,6 +368,44 @@ impl Synapse {
             return Err(KernelError::CognitiveInstability);
         }
         Ok(())
+    }
+
+    /// Packs 5 detection flags into reserved bits 0-4.
+    ///
+    /// Input `flags` is masked to lower 5 bits (`flags & 0x1F`).
+    /// Other reserved bits (5-27) are preserved.
+    pub fn set_detection_flags(&mut self, flags: u8) {
+        let current = self.reserved();
+        let cleared = current & !0x1Fu32;
+        self.set_reserved(cleared | (flags as u32 & 0x1F));
+    }
+
+    /// Returns the lower 5 bits of the reserved field as detection flags.
+    pub fn detection_flags(&self) -> u8 {
+        (self.reserved() & 0x1F) as u8
+    }
+
+    /// Packs OOV ratio into reserved bits 5-12.
+    ///
+    /// Maps 0=0% OOV, 255=100% OOV. Preserves detection flags (bits 0-4)
+    /// and upper reserved bits (bits 13-27).
+    pub fn set_oov_ratio(&mut self, ratio: u8) {
+        let current = self.reserved();
+        let cleared = current & !0x1FE0u32;
+        self.set_reserved(cleared | (((ratio as u32) & 0xFF) << 5));
+    }
+
+    /// Returns bits 5-12 of the reserved field as OOV ratio.
+    pub fn oov_ratio(&self) -> u8 {
+        ((self.reserved() >> 5) & 0xFF) as u8
+    }
+
+    /// Zeros detection_flags (bits 0-4) and oov_ratio (bits 5-12) in reserved field.
+    ///
+    /// Upper reserved bits (13-27) are NOT modified.
+    pub fn clear_detection(&mut self) {
+        let current = self.reserved();
+        self.set_reserved(current & !0x1FFFu32);
     }
 }
 

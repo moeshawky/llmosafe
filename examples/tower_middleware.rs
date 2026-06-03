@@ -4,6 +4,7 @@
 //! using the Tower ecosystem.
 //!
 //! Run with: cargo run --example tower_middleware --features full
+#![allow(deprecated)]
 
 use llmosafe::{
     sift_perceptions, EscalationPolicy, PressureLevel, SafetyContext, SafetyDecision, WorkingMemory,

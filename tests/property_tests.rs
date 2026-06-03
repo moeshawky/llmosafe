@@ -1,6 +1,7 @@
 //! Property-based tests using proptest
 //!
 //! These tests verify invariants hold across a wide range of inputs.
+#![allow(deprecated)]
 #[cfg(feature = "testing")]
 use llmosafe::{
     calculate_halo_signal, get_bias_breakdown, sift_perceptions, ConfidenceTracker, DriftDetector,

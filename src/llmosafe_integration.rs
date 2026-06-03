@@ -185,6 +185,7 @@ impl From<u8> for PressureLevel {
 ///
 /// The EscalationPolicy defines the thresholds at which inputs transition
 /// from Proceed → Warn → Escalate → Halt.
+#[deprecated = "Use PidConfig with CognitivePipeline instead. Set use_pid=true and provide pid_config."]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EscalationPolicy {

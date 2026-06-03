@@ -1,6 +1,7 @@
 //! Integration tests for llmosafe
 //!
 //! These tests verify that all tiers work together correctly.
+#![allow(deprecated)]
 
 #[cfg(all(feature = "std", feature = "testing"))]
 mod std_tests {

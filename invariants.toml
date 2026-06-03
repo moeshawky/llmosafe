@@ -119,3 +119,111 @@ name = "no_silent_pressure_zone"
 chain = ["sift", "memory", "kernel"]
 description = "Entropy in [PRESSURE_THRESHOLD, STABILITY_THRESHOLD] must compute Pressure via stability(). debug_assert! fires at validate()/next_step() boundaries when Pressure zone is silent (monitoring gate; full routing deferred to v0.8 CognitivePipeline)"
 check = "if raw_entropy >= PRESSURE_THRESHOLD: synapse.stability() >= Pressure"
+
+# ── Pipeline: stage ordering ─────────────────────────────────────
+
+[[invariant]]
+name = "pipeline_stages_sequential"
+chain = ["pipeline"]
+description = "STAGE_SIFT (0x01) through STAGE_MONITOR (0x10) must occupy non-overlapping bits and execute in strict order. A halted stage must not produce subsequent stage bits."
+check = "stages_executed is subset of {SIFT, MEMORY, KERNEL, DETECTION, MONITOR} and stage N+1 → stage N is set"
+
+[[invariant]]
+name = "pipeline_result_matches_decision"
+chain = ["pipeline"]
+description = "PipelineResult.decision must be consistent with process() output. Halt implies detection_flags or memory/kernel error; Escalate implies detection active or pressure elevated."
+check = "pipeline.process(text).halt_reason().is_some() iff decision.must_halt()"
+
+[[invariant]]
+name = "pipeline_reset_full_clears_state"
+chain = ["pipeline"]
+description = "reset_full() must zero step_count and clear all detector ring buffers."
+check = "step_count == 0 after reset_full(); calling process() again produces fresh PipelineResult"
+
+# ── C-ABI arena: handle lifecycle ─────────────────────────────────
+
+[[invariant]]
+name = "c_abi_handle_bounds"
+chain = ["c_abi"]
+description = "llmosafe_create returns handle in [0, 15] on success, usize::MAX on failure. llmosafe_sift_and_process and llmosafe_get_decision return -9 for handles >= 16 or uninitialized slots."
+check = "handle < 16 or handle == usize::MAX"
+
+[[invariant]]
+name = "c_abi_decision_code_semantics"
+chain = ["c_abi"]
+description = "0=Proceed, 1=Warn, 2=Escalate. Negative codes: -1=DepthExceeded, -2=CognitiveInstability, -3=BiasHaloDetected, -4=HallucinationDetected, -5=ResourceExhaustion, -6=SelfMemoryExceeded, -7=DeadlineExceeded, -8=Exit, -9=invalid/not_processed."
+check = "decision_to_code() mirrors existing llmosafe_check_resources error mapping; llmosafe_get_decision() after destroy returns -9"
+
+[[invariant]]
+name = "c_abi_arena_exhaustion"
+chain = ["c_abi"]
+description = "Arena holds max 16 concurrent pipelines. 17th llmosafe_create() returns usize::MAX."
+check = "16 creations succeed, 17th fails"
+
+[[invariant]]
+name = "c_abi_sift_and_process_stores_result"
+chain = ["c_abi", "pipeline"]
+description = "After llmosafe_sift_and_process(handle, ...), llmosafe_get_decision(handle) must return the same code."
+check = "let c1 = sift_and_process(h, text); let c2 = get_decision(h); assert_eq!(c1, c2);"
+
+# ── PID Decision Subsystem ──────────────────────────────────────
+
+[[invariant]]
+name = "pid_risk_score_bounded"
+chain = ["pid"]
+description = "compute_pid_score() must return f32 in [0.0, 1.0]"
+check = "0.0 <= risk <= 1.0 && risk.is_finite()"
+
+[[invariant]]
+name = "pid_dual_integrator_bounded"
+chain = ["pid"]
+description = "Both acute_entropy and chronic_entropy must be in [0.0, 1.0]"
+check = "0.0 <= state.acute_entropy <= 1.0 && 0.0 <= state.chronic_entropy <= 1.0"
+
+[[invariant]]
+name = "pid_decision_monotonic"
+chain = ["pid"]
+description = "Higher RiskScore must produce >= severity decision"
+check = "if r1 >= r2: pid_risk_to_decision(r1).severity() >= pid_risk_to_decision(r2).severity()"
+
+[[invariant]]
+name = "pid_bias_override"
+chain = ["pid"]
+description = "When has_bias=true, RiskScore must be >= halt_gain"
+check = "if has_bias: risk >= config.halt_gain"
+
+[[invariant]]
+name = "pid_anti_windup"
+chain = ["pid"]
+description = "Integrator update freezes when risk >= halt_gain"
+check = "if risk >= halt_gain: integrators unchanged (or bled at 0.999x)"
+
+[[invariant]]
+name = "pid_sidechain_bounded"
+chain = ["pid"]
+description = "All gain multipliers from modulate_gains() must be in [0.5, 2.0]"
+check = "eff.kp in [0.5*kp, 2.0*kp] and similarly for ki_fast, ki_slow, kd, kf"
+
+[[invariant]]
+name = "pid_sidechain_clean"
+chain = ["pid"]
+description = "When no detection flags are set, gains return to identity (1.0x)"
+check = "flags == 0 → all effective gains equal config gains"
+
+[[invariant]]
+name = "pid_reset_full_clears"
+chain = ["pid", "pipeline"]
+description = "reset_full() must zero cumulative_entropy (both acute and chronic) and prev_pressure_norm"
+check = "pid_state.acute_entropy == 0 && pid_state.chronic_entropy == 0 && pid_state.prev_pressure_norm == 0"
+
+[[invariant]]
+name = "pid_legacy_compat"
+chain = ["pid", "pipeline"]
+description = "When use_pid=false, pipeline behaviour must be identical to v0.7.x"
+check = "PipelineConfig::default().use_pid == false"
+
+[[invariant]]
+name = "pid_config_validates"
+chain = ["pid", "pipeline"]
+description = "When use_pid=true, pid_config must be Some and pass PidConfig::validate()"
+check = "if config.use_pid: config.pid_config.is_some() && config.pid_config.as_ref().unwrap().validate().is_ok()"

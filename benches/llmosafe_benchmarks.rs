@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 #[cfg(feature = "testing")]
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 #[cfg(feature = "testing")]
