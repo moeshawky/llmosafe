@@ -1,21 +1,22 @@
 //! LLMOSAFE Tier 1 Cognitive Kernel
 //!
-//! Implements the formal stability layer using cognitive entropy tracking
-//! and dynamic stability monitoring. Uses bit-index envelope tracking for
-//! O(1) adaptive thresholds without statistical assumptions.
+//! Formal stability layer using cognitive entropy tracking. Validates sifted
+//! data through the entropy stability gate before execution.
 //!
-//! # Architecture
+//! # Thresholds
 //!
-//! The safety architecture draws from three domains:
+//! - `STABILITY_THRESHOLD = 50000` — entropy above this is `Unstable`
+//! - `PRESSURE_THRESHOLD = 40000` — entropy above this is `Pressure`
 //!
-//! 1. **Robust Model Predictive Control (RMPC)** — Concentric container
-//!    boundaries for uncertainty quantification.
-//! 2. **Neural Memory Systems (Titans)** — Surprise-based gating for
-//!    state updates.
-//! 3. **Selective Attention (SCS)** — Bias/halo screening at perceptual
-//!    boundaries.
+//! Entropy range is [0, 65535]. Binary entropy `H(p) = 4p(1-p)` peaks at
+//! p=0.5 (maximum classifier uncertainty) and drops to 0 at both extremes.
+//! Both "confidently safe" and "confidently dangerous" are stable states.
 //!
-//! See the main README for full citations.
+//! # Components
+//!
+//! - `CognitiveEntropy<P,S>` — fixed-point entropy with precision P, scale S
+//! - `Synapse` — 128-bit input signal from the sifter (entropy, surprise, bias, hash)
+//! - `DynamicStabilityMonitor` — self-calibrating envelope tracker using MSB-index bits
 
 /// Cognitive entropy tracker using fixed-point arithmetic.
 /// Precision 28, scale 2 ensures deterministic arithmetic

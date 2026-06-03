@@ -1,10 +1,15 @@
-//! llmosafe_body — Physical resource guard (the autonomic nervous system).
+//! llmosafe_body — Resource Guard (Tier 0)
 //!
-//! Monitors RSS memory, maps to CognitiveEntropy, triggers KernelError
-//! when physical resource thresholds are crossed.
+//! Monitors RSS memory, CPU load, and I/O wait on Linux and Windows.
+//! Maps resource pressure to escalation decisions via `EscalationPolicy`.
 //!
-//! This module requires `std` (reads `/proc` on Linux, Win32 API on Windows).
-//! Disabled in `no_std` builds.
+//! Resource entropy is in [0, 1000] range (weighted combination of RSS ratio,
+//! I/O wait, and system load). Pressure percentage is in [0, 100].
+//!
+//! `check_blocking()` and `check_with_deadline()` use `decide_with_pressure()`
+//! to incorporate both resource entropy and pressure level into the decision.
+//!
+//! Requires `std` (reads `/proc` on Linux, Win32 API on Windows).
 
 use crate::llmosafe_kernel::{KernelError, Synapse};
 use std::fs;

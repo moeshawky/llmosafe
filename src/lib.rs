@@ -6,14 +6,34 @@
 // required by the upstream crate's code generation.
 #![allow(unused_parens)]
 
-//! LLMOSAFE: A Safety-Critical AI Agent Library
+//! LLMOSAFE: Runtime Safety Guardrails
 //!
-//! This library provides the formal primitives for building safety-critical AI agents.
-//! It implements a 4-tier safety architecture:
-//! - Tier 0: Resource Body (Physical safety - requires `std`)
-//! - Tier 1: Deterministic Kernel (Formal Law)
-//! - Tier 2: Cognitive Working Memory (Stateful Safety)
-//! - Tier 3: Perceptual Sifter (Boundary Safety)
+//! A 4-tier safety architecture for systems processing untrusted inputs.
+//! Provides three gauges — bias, surprise, entropy — that answer "should I stop?"
+//!
+//! # Architecture
+//!
+//! - **Tier 3: Perceptual Sifter** — TF-IDF classifier trained on 42K real samples
+//!   detects manipulation patterns. Streaming FNV-1a tokenizer, binary search in
+//!   sorted vocab, zero-alloc, `no_std` compatible.
+//! - **Tier 2: Working Memory** — Surprise-gated ring buffer with mean, variance,
+//!   and trend statistics. Fixed size, no heap.
+//! - **Tier 1: Cognitive Kernel** — Binary entropy-based stability check.
+//!   Bounded `ReasoningLoop<MAX_STEPS>`. Self-calibrating `DynamicStabilityMonitor`.
+//! - **Tier 0: Resource Body** (requires `std`) — RSS memory monitoring,
+//!   CPU load tracking, pressure-based escalation.
+//!
+//! # Quick Usage
+//!
+//! ```no_compile
+//! use llmosafe::{sift_perceptions, WorkingMemory, ReasoningLoop};
+//!
+//! let (sifted, proof) = sift_perceptions(&["observation"], "safety");
+//! let mut memory = WorkingMemory::<64>::new(58000);
+//! let (validated, proof) = memory.update(sifted, proof)?;
+//! let mut loop_guard = ReasoningLoop::<10>::new();
+//! loop_guard.next_step(validated, proof)?;
+//! ```
 
 #[cfg(not(feature = "std"))]
 use core::panic::PanicInfo;

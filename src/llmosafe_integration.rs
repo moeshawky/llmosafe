@@ -1,19 +1,33 @@
-//! LLMOSAFE Integration Layer - Composition primitives for external systems
+//! LLMOSAFE Integration Layer — Escalation and Decision Primitives
 //!
-//! This module provides the integration primitives that make llmosafe composable
-//! with other Rust ecosystems (tower, tokio, async runtimes) and cross-language
-//! FFI consumers.
+//! Composable with external systems (tower, tokio, async runtimes) and
+//! cross-language FFI consumers.
 //!
-//! # Architecture
+//! # Components
 //!
-//! The integration layer provides:
-//! - SafetyDecision enum for decision flow semantics
-//! - PressureLevel enum for resource pressure semantics
-//! - EscalationPolicy for configurable response thresholds
-//! - SafetyContext for thread-local decision tracking
+//! - `SafetyDecision` — typed decision outcome with cooldown
+//! - `PressureLevel` — resource pressure semantics
+//! - `EscalationPolicy` — configurable threshold-based decision engine.
+//!   Default thresholds calibrated for classifier [0,65535] range.
+//! - `SafetyContext` — thread-local decision tracking (`std` only)
+//!
+//! # EscalationPolicy Defaults
+//!
+//! | Gauge | Warn | Escalate | Halt |
+//! |-------|------|----------|------|
+//! | Entropy | 30000 | 40000 | 50000 |
+//! | Surprise | 42600 | 55700 | — |
+//! | Bias | — | Escalate | — |
 //!
 //! # Example
 //!
+//! ```no_compile
+//! use llmosafe::{SafetyDecision, EscalationPolicy};
+//!
+//! let policy = EscalationPolicy::default();
+//! // Safe text: entropy=10000, surprise=800, no bias
+//! let decision = policy.decide(10000, 800, false);
+//! assert!(matches!(decision, SafetyDecision::Proceed));
 //! ```
 //! use llmosafe::{SafetyDecision, EscalationPolicy};
 //!

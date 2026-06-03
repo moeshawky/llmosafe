@@ -1,14 +1,15 @@
-//! LLMOSAFE Tier 2 Cognitive Working Memory
+//! LLMOSAFE Tier 2 Working Memory
 //!
-//! Implements surprise-gated state updates with fixed-size storage.
-//! Uses a ring buffer of cognitive entropy values with momentum-based
-//! drift detection.
+//! Surprise-gated ring buffer. Rejects updates where the entropy value is too
+//! unexpected relative to history (via `WorkingMemory::<SIZE>::new(threshold)`).
 //!
-//! # Architecture
+//! Stores `CognitiveEntropy` values in a fixed-size ring buffer with:
+//! - `mean()`, `variance()` — running statistics
+//! - `trend()` — linear regression slope over the buffer window
 //!
-//! Drawing from TransformerFAM and Infini-attention: surprise-based
-//! gating prevents hallucination propagation, while fixed-size storage
-//! ensures stack allocation and no heap fragmentation.
+//! Entropy values are in [0, 65535]. The `new()` threshold determines how
+//! surprising a value must be (relative to mean) before rejection. Typical
+//! threshold: 58000 for classifier output.
 
 use crate::llmosafe_kernel::{
     CognitiveEntropy, KernelError, SiftedProof, SiftedSynapse, ValidatedProof, ValidatedSynapse,

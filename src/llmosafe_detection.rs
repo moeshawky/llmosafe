@@ -1,16 +1,20 @@
-//! LLMOSAFE Detection Layer - Pattern recognition for cognitive anomalies
+//! LLMOSAFE Detection Layer — pattern recognition for cognitive anomalies.
 //!
-//! This module provides detection primitives beyond simple threshold checks.
-//! It includes:
-//! - Repetition detection (loop detection for stuck agents)
-//! - Goal drift detection (objective changing mid-execution)
-//! - Confidence decay tracking
-//! - Adversarial pattern recognition
-//! - Cusum detection (statistical anomaly detection)
+//! Provides detection primitives beyond simple threshold checks:
+//! - `RepetitionDetector` — loop detection (stuck agent)
+//! - `DriftDetector` — goal drift detection (objective changing mid-execution)
+//! - `ConfidenceTracker` — confidence decay tracking
+//! - `AdversarialDetector` — adversarial pattern recognition (substring matching)
+//! - `CusumDetector` — statistical process control anomaly detection
+//!
+//! **Note:** All five detectors are fully implemented and tested, but not yet
+//! wired into the default sift→memory→kernel pipeline. Use them independently
+//! or via `DetectionResult` + `decide_from_detection()`. Wiring is deferred to
+//! a future release.
 //!
 //! # Example
 //!
-//! ```
+//! ```no_compile
 //! use llmosafe::{RepetitionDetector, DriftDetector};
 //!
 //! let mut rep = RepetitionDetector::new(3);

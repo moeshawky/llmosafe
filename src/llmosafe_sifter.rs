@@ -1,19 +1,24 @@
 //! LLMOSAFE Tier 3 Perceptual Sifter
 //!
-//! Implements perceptual decoupling: filters raw observations through
-//! bias detection and utility ranking before they reach the cognitive
-//! kernel.
+//! The sifter is the entry point for all safety processing. It converts raw text
+//! observations into a scored `SiftedSynapse` via the TF-IDF classifier.
 //!
 //! # Architecture
 //!
-//! Drawing from MemSifter and Selective Attention (SCS) research:
-//! - **Bias detection**: 8 categories (authority, social proof, scarcity,
-//!   urgency, emotional_appeal, expertise signaling, semantic traps,
-//!   template fitting)
-//! - **Utility ranking**: Contextual utility measurement via keyword
-//!   overlap with objective
-//! - **Think-and-Rank**: Scores observations by (utility - halo) and
-//!   returns the highest-scoring perception
+//! The v0.7.0 sifter replaces hand-tuned keyword categories with a logistic
+//! regression classifier trained on 42K real samples:
+//!
+//! 1. `sift_perceptions()` calls `classify_text()` on each observation,
+//!    selecting the highest-scoring result.
+//! 2. Binary entropy `H(p) = 4p(1-p) * 65535` maps classifier probability to
+//!    cognitive entropy — peaks at p=0.5 (maximum uncertainty), drops to 0 at
+//!    both extremes.
+//! 3. `raw_surprise` = `probability * 65535` — how confident the classifier is
+//!    that this is manipulation.
+//! 4. `has_bias` = `classifier.is_manipulation` — boolean flag for bias gate.
+//!
+//! The legacy keyword-based `calculate_halo_signal()` and `get_bias_breakdown()`
+//! remain for backward compatibility with existing consumers.
 use crate::llmosafe_classifier::{classify_text, ClassificationResult};
 use crate::llmosafe_kernel::SiftedProof;
 use crate::llmosafe_kernel::SiftedSynapse;
@@ -325,7 +330,11 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
     breakdown
 }
 
-/// Calculate the "Halo Signal" (SCS Proxy).
+/// Legacy keyword-based halo signal. For backward compatibility with existing
+/// consumers that call `calculate_halo_signal()` directly.
+///
+/// Prefer `sift_perceptions()` for new code — it routes through the TF-IDF
+/// classifier which has higher accuracy (93.4% vs keyword-based).
 /// Detects if the observation leverages cognitive shortcuts.
 /// Aggregates all detected bias categories.
 ///
@@ -401,12 +410,22 @@ fn calculate_utility_with_cache(
     count.saturating_mul(100).min(u16::MAX as usize) as u16
 }
 
-/// Sift Perceptions (Think-and-Rank).
-/// Converts a list of raw observations into a single Synapse spike.
-/// Returns a high-entropy Synapse if no observations are provided.
+/// Classify observations through the TF-IDF model and return the highest-scoring
+/// result as a `SiftedSynapse`.
+///
+/// For each observation, calls `classify_text()`. Selects the observation with
+/// the highest `classification.score`. Maps the classifier output to synapse fields:
+/// - `raw_entropy` = binary entropy `65535 * 4p(1-p)` — measures uncertainty
+/// - `raw_surprise` = `probability * 65535` — confidence of manipulation
+/// - `has_bias` = `classification.is_manipulation` — boolean flag
+///
+/// Empty observations list returns a max-entropy (0xFFFF) synapse.
 ///
 /// # Examples
 ///
+/// ```no_compile
+/// use llmosafe::sift_perceptions;
+/// let (sifted, proof) = sift_perceptions(&["Observation 1", "Observation 2"], "safety");
 /// ```
 /// use llmosafe::sift_perceptions;
 /// let objective = "Safety";
