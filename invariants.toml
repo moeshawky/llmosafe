@@ -37,8 +37,8 @@ check = "if validated.has_bias(): validated.validate() == Err(BiasHaloDetected)"
 [[invariant]]
 name = "kernel_validate_rejects_high_entropy"
 chain = ["memory", "kernel"]
-description = "Validated synapse with entropy > STABILITY_THRESHOLD must be rejected"
-check = "if validated.raw_entropy() > STABILITY_THRESHOLD: validated.stability() == Unstable"
+description = "Validated synapse with entropy > PRESSURE_THRESHOLD (40000) must be rejected by validate(). STABILITY_THRESHOLD (50000) remains as the Unstable/Halt boundary in stability() and EscalationPolicy."
+check = "if validated.raw_entropy() > PRESSURE_THRESHOLD: validated.validate() == Err(CognitiveInstability)"
 
 [[invariant]]
 name = "kernel_depth_exceeded"
@@ -111,11 +111,11 @@ check = "Cannot construct ValidatedSynapse without going through WorkingMemory (
 [[invariant]]
 name = "sifted_vs_resource_entropy"
 chain = ["sift", "body"]
-description = "Sifter entropy and body entropy share the same range and are comparable via EscalationPolicy"
-check = "decide(sift_entropy) and decide(body_entropy) produce decisions in the same ordering"
+description = "Sifter entropy [0,65535] and body entropy [0,1000] operate on different scales. EscalationPolicy entropy thresholds target sifter range. Body entropy relies on pressure_level for gating."
+check = "0 <= body.raw_entropy() <= 1000 and 0 <= sifted.raw_entropy() <= 65535 and body.decides_with_pressure via body.rs:228"
 
 [[invariant]]
 name = "no_silent_pressure_zone"
 chain = ["sift", "memory", "kernel"]
-description = "Entropy in [PRESSURE_THRESHOLD, STABILITY_THRESHOLD] must produce a Warn or higher at some tier"
+description = "Entropy in [PRESSURE_THRESHOLD, STABILITY_THRESHOLD] must compute Pressure via stability(). debug_assert! fires at validate()/next_step() boundaries when Pressure zone is silent (monitoring gate; full routing deferred to v0.8 CognitivePipeline)"
 check = "if raw_entropy >= PRESSURE_THRESHOLD: synapse.stability() >= Pressure"

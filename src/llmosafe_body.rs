@@ -6,6 +6,13 @@
 //! Resource entropy is in [0, 1000] range (weighted combination of RSS ratio,
 //! I/O wait, and system load). Pressure percentage is in [0, 100].
 //!
+//! Body entropy \[0, 1000\] never reaches EscalationPolicy entropy thresholds
+//! (warn=30000, escalate=40000, halt=50000) — this is by design. The resource
+//! body gates on pressure_level (Critical=51-75%, Emergency=76-100%) via
+//! decide_with_pressure(). Entropy-based policy checks are dead code for body
+//! callers; pressure is the sole mechanism. The pressure percentage amplifies
+//! the raw RSS ratio into a signal the policy can act on.
+//!
 //! `check_blocking()` and `check_with_deadline()` use `decide_with_pressure()`
 //! to incorporate both resource entropy and pressure level into the decision.
 //!

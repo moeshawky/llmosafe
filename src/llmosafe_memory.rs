@@ -279,7 +279,10 @@ pub mod cognitive_memory {
     use crate::llmosafe_kernel::Synapse;
     use std::sync::Mutex;
 
-    static GLOBAL_MEMORY: Mutex<WorkingMemory<64>> = Mutex::new(WorkingMemory::<64>::new(500));
+    // Threshold=58000 matches the classifier surprise range [0,65535].
+    // C-ABI callers set raw_surprise directly in the Synapse bits;
+    // values >58000 will be rejected as HallucinationDetected (-4).
+    static GLOBAL_MEMORY: Mutex<WorkingMemory<64>> = Mutex::new(WorkingMemory::<64>::new(58000));
 
     pub fn process_state_update(synapse_bits: u128) -> i32 {
         let synapse = Synapse::from_raw_u128(synapse_bits);

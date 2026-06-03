@@ -68,6 +68,7 @@ __pycache__/
 .ix/
 
 # --- RNA artifacts (AI-generated, never committed per AGENTS.md) ---
+AGENTS.md
 .annotations/
 
 # --- AI-generated audit/analysis artifacts ---

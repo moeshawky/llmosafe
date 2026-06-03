@@ -5,8 +5,9 @@
 //!
 //! # Thresholds
 //!
-//! - `STABILITY_THRESHOLD = 50000` — entropy above this is `Unstable`
-//! - `PRESSURE_THRESHOLD = 40000` — entropy above this is `Pressure`
+//! - `STABILITY_THRESHOLD = 50000` — stability() classifies entropy above this as `Unstable`
+//! - `PRESSURE_THRESHOLD = 40000` — validate() and next_step() gate on this; entropy
+//!   above this returns `CognitiveInstability` (Pressure zone is gated at the boundary).
 //!
 //! Entropy range is [0, 65535]. Binary entropy `H(p) = 4p(1-p)` peaks at
 //! p=0.5 (maximum classifier uncertainty) and drops to 0 at both extremes.
@@ -259,7 +260,7 @@ impl<const MAX_STEPS: usize> ReasoningLoop<MAX_STEPS> {
 
         // Concentric Container Check: Is the cognitive flow still within stable bounds?
         // (Inspired by Robust Model Predictive Control)
-        if !synapse.entropy().is_stable(STABILITY_THRESHOLD) {
+        if !synapse.entropy().is_stable(PRESSURE_THRESHOLD) {
             return Err(KernelError::CognitiveInstability);
         }
 
@@ -350,7 +351,7 @@ impl Synapse {
         if self.has_bias() {
             return Err(KernelError::BiasHaloDetected);
         }
-        if !self.entropy().is_stable(STABILITY_THRESHOLD) {
+        if !self.entropy().is_stable(PRESSURE_THRESHOLD) {
             return Err(KernelError::CognitiveInstability);
         }
         Ok(())
