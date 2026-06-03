@@ -11,7 +11,7 @@ readme = "README.md"
 homepage = "https://github.com/moeshawky/llmosafe"
 keywords = ["safety", "ai-agent", "entropy", "detection", "guardrails"]
 categories = ["development-tools", "algorithms", "embedded", "no-std"]
-exclude = [".github/", ".sniper/", "target/", "tests/"]
+exclude = [".github/", ".sniper/", "target/", "tests/", "/AGENTS.md", "/data/", "/Cargo.lock", "/DESIGN_DECISION_*.md", "/RECOMMENDATIONS.md"]
 
 [dependencies]
 modular-bitfield = "0.11.2"
