@@ -55,7 +55,7 @@ fn main() {
 
     middleware.pipeline.reset_full();
 
-    println!("");
+    println!();
     let more_requests = [
         "Another completely routine query about programming",
         "Another simple request for help",
