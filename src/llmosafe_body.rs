@@ -671,4 +671,24 @@ mod tests {
             ratio
         );
     }
+
+    #[test]
+    fn test_current_rss_bytes() {
+        let rss = ResourceGuard::current_rss_bytes();
+        #[cfg(unix)]
+        assert!(rss > 0, "RSS bytes should be > 0 on unix systems, got {}", rss);
+        #[cfg(not(unix))]
+        let _ = rss; // Just verify it runs
+    }
+
+    #[test]
+    fn test_try_current_rss_bytes() {
+        let rss = ResourceGuard::try_current_rss_bytes();
+        #[cfg(unix)]
+        assert!(rss.is_some(), "try_current_rss_bytes should return Some on unix systems");
+        #[cfg(unix)]
+        assert!(rss.unwrap() > 0, "RSS bytes should be > 0");
+        #[cfg(not(unix))]
+        let _ = rss; // Just verify it runs
+    }
 }
