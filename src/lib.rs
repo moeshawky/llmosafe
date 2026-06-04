@@ -112,6 +112,10 @@ mod c_abi {
 
     #[allow(dead_code)]
     struct PipelineSlot {
+        /// Pipeline that borrows `objective` from `objective_buf` below.
+        /// The `'static` lifetime is safe because `objective_buf` is declared
+        /// after `pipeline` in field order — Rust drops fields in declaration
+        /// order, so the buffer outlives the pipeline borrow.
         pipeline: CognitivePipeline<'static, 64, 10>,
         /// Fixed-size buffer for objective string. Declared after `pipeline`
         /// so it drops after the pipeline (field-declaration order drop).
@@ -178,6 +182,8 @@ mod c_abi {
         // SAFETY: objective_ptr non-null and objective_len in [1, MAX_OBJECTIVE_LEN]
         // validated above. The slice is consumed immediately via from_utf8.
         let slice = unsafe { core::slice::from_raw_parts(objective_ptr, objective_len) };
+        // UTF-8 fallback is intentional fail-closed: invalid bytes → "safety"
+        // (the most conservative objective, triggering maximum scrutiny).
         let input_str = std::str::from_utf8(slice).unwrap_or("safety");
         let mut objective_buf = Box::new([0u8; MAX_OBJECTIVE_LEN]);
         let objective = unsafe { store_objective(&mut objective_buf, input_str) };

@@ -10,9 +10,8 @@
 //!
 //! 1. `sift_perceptions()` calls `classify_text()` on each observation,
 //!    selecting the highest-scoring result.
-//! 2. Binary entropy `H(p) = 4p(1-p) * 65535` maps classifier probability to
-//!    cognitive entropy — peaks at p=0.5 (maximum uncertainty), drops to 0 at
-//!    both extremes.
+//! 3. **Entropy**: Normalised entropy `[0, 65535]`, computed as `probability * 65535`
+//!    directly from the classifier's sigmoid output.
 //! 3. `raw_surprise` = `probability * 65535` — how confident the classifier is
 //!    that this is manipulation.
 //! 4. `has_bias` = `classifier.is_manipulation` — boolean flag for bias gate.

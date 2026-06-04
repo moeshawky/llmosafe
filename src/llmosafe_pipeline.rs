@@ -48,11 +48,19 @@ use crate::llmosafe_memory::WorkingMemory;
 use crate::llmosafe_pid::{PidConfig, PidState};
 
 /// Bitmask constants for `PipelineResult.stages_executed`.
+/// Set in `process_ctrl()` during sequential stage execution.
 pub const STAGE_SIFT: u8 = 0x01;
+/// Bitmask constant 0x02 for the MEMORY stage. Set in `process_ctrl()`.
 pub const STAGE_MEMORY: u8 = 0x02;
+/// Bitmask constant 0x04 for the KERNEL stage. Set in `process_ctrl()`.
 pub const STAGE_KERNEL: u8 = 0x04;
+/// Bitmask constant 0x08 for the DETECTION stage. Set in `process_ctrl()`.
 pub const STAGE_DETECTION: u8 = 0x08;
+/// Bitmask constant 0x10 for the MONITOR stage. Set in `process_ctrl()`.
 pub const STAGE_MONITOR: u8 = 0x10;
+/// Bitmask constant 0x20 gated behind cfg(feature="std"). Defined but never
+/// set in `process_ctrl()` — the BODY stage was moved into
+/// `process_with_pressure()` as a pre-SIFT gate.
 #[cfg(feature = "std")]
 pub const STAGE_BODY: u8 = 0x20;
 
@@ -197,6 +205,10 @@ pub struct CognitivePipeline<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> 
     step_count: usize,
     pid_state: PidState,
     pid_config: PidConfig,
+    /// Drift threshold [0.0, 1.0]. Stored for `reset_detectors()` and `reset_full()`.
+    drift_threshold: f32,
+    /// Surprise threshold for `WorkingMemory` reconstruction in `reset_full()`.
+    surprise_threshold: i128,
 }
 
 impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, MEM_SIZE, MAX_STEPS> {
@@ -227,6 +239,8 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             step_count: 0,
             pid_state: PidState::new(),
             pid_config: config.pid_config,
+            drift_threshold: config.drift_threshold,
+            surprise_threshold: config.surprise_threshold,
         })
     }
 
@@ -283,10 +297,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         self.confidence.reset();
         self.cusum.reset();
         self.monitor.reset();
-        // DriftDetector has no reset method — reconstruct from objective
-        let dt = self.drift.drift_score();
-        let _ = dt;
-        self.drift = DriftDetector::new(self.objective, 0.5);
+        self.drift = DriftDetector::new(self.objective, self.drift_threshold);
     }
 
     /// Full reset to post-construction state.
@@ -294,11 +305,11 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
     /// Clears detectors, monitor, memory ring buffer (all entropy entries zeroed),
     /// reasoning step count, and PID integrators. Objective string is preserved.
     pub fn reset_full(&mut self) {
-        self.memory = WorkingMemory::<MEM_SIZE>::new(58000);
+        self.memory = WorkingMemory::<MEM_SIZE>::new(self.surprise_threshold);
         self.reasoning = ReasoningLoop::<MAX_STEPS>::new();
         self.monitor.reset();
         self.repetition.reset();
-        self.drift = DriftDetector::new(self.objective, 0.5);
+        self.drift = DriftDetector::new(self.objective, self.drift_threshold);
         self.confidence.reset();
         self.cusum.reset();
         self.step_count = 0;
@@ -438,6 +449,8 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         if e_body > 0.9 {
             override_flags = override_flags | OverrideFlags::EXHAUSTED;
         }
+        // Shadow validator: memory stage gates at 40000, so kernel_entropy > 50000
+        // can only be reached if the memory stage is bypassed or modified.
         if u32::from(kernel_entropy) > STABILITY_THRESHOLD as u32 {
             override_flags = override_flags | OverrideFlags::KERNEL_UNSTABLE;
         }
@@ -475,6 +488,14 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         }
     }
 
+    /// Constructs a `PipelineResult` from a `WorkingMemory` error (`KernelError`).
+    ///
+    /// Maps `HallucinationDetected` → `Escalate` (5000ms cooldown),
+    /// `CognitiveInstability` → `Halt` (30000ms),
+    /// `BiasHaloDetected` → `Halt` (30000ms),
+    /// all other errors → `Halt(error, 30000ms)`.
+    /// Constructs a fresh `Synapse` with entropy populated, detection_flags=0,
+    /// monitor_state=Stable, kernel_output=None.
     fn ctrl_result_from_error(
         &self,
         err: KernelError,
@@ -536,6 +557,14 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         }
     }
 
+    /// Constructs a `PipelineResult` from a `ReasoningLoop` error (`KernelError`).
+    ///
+    /// Maps `DepthExceeded` → `Escalate` (10000ms cooldown),
+    /// `BiasHaloDetected` → `Halt` (30000ms),
+    /// `CognitiveInstability` → `Halt` (30000ms),
+    /// all other errors → `Halt(error, 30000ms)`.
+    /// Constructs a fresh `Synapse` with entropy populated, detection_flags=0,
+    /// monitor_state=Stable, kernel_output=None.
     fn ctrl_result_from_kernel_error(
         &self,
         err: KernelError,

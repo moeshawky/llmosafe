@@ -119,19 +119,24 @@ impl OverrideFlags {
     /// Kernel instability forces risk ≥ halt_gain.
     pub const KERNEL_UNSTABLE: Self = Self(0x04);
 
+    /// Returns OverrideFlags(0) — a bitfield with no flags set.
     pub const fn empty() -> Self {
         Self(0)
     }
 
+    /// Returns true if all bits set in `other` are also set in `self`, using bitwise AND equality check.
     pub const fn contains(&self, other: Self) -> bool {
         (self.0 & other.0) == other.0
     }
 
+    /// Constructs OverrideFlags from raw u8 bits, masking to lower 3 bits (0x07).
+    /// Unknown upper bits are discarded.
     pub const fn from_bits(bits: u8) -> Self {
         Self(bits & 0x07)
     }
 }
 
+/// Combines two OverrideFlags via bitwise OR of their inner u8 values.
 impl core::ops::BitOr for OverrideFlags {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self {
@@ -179,6 +184,10 @@ impl PidInput {
     // Allow: PidInput is a flat data-transfer struct for the 4-tier PID
     // cascade. A builder pattern would require allocation — inappropriate
     // for no_std Tier-2 (see SYS-SPEC-602 §7.3.4).
+    /// Constructor taking 9 parameters and storing them directly into corresponding
+    /// struct fields. No validation or transformation performed — raw field assignment.
+    /// Uses #[allow(clippy::too_many_arguments)] because a builder pattern would
+    /// require allocation, inappropriate for no_std Tier-2.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         e_body: f32,

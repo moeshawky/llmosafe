@@ -24,9 +24,10 @@
 //! # Sidechain
 //!
 //! Detection flags (already computed per cycle in the pipeline) modulate PID gains:
-//! stuck doubles Ki (loop detection), drifting boosts Kd 50% (velocity), adversarial
-//! boosts Kf 100% (classifier amp), low_confidence cuts all gains 25% (conservatism),
-//! anomaly boosts Kd 100% (rate-of-change event).
+//! stuck boosts Kp and Ki_slow ×1.3 (loop detection), drifting boosts Kd ×1.2
+//! (velocity), decaying boosts Ki_fast ×1.3 (confidence collapse), low_confidence
+//! boosts Kf ×1.5 (classifier amp), anomaly boosts Kd ×1.5 (rate-of-change)
+//! overrides drifting. When no flags are set, all multipliers return to 1.0.
 
 use crate::control_types::OverrideFlags;
 use crate::llmosafe_integration::{EscalationReason, SafetyDecision};
@@ -62,6 +63,9 @@ pub struct PidConfig {
 }
 
 impl Default for PidConfig {
+    /// Sets kp=1.0, ki_fast=0.5, ki_slow=0.3, kd=2.0, kf=0.3,
+    /// warn_gain=0.5, halt_gain=1.0, integrator_decay=0.99,
+    /// step_change_threshold=0.5.
     fn default() -> Self {
         Self {
             kp: 1.0,
@@ -168,12 +172,15 @@ impl PidState {
 }
 
 impl Default for PidState {
+    /// Delegates to PidState::new(), returning zero-initialized state.
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Effective gains after sidechain modulation from detection flags.
+/// Private struct holding modulated gain values after sidechain detection
+/// flags are applied. Fields: kp, ki_fast, ki_slow, kd, kf (all f32).
+/// Constructed only by `modulate_gains()`.
 struct EffectiveGains {
     kp: f32,
     ki_fast: f32,
@@ -385,7 +392,7 @@ pub fn apply_safety_overrides(risk: f32, flags: OverrideFlags, config: &PidConfi
 /// Maps a risk score to a `SafetyDecision` via gain thresholds.
 ///
 /// * `risk < warn_gain` → `Proceed`
-/// * `warn_gain ≤ risk < halt_gain` → `Warn`
+/// * `warn_gain ≤ risk < halt_gain` → `Escalate` (carries entropy=0)
 /// * `risk ≥ halt_gain` → `Halt(CognitiveInstability, 30000)`
 pub fn pid_risk_to_decision(risk: f32, config: &PidConfig) -> SafetyDecision {
     debug_assert!(
