@@ -39,6 +39,7 @@ tools/__init__.py
 tools/train_full_pipeline.py
 tools/train_tfidf_classifier.py
 tools/download_hf_datasets.py
+tools/generate_training_data.py
 tools/generate_sifter_data/
 # tools/vocab_model.bin is the single exception — it is the compiled
 # classifier embedded into the Rust crate at build time.  Without it
