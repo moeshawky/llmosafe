@@ -15,7 +15,7 @@ create_exception!(_llmosafe, ResourceExhaustedError, LLMOSafeError,
     "RSS memory has reached or exceeded the configured ceiling.\n\nThis is an enforcement-grade signal — you MUST stop processing.\n\nNote: This monitors RSS memory only, not filesystem capacity.\nRSS pressure often precedes disk exhaustion because processes\nbuffering large writes consume RAM before flushing to disk."
 );
 create_exception!(_llmosafe, CognitiveInstabilityError, LLMOSafeError,
-    "Cognitive entropy has exceeded the stability threshold (1000).\n\nThis is an enforcement-grade signal — system state is too chaotic\nto continue safely."
+    "Cognitive entropy has exceeded the stability threshold (PRESSURE_THRESHOLD = 40000).\n\nThis is an enforcement-grade signal — system state is too chaotic\nto continue safely. Entropy range is [0, 65535]."
 );
 create_exception!(_llmosafe, BiasHaloDetectedError, LLMOSafeError,
     "Bias manipulation patterns detected in input text.\n\nThis is an enforcement-grade signal — the input may be attempting\nto manipulate the system into ignoring safety limits."
@@ -25,36 +25,36 @@ create_exception!(_llmosafe, BiasHaloDetectedError, LLMOSafeError,
 
 use ::llmosafe::llmosafe_body::ResourceGuard;
 use ::llmosafe::llmosafe_kernel::{KernelError, Synapse};
-use ::llmosafe::llmosafe_sifter::calculate_halo_signal;
+use ::llmosafe::llmosafe_sifter::sift_text;
 use ::llmosafe::llmosafe_body::llmosafe_get_environmental_entropy;
 use ::llmosafe::llmosafe_memory::cognitive_memory::process_state_update;
 
 // ── Bias Detection ─────────────────────────────────────────────
 
-/// Calculate the "halo signal" (bias score) for text.
+/// Calculate the bias entropy score for text via dual-path analysis.
 ///
-/// Scans for 8 manipulation categories. Each keyword match adds +100
-/// to the score. Negation-aware: "not an expert" produces 0 authority
-/// score (negation window is 3 tokens).
+/// Routes text through the full dual-path sifter: classifier (adaptive
+/// layer, trained on 42K samples) + keyword-bias (innate backstop layer).
+/// Returns the combined entropy in `[0, 65535]` — the greater of the
+/// two layers' scores.
 ///
-/// **Categories** (score per match = +100):
+/// **Dual-path architecture:**
+/// - **Classifier layer** (adaptive): TF-IDF logistic regression with
+///   93.4% accuracy. Detects learned manipulation patterns.
+/// - **Keyword layer** (innate): 8 bias categories (authority, social
+///   proof, scarcity, urgency, emotional appeal, expertise signaling,
+///   semantic traps, template fitting). Negation-aware.
 ///
-/// | Category           | Example Keywords                         |
-/// |--------------------|------------------------------------------|
-/// | Authority          | expert, official, certified, proven      |
-/// | Social Proof       | popular, trending, consensus, everyone   |
-/// | Scarcity           | limited, exclusive, rare, only           |
-/// | Urgency            | now, fast, deadline, act-now             |
-/// | Emotional Appeal   | shocking, miracle, tragic, desperate     |
-/// | Expertise Signal   | cutting-edge, proprietary, sophisticated|
-/// | Semantic Traps     | not but, instead of, rather than         |
-/// | Template Fitting   | as an ai, i cannot, my purpose is        |
+/// Either layer can elevate the score. The output is `max(classifier_score,
+/// keyword_score)` — no double-counting.
 ///
 /// Args:
 ///     text: Input text to scan for manipulation patterns.
 ///
 /// Returns:
-///     Cumulative bias score (0 = no bias, higher = more manipulation).
+///     Combined entropy score `[0, 65535]`. 0 = safe, higher = manipulation
+///     probability. The classifier sigmoid maps to probability — 32768 ≈ p=0.5
+///     (maximum uncertainty).
 ///
 /// Example:
 ///     >>> calculate_halo("The expert provides an official recommendation")
@@ -63,7 +63,8 @@ use ::llmosafe::llmosafe_memory::cognitive_memory::process_state_update;
 ///     0
 #[pyfunction]
 fn calculate_halo(text: &str) -> u16 {
-    calculate_halo_signal(text)
+    let (sifted, _proof) = sift_text(text);
+    sifted.raw_entropy()
 }
 
 // ── Resource Management ────────────────────────────────────────

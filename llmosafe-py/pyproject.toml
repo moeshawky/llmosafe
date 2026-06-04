@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "llmosafe"
-version = "0.6.2"
+version = "0.7.0"
 description = "Predictive resource-pressure instrumentation and runtime guardrails for systems processing untrusted inputs"
 authors = [{name = "llmosafe team", email = "moe@libermoe.com"}]
 readme = "README.md"

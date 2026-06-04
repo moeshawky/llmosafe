@@ -13,7 +13,8 @@ Signal classes:
     get_system_cpu_load()       → CPU load %
 
   BEHAVIORAL SIGNALS:
-    calculate_halo()       → manipulation pattern detection in text
+    calculate_halo()       → manipulation detection via dual-path sifter
+                            (classifier + keyword bias, returns entropy [0, 65535])
 
 For disk exhaustion protection, compose llmosafe signals with
 shutil.disk_usage(). See README for the canonical cookbook.
@@ -68,7 +69,7 @@ def make_synapse(entropy: int, surprise: int = 0, has_bias: bool = False) -> int
 
     The synapse encodes cognitive state in a 64-bit integer:
 
-        Bits [0:15]  → raw_entropy   (u16, operational range 0–1000)
+        Bits [0:15]  → raw_entropy   (u16, 0–65535)
         Bits [16:31] → raw_surprise  (u16, 0–65535)
         Bit  [32]    → has_bias      (0 or 1)
         Bits [33:44] → position      (u12)
@@ -77,10 +78,14 @@ def make_synapse(entropy: int, surprise: int = 0, has_bias: bool = False) -> int
 
     For most usage, only entropy, surprise, and has_bias matter.
 
+    **v0.7.0 thresholds:**
+    Entropy is now in classifier probability space [0, 65535]:
+      0–40000  = stable, 40000–50000 = pressure, >50000 = unstable.
+    Previous v0.6.x keyword-range thresholds (0–1000) are obsolete.
+
     Args:
-        entropy:  Cognitive entropy score (0–1000).
-                  0–800 = stable, 800–1000 = pressure, >1000 = unstable.
-        surprise: Surprise level (0–65535). Rejects if > 500 in process_synapse().
+        entropy:  Cognitive entropy score (0–65535).
+        surprise: Surprise level (0–65535).
         has_bias: Whether bias was detected in the input.
 
     Returns:
@@ -88,11 +93,11 @@ def make_synapse(entropy: int, surprise: int = 0, has_bias: bool = False) -> int
 
     Example:
         >>> from llmosafe import make_synapse, get_stability
-        >>> get_stability(make_synapse(entropy=400))
+        >>> get_stability(make_synapse(entropy=500))
         0
-        >>> get_stability(make_synapse(entropy=1100))
+        >>> get_stability(make_synapse(entropy=41000))
         -2
-        >>> get_stability(make_synapse(entropy=400, has_bias=True))
+        >>> get_stability(make_synapse(entropy=500, has_bias=True))
         -3
     """
     return (
