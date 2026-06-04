@@ -1,4 +1,4 @@
-use llmosafe::{ReasoningLoop, SiftedProof, Synapse, WorkingMemory};
+use llmosafe::{Synapse, WorkingMemory};
 
 #[cfg(feature = "testing")]
 #[test]
