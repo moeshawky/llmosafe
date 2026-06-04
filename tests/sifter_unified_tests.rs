@@ -54,7 +54,10 @@ fn test_sift_text_deterministic() {
 #[test]
 fn test_sift_text_anchors_hash() {
     let (sifted, _proof) = sift_text("non-empty");
-    assert!(sifted.anchor_hash() != 0, "non-empty text should set anchor hash");
+    assert!(
+        sifted.anchor_hash() != 0,
+        "non-empty text should set anchor hash"
+    );
 }
 
 #[test]

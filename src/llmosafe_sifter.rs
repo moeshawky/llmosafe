@@ -272,14 +272,14 @@ fn word_in_list(word: &str, list: &[&str]) -> bool {
 /// Check if consecutive tokens match a multi-word phrase.
 #[cfg(feature = "std")]
 #[inline]
-fn phrase_matches(window: &[&str], phrase: &str) -> bool {
-    let phrase_len = phrase.split_whitespace().count();
+fn phrase_matches(window: &[&str], phrase_words: &[&str]) -> bool {
+    let phrase_len = phrase_words.len();
     if window.len() < phrase_len {
         return false;
     }
     window[..phrase_len]
         .iter()
-        .zip(phrase.split_whitespace())
+        .zip(phrase_words.iter())
         .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
@@ -365,11 +365,20 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             if !phrase.contains(' ') {
                 continue;
             }
-            if tokens
-                .windows(phrase.split_whitespace().count())
-                .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
-            {
+            // ⚡ Bolt: Pre-compute phrase splitting into an array outside the hot `any` loop
+            // to eliminate massive O(N*M) redundant string splitting overhead.
+            let mut phrase_words = [""; 16];
+            let mut phrase_len = 0;
+            for w in phrase.split_whitespace() {
+                if phrase_len < 16 {
+                    phrase_words[phrase_len] = w;
+                    phrase_len += 1;
+                }
+            }
+
+            if tokens.windows(phrase_len).enumerate().any(|(i, w)| {
+                !negated_positions[i] && phrase_matches(w, &phrase_words[..phrase_len])
+            }) {
                 breakdown.semantic_traps = breakdown.semantic_traps.saturating_add(100);
             }
         }
@@ -378,11 +387,20 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             if !phrase.contains(' ') {
                 continue;
             }
-            if tokens
-                .windows(phrase.split_whitespace().count())
-                .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
-            {
+            // ⚡ Bolt: Pre-compute phrase splitting into an array outside the hot `any` loop
+            // to eliminate massive O(N*M) redundant string splitting overhead.
+            let mut phrase_words = [""; 16];
+            let mut phrase_len = 0;
+            for w in phrase.split_whitespace() {
+                if phrase_len < 16 {
+                    phrase_words[phrase_len] = w;
+                    phrase_len += 1;
+                }
+            }
+
+            if tokens.windows(phrase_len).enumerate().any(|(i, w)| {
+                !negated_positions[i] && phrase_matches(w, &phrase_words[..phrase_len])
+            }) {
                 breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
             }
         }
@@ -446,8 +464,7 @@ fn calculate_utility_with_cache(
     let mut excess_len = 0;
     for word_b in objective.split_whitespace().skip(obj_len) {
         if excess_len < 128 {
-            excess_words[excess_len] =
-                word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+            excess_words[excess_len] = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
             excess_len += 1;
         } else {
             break;
@@ -470,7 +487,7 @@ fn calculate_utility_with_cache(
 
         if !found && excess_len > 0 {
             for word_b in excess_words.iter().take(excess_len) {
-                if trimmed_a.eq_ignore_ascii_case(*word_b) {
+                if trimmed_a.eq_ignore_ascii_case(word_b) {
                     count += 1;
                     break;
                 }
@@ -525,14 +542,11 @@ fn sift_observation_inner(
 ///
 /// The score is the unbounded logistic regression sum before sigmoid.
 /// Callers that need only the synapse/proof pair should use `sift_text()`.
-pub(crate) fn sift_text_with_score(
-    observation: &str,
-) -> (SiftedSynapse, SiftedProof, f32) {
+pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedProof, f32) {
     let classification = classify_text(observation);
     let bias = get_bias_breakdown(observation);
 
-    let classifier_entropy =
-        (65535.0_f32 * classification.probability.clamp(0.0, 1.0)) as u16;
+    let classifier_entropy = (65535.0_f32 * classification.probability.clamp(0.0, 1.0)) as u16;
     let keyword_boost = if bias.total() > 0 {
         ((bias.total() as u32).saturating_mul(65535) / 9000).min(65535) as u16
     } else {

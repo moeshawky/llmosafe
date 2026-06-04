@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use llmosafe::{ReasoningLoop, SiftedProof, Synapse, WorkingMemory};
 
 #[cfg(feature = "testing")]
