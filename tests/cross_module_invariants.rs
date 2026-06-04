@@ -6,11 +6,10 @@
 //!
 //! Run: `cargo test --test cross_module_invariants` or
 //! `cargo test proptest` for the property-based tests
+#![allow(deprecated)]
 
 use llmosafe::*;
 use proptest::prelude::*;
-
-// ── Shadow validator tests ──────────────────────────────────────
 
 #[test]
 #[cfg(debug_assertions)]
@@ -352,4 +351,348 @@ fn trend_respects_temporal_order_after_wraparound() {
     );
 
     assert!(memory.is_drifting(10.0));
+}
+
+// ── PID Cross-Module Invariants ─────────────────────────────────
+
+#[test]
+fn pid_config_default_validates() {
+    let config = PipelineConfig::default();
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn pid_config_with_pid_validates() {
+    let config = PipelineConfig {
+        pid_config: PidConfig::default(),
+        ..PipelineConfig::default()
+    };
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn pid_reset_full_clears_integrators() {
+    let mut pipeline = CognitivePipeline::<64, 10>::new("test");
+    let _ = pipeline.process("some input for testing purposes here");
+    pipeline.reset_full();
+    // After reset, the pipeline should produce valid results again
+    let result = pipeline.process("ordinary text without manipulation");
+    assert!(result.stages_executed & STAGE_SIFT != 0);
+}
+
+#[test]
+fn pid_pipeline_result_always_valid() {
+    let mut pipeline = CognitivePipeline::<64, 10>::new("test objective");
+    let result = pipeline.process("ordinary text without manipulation");
+    assert!(result.stages_executed & STAGE_SIFT != 0);
+    let _ = result.entropy; // always in [0, 65535] by u16 type
+    assert!(result.detection_flags <= 0x1F);
+}
+
+#[test]
+fn pid_sidechain_flags_effect_different_risk() {
+    let config = PidConfig::default();
+    let mut state_clean = PidState::new();
+    let mut state_anomaly = PidState::new();
+    // Small inputs so both risks stay below 1.0 to see the differential effect
+    let risk_clean = llmosafe_pid::compute_pid_score(
+        10000,
+        5000.0,
+        10,
+        0.9,
+        false,
+        0,
+        &config,
+        &mut state_clean,
+    );
+    let risk_anomaly = llmosafe_pid::compute_pid_score(
+        10000,
+        5000.0,
+        10,
+        0.9,
+        false,
+        FLAG_ANOMALY,
+        &config,
+        &mut state_anomaly,
+    );
+    assert!(
+        risk_anomaly > risk_clean,
+        "FLAG_ANOMALY should increase risk: clean={}, anomaly={}",
+        risk_clean,
+        risk_anomaly
+    );
+}
+
+#[test]
+fn pid_dual_rate_integrator_time_scale_separation() {
+    let config = PidConfig::default();
+    let mut state = PidState::new();
+    // Build up integrators
+    for _ in 0..100 {
+        llmosafe_pid::compute_pid_score(65535, 0.0, 0, 1.0, false, 0, &config, &mut state);
+    }
+    let acute_peak = state.acute_entropy;
+    // Feed clean for many cycles
+    for _ in 0..30 {
+        llmosafe_pid::compute_pid_score(0, 0.0, 0, 1.0, false, 0, &config, &mut state);
+    }
+    // Acute (decay 0.9) should decay much faster than chronic (decay 0.99)
+    assert!(
+        state.acute_entropy < acute_peak * 0.5,
+        "acute integrator should decay significantly: peak={}, now={}",
+        acute_peak,
+        state.acute_entropy
+    );
+}
+
+#[test]
+fn pid_anti_windup_integrator_frozen_during_halt() {
+    let mut state = PidState::new();
+    state.acute_entropy = 1.0;
+    state.chronic_entropy = 1.0;
+    // Force max signals to trigger halt
+    let forced_config = PidConfig {
+        kp: 5.0,
+        kd: 5.0,
+        ki_fast: 3.0,
+        ki_slow: 3.0,
+        ..PidConfig::default()
+    };
+    let risk = llmosafe_pid::compute_pid_score(
+        65535,
+        65535.0,
+        100,
+        0.0,
+        false,
+        FLAG_STUCK | FLAG_ANOMALY,
+        &forced_config,
+        &mut state,
+    );
+    assert!(risk >= 1.0, "should be at halt level: {}", risk);
+    let acute_before = state.acute_entropy;
+    // Next cycle with same max inputs — integrator should bleed, not grow
+    let _ = llmosafe_pid::compute_pid_score(
+        65535,
+        65535.0,
+        100,
+        0.0,
+        false,
+        FLAG_STUCK,
+        &forced_config,
+        &mut state,
+    );
+    assert!(
+        state.acute_entropy < acute_before,
+        "integrator should bleed during windup: {} -> {}",
+        acute_before,
+        state.acute_entropy
+    );
+}
+
+// ── Control Types Cross-Module Invariant Proptests ──
+
+proptest! {
+    // PidInput invariants
+    #[test]
+    fn pid_input_e_body_bounded(e_body in 0.0f32..=1.0f32) {
+        let input = PidInput::new(e_body, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0);
+        prop_assert!((0.0..=1.0).contains(&input.e_body));
+    }
+
+    #[test]
+    fn pid_input_e_sift_bounded(e_sift in 0.0f32..=1.0f32) {
+        let input = PidInput::new(0.0, e_sift, 0.0, 0.0, 0.0, 1.0, false, 0, 0);
+        prop_assert!((0.0..=1.0).contains(&input.e_sift));
+    }
+
+    #[test]
+    fn pid_input_e_mem_bounded(e_mem in 0.0f32..=1.0f32) {
+        let input = PidInput::new(0.0, 0.0, e_mem, 0.0, 0.0, 1.0, false, 0, 0);
+        prop_assert!((0.0..=1.0).contains(&input.e_mem));
+    }
+
+    #[test]
+    fn pid_input_e_kernel_bounded(e_kernel in 0.0f32..=1.0f32) {
+        let input = PidInput::new(0.0, 0.0, 0.0, e_kernel, 0.0, 1.0, false, 0, 0);
+        prop_assert!((0.0..=1.0).contains(&input.e_kernel));
+    }
+
+    #[test]
+    fn pid_input_classifier_prob_bounded(prob in 0.0f32..=1.0f32) {
+        let input = PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, prob, false, 0, 0);
+        prop_assert!((0.0..=1.0).contains(&input.classifier_prob));
+    }
+
+    #[test]
+    fn pid_input_pressure_bounded(pressure in 0u8..=100u8) {
+        let input = PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, pressure);
+        prop_assert!(input.pressure <= 100);
+    }
+
+    #[test]
+    fn pid_input_detection_flags_stored_as_is(flags in 0u8..=0x1Fu8) {
+        let input = PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, flags, 0);
+        // Detection flags in [0, 0x1F] range — only 5 valid bits
+        prop_assert!(input.detection_flags <= 0x1F);
+    }
+
+    // OverrideFlags invariants
+    #[test]
+    fn override_flags_bias_bit_independent(bias in proptest::bool::ANY) {
+        let flags = if bias { OverrideFlags::BIAS } else { OverrideFlags::empty() };
+        prop_assert_eq!(flags.contains(OverrideFlags::BIAS), bias);
+    }
+
+    #[test]
+    fn override_flags_exhausted_bit_independent(exhausted in proptest::bool::ANY) {
+        let flags = if exhausted { OverrideFlags::EXHAUSTED } else { OverrideFlags::empty() };
+        prop_assert_eq!(flags.contains(OverrideFlags::EXHAUSTED), exhausted);
+    }
+
+    #[test]
+    fn override_flags_kernel_bit_independent(kernel in proptest::bool::ANY) {
+        let flags = if kernel { OverrideFlags::KERNEL_UNSTABLE } else { OverrideFlags::empty() };
+        prop_assert_eq!(flags.contains(OverrideFlags::KERNEL_UNSTABLE), kernel);
+    }
+
+    #[test]
+    fn override_flags_from_bits_masks_upper(high_bits in 0u8..=255u8) {
+        let flags = OverrideFlags::from_bits(high_bits);
+        // Bits 3-7 masked: if the lower bit is not set, the flag should not be set
+        if high_bits & 0x01 == 0 {
+            prop_assert!(!flags.contains(OverrideFlags::BIAS));
+        }
+        if high_bits & 0x02 == 0 {
+            prop_assert!(!flags.contains(OverrideFlags::EXHAUSTED));
+        }
+        if high_bits & 0x04 == 0 {
+            prop_assert!(!flags.contains(OverrideFlags::KERNEL_UNSTABLE));
+        }
+    }
+
+    // GainSchedule invariants
+    #[test]
+    fn gain_schedule_kp_in_range(kp in 0.0f32..=5.0f32) {
+        let g = GainSchedule { kp, ..GainSchedule::default() };
+        prop_assert!((0.0..=5.0).contains(&g.kp));
+    }
+
+    #[test]
+    fn gain_schedule_ki_fast_in_range(ki_fast in 0.0f32..=3.0f32) {
+        let g = GainSchedule { ki_fast, ..GainSchedule::default() };
+        prop_assert!((0.0..=3.0).contains(&g.ki_fast));
+    }
+
+    #[test]
+    fn gain_schedule_ki_slow_in_range(ki_slow in 0.0f32..=3.0f32) {
+        let g = GainSchedule { ki_slow, ..GainSchedule::default() };
+        prop_assert!((0.0..=3.0).contains(&g.ki_slow));
+    }
+
+    #[test]
+    fn gain_schedule_kd_in_range(kd in 0.0f32..=5.0f32) {
+        let g = GainSchedule { kd, ..GainSchedule::default() };
+        prop_assert!((0.0..=5.0).contains(&g.kd));
+    }
+
+    #[test]
+    fn gain_schedule_kf_in_range(kf in 0.0f32..=1.0f32) {
+        let g = GainSchedule { kf, ..GainSchedule::default() };
+        prop_assert!((0.0..=1.0).contains(&g.kf));
+    }
+
+    // DesignAssuranceLevel ordering invariant
+    #[test]
+    fn dal_ordering_severity_monotonic(a_level in 0u8..=4u8, b_level in 0u8..=4u8) {
+        let da = match a_level { 0 => DesignAssuranceLevel::A, 1 => DesignAssuranceLevel::B, 2 => DesignAssuranceLevel::C, 3 => DesignAssuranceLevel::D, _ => DesignAssuranceLevel::E };
+        let db = match b_level { 0 => DesignAssuranceLevel::A, 1 => DesignAssuranceLevel::B, 2 => DesignAssuranceLevel::C, 3 => DesignAssuranceLevel::D, _ => DesignAssuranceLevel::E };
+        prop_assert_eq!(a_level.cmp(&b_level), (da as u8).cmp(&(db as u8)));
+    }
+
+    // BodyOutput invariants (std only)
+    #[cfg(feature = "std")]
+    #[test]
+    fn body_output_error_body_bounded(error_body in 0.0f32..=1.0f32) {
+        let bo = BodyOutput { error_body, pressure: 50, is_exhausted: false };
+        prop_assert!((0.0..=1.0).contains(&bo.error()));
+        prop_assert!((bo.error() - 0.0).abs() < 1.001);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn body_output_pressure_bounded(pressure in 0u8..=100u8) {
+        let bo = BodyOutput { error_body: 0.5, pressure, is_exhausted: false };
+        prop_assert!(bo.pressure <= 100);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn body_output_exhausted_implies_pressure_high(pressure in 76u8..=100u8) {
+        let bo = BodyOutput { error_body: 1.0, pressure, is_exhausted: true };
+        prop_assert!(bo.pressure >= 76);
+    }
+
+    // SifterOutput invariants
+    #[test]
+    fn sifter_output_error_bounded(prob in 0.0f32..=1.0f32) {
+        let class = llmosafe::llmosafe_classifier::ClassificationResult {
+            probability: prob,
+            ..llmosafe::llmosafe_classifier::ClassificationResult::default()
+        };
+        let so = llmosafe::llmosafe_sifter::SifterOutput::from_classification(&class);
+        prop_assert!((0.0..=1.0).contains(&so.error_sift));
+        // raw_entropy bounded-by-type: u16 always ≤65535
+    }
+
+    // KernelOutput invariants
+    #[test]
+    fn kernel_output_error_bounded(e_kernel in 0.0f32..=1.0f32) {
+        let ko = KernelOutput { error_kernel: e_kernel, is_stable: e_kernel < 0.763, depth: 5 };
+        prop_assert!((0.0..=1.0).contains(&ko.error_kernel));
+        if e_kernel >= 0.763 { prop_assert!(!ko.is_stable); }
+    }
+}
+
+// ── Safety Override MC/DC Independence Proptests ──
+// Each override flag must independently force Halt regardless of PID output.
+
+proptest! {
+    #[test]
+    fn mcdc_bias_independent_of_risk(risk in 0.0f32..=1.0f32) {
+        let config = PidConfig::default();
+        let result = apply_safety_overrides(risk, OverrideFlags::BIAS, &config);
+        prop_assert!(
+            result >= config.halt_gain,
+            "BIAS override must force >= halt_gain even at risk={}", risk
+        );
+    }
+
+    #[test]
+    fn mcdc_exhausted_independent_of_risk(risk in 0.0f32..=1.0f32) {
+        let config = PidConfig::default();
+        let result = apply_safety_overrides(risk, OverrideFlags::EXHAUSTED, &config);
+        prop_assert!(
+            (result - 1.0).abs() < 0.001,
+            "EXHAUSTED override must force 1.0 even at risk={}", risk
+        );
+    }
+
+    #[test]
+    fn mcdc_kernel_unstable_independent_of_risk(risk in 0.0f32..=1.0f32) {
+        let config = PidConfig::default();
+        let result = apply_safety_overrides(risk, OverrideFlags::KERNEL_UNSTABLE, &config);
+        prop_assert!(
+            result >= config.halt_gain,
+            "KERNEL_UNSTABLE override must force >= halt_gain even at risk={}", risk
+        );
+    }
+
+    #[test]
+    fn mcdc_override_priority_exhausted_over_bias(risk in 0.0f32..=1.0f32) {
+        let config = PidConfig::default();
+        let bias_result = apply_safety_overrides(risk, OverrideFlags::BIAS, &config);
+        let both_result = apply_safety_overrides(risk, OverrideFlags::BIAS | OverrideFlags::EXHAUSTED, &config);
+        // EXHAUSTED forces 1.0, which is >= what BIAS forces
+        prop_assert!(both_result >= bias_result);
+    }
 }

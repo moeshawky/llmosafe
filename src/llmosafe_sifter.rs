@@ -19,10 +19,71 @@
 //!
 //! The legacy keyword-based `calculate_halo_signal()` and `get_bias_breakdown()`
 //! remain for backward compatibility with existing consumers.
+use crate::control_types::ControlSignal;
 use crate::llmosafe_classifier::{classify_text, ClassificationResult};
 use crate::llmosafe_kernel::SiftedProof;
 use crate::llmosafe_kernel::SiftedSynapse;
 use crate::llmosafe_kernel::Synapse;
+
+/// Sifter Control Loop output.
+///
+/// # Control Signal
+///
+/// - Setpoint: 0.0 (ideal safe input has zero manipulation probability)
+/// - Actual: `classifier_prob` ∈ [0.0, 1.0]
+/// - Error: `e_sift = classifier_prob - 0.0 = classifier_prob`
+/// - Gain: `K_sift = 1.0` (identity — sifter is feed-forward sensor)
+///
+/// # DAL E
+///
+/// The sifter is the outermost loop — its error signal is informational
+/// for the PID composition. No direct actuation.
+///
+/// # Invariants
+///
+/// - `0.0 ≤ error_sift ≤ 1.0`
+/// - `0 ≤ raw_entropy ≤ 65535`
+/// - `has_bias == (classifier_prob > THRESHOLD)` [sift_bias_flag_matches_breakdown]
+#[derive(Debug, Clone, Copy)]
+pub struct SifterOutput {
+    /// Error signal = classifier probability (setpoint=0).
+    /// Normalised to [0.0, 1.0] by construction.
+    pub error_sift: f32,
+    /// Raw binary entropy [0, 65535].
+    pub raw_entropy: u16,
+    /// Classifier probability [0.0, 1.0].
+    pub classifier_prob: f32,
+    /// Bias flag from classifier.
+    pub has_bias: bool,
+    /// Out-of-vocabulary ratio [0, 255] (0=0%, 255=100%).
+    pub oov_ratio: u8,
+}
+
+impl ControlSignal for SifterOutput {
+    fn error(&self) -> f32 {
+        self.error_sift
+    }
+
+    fn setpoint(&self) -> f32 {
+        0.0
+    }
+}
+
+impl SifterOutput {
+    /// Construct from raw classifier output.
+    /// DAL A/E: error_sift = classifier_prob (setpoint=0).
+    pub fn from_classification(classification: &ClassificationResult) -> Self {
+        // entropy = 0 when safe (p→0), 65535 when manipulation (p→1)
+        let entropy = (65535.0_f32 * classification.probability.clamp(0.0, 1.0)) as u16;
+        Self {
+            error_sift: classification.probability,
+            raw_entropy: entropy,
+            classifier_prob: classification.probability,
+            has_bias: classification.is_manipulation,
+            oov_ratio: (classification.oov_ratio * 255.0_f32) as u8,
+        }
+    }
+}
 
 /// Authority bias keyword detection list.
 /// Matches terms that signal expertise/position appeals.
@@ -427,6 +488,7 @@ fn calculate_utility_with_cache(
 /// use llmosafe::sift_perceptions;
 /// let (sifted, proof) = sift_perceptions(&["Observation 1", "Observation 2"], "safety");
 /// ```
+#[deprecated = "Use SifterOutput::from_classification() for the control-theory path. sift_perceptions returns the legacy tuple format."]
 pub fn sift_perceptions(observations: &[&str], _objective: &str) -> (SiftedSynapse, SiftedProof) {
     if observations.is_empty() {
         let mut synapse = Synapse::new();
@@ -451,9 +513,7 @@ pub fn sift_perceptions(observations: &[&str], _objective: &str) -> (SiftedSynap
 
     let classification = best_classification.unwrap_or_default();
 
-    let entropy =
-        (65535.0_f32 * 4.0 * classification.probability * (1.0 - classification.probability))
-            as u16;
+    let entropy = (65535.0_f32 * classification.probability.clamp(0.0, 1.0)) as u16;
     let classifier_score = (classification.probability * 65535.0_f32) as u16;
     let has_bias = classification.is_manipulation;
 

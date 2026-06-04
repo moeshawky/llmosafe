@@ -70,15 +70,84 @@ def tokenize(text: str) -> list[str]:
     return tokens
 
 
+BIGRAM_SEP_XOR: int = 0x5F
+
+# ---------------------------------------------------------------------------
+# Rust-compatible token → hash pipeline
+# ---------------------------------------------------------------------------
+# The Rust StreamingTokenizer does NOT build string keys for bigrams.
+# It XOR-combines token hashes. We replicate that exactly here so that
+# the hashes stored in vocab_model.bin match the hashes Rust computes at
+# inference time.
+
+
+def _tokenize_to_hashes(text: str) -> list[int]:
+    """Yield FNV-1a hashes matching Rust StreamingTokenizer output.
+
+    Returns unigram + adjacent-bigram hashes in the exact order Rust
+    produces (bigram before each unigram after the first token).
+    """
+    data = text.encode("utf-8")
+    pos = 0
+    prev_hash: int = 0
+    has_prev: bool = False
+    pending_unigram: int | None = None
+    results: list[int] = []
+
+    while pos < len(data):
+        # Return pending unigram first (Rust ordering: bigram then unigram)
+        if pending_unigram is not None:
+            results.append(pending_unigram)
+            pending_unigram = None
+
+        # Skip non-alphanumeric
+        while pos < len(data) and not chr(data[pos]).isalnum():
+            pos += 1
+        if pos >= len(data):
+            break
+
+        # Hash one token: each alphanumeric byte, lower-cased
+        h: int = FNV_OFFSET
+        token_len: int = 0
+        while pos < len(data) and chr(data[pos]).isalnum():
+            if token_len < 256:
+                b: int = data[pos]
+                if 0x41 <= b <= 0x5A:  # A-Z → a-z
+                    b += 0x20
+                h ^= b
+                h = (h * FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
+                token_len += 1
+            pos += 1
+        token_hash: int = h
+
+        if has_prev:
+            # bigram_hash = ((prev_hash ^ 0x5F) * PRIME ^ token_hash) * PRIME
+            bh: int = prev_hash ^ BIGRAM_SEP_XOR
+            bh = (bh * FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
+            bh ^= token_hash
+            bh = (bh * FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
+            prev_hash = token_hash
+            pending_unigram = token_hash
+            results.append(bh)
+        else:
+            prev_hash = token_hash
+            has_prev = True
+            results.append(token_hash)
+
+    if pending_unigram is not None:
+        results.append(pending_unigram)
+
+    return results
+
+
 def tokenize_with_bigrams(text: str) -> list[str]:
-    """Unigrams + adjacent bigrams. Matches Rust StreamingTokenizer."""
-    unigrams = tokenize(text)
-    result: list[str] = []
-    for i, ug in enumerate(unigrams):
-        result.append(ug)
-        if i > 0:
-            result.append(f"{unigrams[i-1]}\x1f{ug}")
-    return result
+    """Unigram + adjacent-bigram hashes, hex-encoded for scikit-learn.
+
+    The returned strings are hex representations of FNV-1a 64-bit hashes
+    that exactly match the Rust StreamingTokenizer.  Bigram hashes use
+    XOR-combination (^0x5F) — NOT a text separator.
+    """
+    return [format(h, "016x") for h in _tokenize_to_hashes(text)]
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +381,10 @@ def train_classifier(
     )
 
     model = LogisticRegression(
-        C=1.0,
+        C=0.1,
         random_state=42,
         max_iter=2000,
+        class_weight="balanced",
     )
     model.fit(X_train, y_train)
 
@@ -371,7 +441,8 @@ def serialize_model(
 
     entries: list[tuple[int, float, float]] = []
     for term, idx in vocab.items():
-        h = fnv1a_64(term)
+        # term is now a hex string of the Rust-compatible hash (from tokenize_with_bigrams)
+        h = int(term, 16)
         entries.append((h, float(idf[idx]), float(coef[idx])))
 
     entries.sort(key=lambda x: x[0])

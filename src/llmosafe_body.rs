@@ -18,6 +18,7 @@
 //!
 //! Requires `std` (reads `/proc` on Linux, Win32 API on Windows).
 
+use crate::control_types::ControlSignal;
 use crate::llmosafe_kernel::{KernelError, Synapse};
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -77,6 +78,46 @@ impl EnvironmentalVitals {
     #[cfg(not(target_os = "linux"))]
     fn read_loadavg() -> Option<f64> {
         None
+    }
+}
+
+/// Body Control Loop output.
+///
+/// # Control Signal
+///
+/// - Setpoint: 0.0 (0% RSS utilisation = ideal)
+/// - Actual: `current_rss / memory_ceiling_bytes` (ratio `[0, 1]`)
+/// - Error: `e_body = actual` (setpoint = 0, so error = actual)
+/// - Gain: `K_body = 2.0` (amplifier — resource pressure is emergency signal)
+///
+/// # DAL A
+///
+/// Body loop is the innermost (fastest) loop. Resource exhaustion is
+/// catastrophic — system cannot reason without memory. Ceiling=0 or
+/// RSS ≥ ceiling forces immediate Halt via `is_exhausted`.
+///
+/// # Invariants
+///
+/// - `0.0 ≤ error_body ≤ 1.0` (ceiling=0 → 1.0 fail-closed)
+/// - `0 ≤ pressure ≤ 100`
+/// - `ceiling=0 → is_exhausted=true` [body_check_zero_ceiling]
+#[derive(Debug, Clone, Copy)]
+pub struct BodyOutput {
+    /// Normalised RSS ratio error `[0.0, 1.0]`.
+    pub error_body: f32,
+    /// Pressure percentage `[0, 100]`.
+    pub pressure: u8,
+    /// True when memory ceiling is exhausted or zero.
+    pub is_exhausted: bool,
+}
+
+impl ControlSignal for BodyOutput {
+    fn error(&self) -> f32 {
+        self.error_body
+    }
+
+    fn setpoint(&self) -> f32 {
+        0.0
     }
 }
 
@@ -172,6 +213,34 @@ impl ResourceGuard {
         synapse.set_anchor_hash(0);
 
         Ok(synapse)
+    }
+
+    /// Control-theory version returning `BodyOutput` instead of `Synapse`.
+    ///
+    /// Returns the normalised RSS ratio error, pressure percentage, and
+    /// exhaustion flag directly — no synapse wrapper. Callers should
+    /// feed `BodyOutput.error_body` as `PidInput.e_body`.
+    #[must_use = "ignoring the safety check defeats the purpose of the guard"]
+    pub fn check_ctrl(&self) -> Result<BodyOutput, KernelError> {
+        if self.memory_ceiling_bytes == 0 {
+            return Err(KernelError::ResourceExhaustion);
+        }
+        let current_rss = match Self::try_current_rss_bytes() {
+            Some(rss) => rss,
+            None => return Err(KernelError::ResourceExhaustion),
+        };
+        let ratio = current_rss as f64 / self.memory_ceiling_bytes as f64;
+
+        if ratio >= 1.0 {
+            return Err(KernelError::ResourceExhaustion);
+        }
+
+        let pressure_pct = (ratio * 100.0).min(100.0) as u8;
+        Ok(BodyOutput {
+            error_body: ratio as f32,
+            pressure: pressure_pct,
+            is_exhausted: false,
+        })
     }
 
     /// Like `check()` but reuses a previously-measured entropy value.

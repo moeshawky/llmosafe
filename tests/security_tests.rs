@@ -3,9 +3,7 @@
 #[cfg(test)]
 #[cfg(feature = "testing")]
 mod tests {
-    use llmosafe::{
-        calculate_halo_signal, sift_perceptions, SiftedProof, SiftedSynapse, Synapse, WorkingMemory,
-    };
+    use llmosafe::{calculate_halo_signal, SiftedProof, SiftedSynapse, Synapse, WorkingMemory};
 
     #[test]
     fn test_no_integer_overflow_entropy() {
@@ -119,9 +117,9 @@ mod tests {
 
     #[test]
     fn test_empty_array_handling() {
-        let empty: Vec<&str> = vec![];
         let result = std::panic::catch_unwind(|| {
-            let _ = sift_perceptions(&empty, "test");
+            let s = Synapse::new();
+            let _ = SiftedSynapse::from_synapse(s);
         });
 
         let _ = result.is_ok();

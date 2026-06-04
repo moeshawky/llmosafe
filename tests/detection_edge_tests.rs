@@ -138,19 +138,16 @@ mod tests {
         for (pattern, should_detect) in detected_patterns {
             let found = detector.detect_substrings(pattern);
             if should_detect {
-                assert!(!found.is_empty(), "Should detect pattern: {}", pattern);
+                assert_ne!(found, 0, "Should detect pattern: {}", pattern);
             }
         }
-
-        // These patterns from original test may not be in the detector's built-in list
-        // The detector only has specific patterns defined in the source
     }
 
     #[test]
     fn test_adversarial_detector_clean_input() {
         let detector = AdversarialDetector::new();
         let patterns = detector.detect_substrings("This is a normal request for help");
-        assert!(patterns.is_empty(), "Clean input should have no patterns");
+        assert_eq!(patterns, 0, "Clean input should have no patterns");
     }
 
     #[test]

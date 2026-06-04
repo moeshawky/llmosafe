@@ -33,7 +33,8 @@ libtest_mod.rlib
 
 # Generated training data and model binaries
 data/
-tools/vocab_model.bin
+# tools/vocab_model.bin is the COMMITTED classifier — do NOT ignore
+# (see TRAINING.md for reproducible build process)
 
 # ML Training Artifacts - NOT PART OF RUST LIBRARY
 *.pt
@@ -77,6 +78,9 @@ COMPREHENSIVE_ANALYSIS.md
 ARCHITECTURE_*.md
 SUBAGENT_*.md
 TEST_PROTOCOL_*.md
+tools/generate_sifter_data/DESIGN.md
+tools/generate_sifter_data/OPTIMIZE.md
+.pi/
 
 # --- ML training scripts (not part of Rust library) ---
 /scripts/

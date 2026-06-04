@@ -11,9 +11,50 @@
 //! surprising a value must be (relative to mean) before rejection. Typical
 //! threshold: 58000 for classifier output.
 
+use crate::control_types::ControlSignal;
 use crate::llmosafe_kernel::{
     CognitiveEntropy, KernelError, SiftedProof, SiftedSynapse, ValidatedProof, ValidatedSynapse,
 };
+
+/// Memory Control Loop output.
+///
+/// # Control Signal
+///
+/// - Setpoint: `μ = mean_entropy` (self-adjusting — ring buffer running mean)
+/// - Actual: `entropy_n` (current observation's raw entropy)
+/// - Error: `e_mem = |entropy_n - mean_entropy| / 65535.0` (normalised to `[0, 1]`)
+/// - Gain: `K_mem = 1.0 + 0.3 × tanh(|trend| / 1000.0)` (gain-scheduled by trend)
+///
+/// # DAL B
+///
+/// Memory loop gates on surprise — missed escalation allows unsafe
+/// observations to propagate to the kernel. DAL B because failure
+/// causes hazardous behaviour (missed escalation), not catastrophic.
+///
+/// # Invariants
+///
+/// - `0.0 ≤ error_mem ≤ 1.0`
+/// - Ring buffer size = SIZE (const generic, compile-time bound)
+/// - Surprise gate: `error_mem > surprise_threshold/65535` → HallucinationDetected
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryOutput {
+    /// Normalised surprise error `[0.0, 1.0]`.
+    pub error_mem: f32,
+    /// Linear regression slope over buffer window.
+    pub trend: f64,
+    /// Running mean entropy of ring buffer.
+    pub mean_entropy: f64,
+}
+
+impl ControlSignal for MemoryOutput {
+    fn error(&self) -> f32 {
+        self.error_mem
+    }
+
+    fn setpoint(&self) -> f32 {
+        (self.mean_entropy / 65535.0) as f32
+    }
+}
 
 /// Fixed-size working memory stack buffer.
 ///

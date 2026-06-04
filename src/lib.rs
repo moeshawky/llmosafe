@@ -5,6 +5,9 @@
 // suppress proc-macro-originated warnings — the crate-level attribute is
 // required by the upstream crate's code generation.
 #![allow(unused_parens)]
+// EscalationPolicy is deprecated for external consumers (migrate to PidConfig).
+// Internal modules still use it as the legacy fallback path.
+#![allow(deprecated)]
 
 //! LLMOSAFE: Runtime Safety Guardrails
 //!
@@ -44,16 +47,24 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
+pub mod control_types;
 pub mod llmosafe_classifier;
 pub mod llmosafe_detection;
 pub mod llmosafe_integration;
 pub mod llmosafe_kernel;
 pub mod llmosafe_memory;
+pub mod llmosafe_pid;
+pub mod llmosafe_pipeline;
 pub mod llmosafe_sifter;
 
 #[cfg(feature = "std")]
 pub mod llmosafe_body;
 
+pub use control_types::{
+    ControlSignal, DesignAssuranceLevel, GainSchedule, OverrideFlags, PidInput, Setpoint,
+};
+#[cfg(feature = "std")]
+pub use llmosafe_body::BodyOutput;
 #[cfg(feature = "std")]
 pub use llmosafe_body::ResourceGuard;
 #[cfg(feature = "std")]
@@ -64,22 +75,207 @@ pub use llmosafe_detection::{
 #[cfg(feature = "std")]
 pub use llmosafe_integration::SafetyContext;
 pub use llmosafe_integration::{EscalationPolicy, EscalationReason, PressureLevel, SafetyDecision};
+pub use llmosafe_kernel::KernelOutput;
 pub use llmosafe_kernel::{
     CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedProof,
-    SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse, PRESSURE_THRESHOLD,
-    STABILITY_THRESHOLD,
+    SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse,
+    DETECTION_FLAGS_MASK, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING, FLAG_LOW_CONFIDENCE,
+    FLAG_STUCK, PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
 };
+pub use llmosafe_memory::MemoryOutput;
 pub use llmosafe_memory::WorkingMemory;
+pub use llmosafe_pid::{apply_safety_overrides, compute_pid_score_pure, PidConfig, PidState};
+#[cfg(feature = "std")]
+pub use llmosafe_pipeline::STAGE_BODY;
+pub use llmosafe_pipeline::{
+    CognitivePipeline, PipelineConfig, PipelineResult, STAGE_DETECTION, STAGE_KERNEL, STAGE_MEMORY,
+    STAGE_MONITOR, STAGE_SIFT,
+};
+pub use llmosafe_sifter::SifterOutput;
 pub use llmosafe_sifter::{
     calculate_halo_signal, calculate_utility, get_bias_breakdown, sift_perceptions,
 };
 
 #[cfg(feature = "std")]
 mod c_abi {
+    use std::sync::Mutex;
+
     use crate::llmosafe_body::ResourceGuard;
+    use crate::llmosafe_integration::SafetyDecision;
     use crate::llmosafe_kernel::KernelError;
     use crate::llmosafe_kernel::Synapse;
     use crate::llmosafe_memory;
+    use crate::llmosafe_pipeline::{CognitivePipeline, PipelineConfig, PipelineResult};
+
+    const ARENA_SIZE: usize = 16;
+    const MAX_OBJECTIVE_LEN: usize = 1024;
+
+    #[allow(dead_code)]
+    struct PipelineSlot {
+        pipeline: CognitivePipeline<'static, 64, 10>,
+        /// Fixed-size buffer for objective string. Declared after `pipeline`
+        /// so it drops after the pipeline (field-declaration order drop).
+        /// This ensures the `&'static str` reference in pipeline remains
+        /// valid for the pipeline's lifetime.
+        objective_buf: Box<[u8; MAX_OBJECTIVE_LEN]>,
+        last_result: Option<PipelineResult>,
+    }
+
+    static PIPELINE_ARENA: Mutex<[Option<PipelineSlot>; ARENA_SIZE]> = Mutex::new([
+        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+        None,
+    ]);
+
+    /// Stores `input` in `buf` and returns a `&'static str` pointing into the buffer.
+    ///
+    /// # Safety
+    ///
+    /// `buf` must outlive the returned reference. The caller ensures this
+    /// by storing `buf` in the same `PipelineSlot` (declared after `pipeline`
+    /// so it drops after). The `'static` lifetime is safe because the buffer
+    /// lives in the Box which lives in the PipelineSlot, and the slot is only
+    /// destroyed after the pipeline is dropped (field declaration order).
+    unsafe fn store_objective(buf: &mut Box<[u8; MAX_OBJECTIVE_LEN]>, input: &str) -> &'static str {
+        let len = input.len().min(MAX_OBJECTIVE_LEN - 1);
+        buf[..len].copy_from_slice(&input.as_bytes()[..len]);
+        buf[len] = 0;
+        let len_val = len;
+        core::str::from_utf8_unchecked(core::slice::from_raw_parts(buf.as_ptr(), len_val))
+    }
+
+    fn decision_to_code(decision: &SafetyDecision) -> i32 {
+        match decision {
+            SafetyDecision::Proceed => 0,
+            SafetyDecision::Warn(_) => 1,
+            SafetyDecision::Escalate { .. } => 2,
+            SafetyDecision::Halt(err, _) => match err {
+                KernelError::DepthExceeded => -1,
+                KernelError::CognitiveInstability => -2,
+                KernelError::BiasHaloDetected => -3,
+                KernelError::HallucinationDetected => -4,
+                KernelError::ResourceExhaustion => -5,
+                KernelError::SelfMemoryExceeded => -6,
+                KernelError::DeadlineExceeded => -7,
+            },
+            SafetyDecision::Exit(_) => -8,
+        }
+    }
+
+    /// Creates a `CognitivePipeline` with the given objective string.
+    ///
+    /// Returns an opaque handle (0–15) on success, or `usize::MAX` on
+    /// invalid input.  The handle indexes into a fixed-size arena of 16
+    /// concurrent pipeline slots protected by a `std::sync::Mutex`.
+    ///
+    /// The objective is stored in a fixed-size buffer per slot
+    /// (MAX_OBJECTIVE_LEN = 1024 bytes), avoiding heap leaks.
+    #[no_mangle]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_create(objective_ptr: *const u8, objective_len: usize) -> usize {
+        if objective_ptr.is_null() || objective_len == 0 || objective_len > MAX_OBJECTIVE_LEN {
+            return usize::MAX;
+        }
+        // SAFETY: objective_ptr non-null and objective_len in [1, MAX_OBJECTIVE_LEN]
+        // validated above. The slice is consumed immediately via from_utf8.
+        let slice = unsafe { core::slice::from_raw_parts(objective_ptr, objective_len) };
+        let input_str = std::str::from_utf8(slice).unwrap_or("safety");
+        let mut objective_buf = Box::new([0u8; MAX_OBJECTIVE_LEN]);
+        let objective = unsafe { store_objective(&mut objective_buf, input_str) };
+
+        let config = PipelineConfig::default();
+        let pipeline = match CognitivePipeline::<'static, 64, 10>::with_config(objective, config) {
+            Ok(p) => p,
+            Err(_) => return usize::MAX,
+        };
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (i, slot) in arena.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(PipelineSlot {
+                    pipeline,
+                    objective_buf,
+                    last_result: None,
+                });
+                return i;
+            }
+        }
+        usize::MAX
+    }
+
+    /// Runs a raw text observation through the `CognitivePipeline`.
+    ///
+    /// Returns the decision code (see `decision_to_code`) and stores the
+    /// full `PipelineResult` in the slot for later inspection via
+    /// `llmosafe_get_decision()`.  Returns -9 if handle is invalid or the
+    /// slot is uninitialized.
+    #[no_mangle]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_sift_and_process(
+        handle: usize,
+        text_ptr: *const u8,
+        text_len: usize,
+    ) -> i32 {
+        if text_ptr.is_null()
+            || text_len == 0
+            || text_len > isize::MAX as usize
+            || text_len > 10 * 1024 * 1024
+        {
+            return -9;
+        }
+        // SAFETY: text_ptr non-null and text_len in [1, 10 MiB] validated above.
+        // The slice is consumed immediately via from_utf8_lossy.
+        let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
+        let text = String::from_utf8_lossy(slice);
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if handle >= ARENA_SIZE {
+            return -9;
+        }
+        let slot = match arena[handle].as_mut() {
+            Some(s) => s,
+            None => return -9,
+        };
+        let result = slot.pipeline.process(&text);
+        let code = decision_to_code(&result.decision);
+        slot.last_result = Some(result);
+        code
+    }
+
+    /// Returns the decision code from the most recent
+    /// `llmosafe_sift_and_process` call on the given handle.
+    ///
+    /// Returns -9 if handle is invalid, uninitialized, or `sift_and_process`
+    /// has not been called yet.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_get_decision(handle: usize) -> i32 {
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if handle >= ARENA_SIZE {
+            return -9;
+        }
+        match &arena[handle] {
+            Some(slot) => match &slot.last_result {
+                Some(r) => decision_to_code(&r.decision),
+                None => -9,
+            },
+            None => -9,
+        }
+    }
+
+    /// Destroys the pipeline associated with `handle`, freeing the arena
+    /// slot for reuse.  No-op if handle is invalid or already destroyed.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_destroy(handle: usize) {
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if handle < ARENA_SIZE {
+            arena[handle] = None;
+        }
+    }
 
     #[no_mangle]
     pub extern "C" fn llmosafe_process_synapse(synapse_bits: u64) -> i32 {
@@ -158,10 +354,6 @@ mod c_abi {
     pub extern "C" fn llmosafe_get_system_cpu_load() -> u8 {
         ResourceGuard::system_cpu_load()
     }
-
-    // We don't redefine it here because it's already defined with #[no_mangle] in llmosafe_body.rs
-    // But we need it to be visible to cbindgen in this crate.
-    // Re-exporting it without #[no_mangle] here won't work for C-ABI if it's already there.
 }
 
 #[cfg(test)]
@@ -249,5 +441,208 @@ mod tests {
     fn test_c_abi_get_environmental_entropy() {
         let entropy = crate::llmosafe_body::llmosafe_get_environmental_entropy();
         let _ = entropy;
+    }
+
+    // ── Phase 5: Arena-based CognitivePipeline C-ABI tests ────────
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_create_valid() {
+        let objective = b"test objective";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        assert!(handle < 16);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_create_null_pointer() {
+        let handle = crate::c_abi::llmosafe_create(std::ptr::null(), 10);
+        assert_eq!(handle, usize::MAX);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_create_zero_length() {
+        let objective = b"test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), 0);
+        assert_eq!(handle, usize::MAX);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_create_overflow_length() {
+        let objective = b"test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), (isize::MAX as usize) + 1);
+        assert_eq!(handle, usize::MAX);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_sift_and_process_valid() {
+        let objective = b"safety analysis";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"a completely normal sentence about everyday topics";
+        let code = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        // Should return a valid code (0=Proceed, 1=Warn, 2=Escalate, or Halt/Exit < 0)
+        assert!((-8..=2).contains(&code));
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_sift_and_process_invalid_handle() {
+        let text = b"some text";
+        let code = crate::c_abi::llmosafe_sift_and_process(999, text.as_ptr(), text.len());
+        assert_eq!(code, -9);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_sift_and_process_null_pointer() {
+        let objective = b"test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let code = crate::c_abi::llmosafe_sift_and_process(handle, std::ptr::null(), 10);
+        assert_eq!(code, -9);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_sift_and_process_zero_length() {
+        let objective = b"test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"data";
+        let code = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), 0);
+        assert_eq!(code, -9);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_decision_after_process() {
+        let objective = b"test objective";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"checking safety of input data here";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let decision = crate::c_abi::llmosafe_get_decision(handle);
+        assert!((-8..=2).contains(&decision));
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_decision_before_process() {
+        let objective = b"test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let decision = crate::c_abi::llmosafe_get_decision(handle);
+        assert_eq!(decision, -9);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_decision_invalid_handle() {
+        let decision = crate::c_abi::llmosafe_get_decision(999);
+        assert_eq!(decision, -9);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_destroy_valid() {
+        let objective = b"test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        crate::c_abi::llmosafe_destroy(handle);
+        let decision = crate::c_abi::llmosafe_get_decision(handle);
+        assert_eq!(decision, -9);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_destroy_invalid_handle_no_crash() {
+        crate::c_abi::llmosafe_destroy(999);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_destroy_double_no_crash() {
+        let objective = b"test double destroy";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        crate::c_abi::llmosafe_destroy(handle);
+        crate::c_abi::llmosafe_destroy(handle); // should not crash
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_create_process_destroy_cycle() {
+        let objective = b"cycle test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text1 = b"first observation for the pipeline test";
+        let code1 = crate::c_abi::llmosafe_sift_and_process(handle, text1.as_ptr(), text1.len());
+        assert!((-8..=2).contains(&code1));
+        let decision1 = crate::c_abi::llmosafe_get_decision(handle);
+        assert_eq!(code1, decision1);
+        let text2 = b"second observation for continued testing";
+        let code2 = crate::c_abi::llmosafe_sift_and_process(handle, text2.as_ptr(), text2.len());
+        assert!((-8..=2).contains(&code2));
+        let decision2 = crate::c_abi::llmosafe_get_decision(handle);
+        assert_eq!(code2, decision2);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_arena_slot_reuse() {
+        let obj = b"reuse";
+        let h1 = crate::c_abi::llmosafe_create(obj.as_ptr(), obj.len());
+        assert!(h1 != usize::MAX);
+        crate::c_abi::llmosafe_destroy(h1);
+        let h2 = crate::c_abi::llmosafe_create(obj.as_ptr(), obj.len());
+        assert!(h2 != usize::MAX);
+        // Slot should be reused (same index or different, both valid)
+        crate::c_abi::llmosafe_destroy(h2);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_arena_exhaustion() {
+        let objective = b"exhaust";
+        let mut handles = Vec::new();
+        // Fill all 16 slots
+        for _ in 0..16 {
+            let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+            assert!(handle != usize::MAX);
+            handles.push(handle);
+        }
+        // 17th should fail
+        let fail = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert_eq!(fail, usize::MAX);
+        // Cleanup
+        for h in handles {
+            crate::c_abi::llmosafe_destroy(h);
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_decision_code_correspondence() {
+        let objective = b"mapping test objective string";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        // Process safe text — should get 0 (Proceed) or 1 (Warn) at most
+        let safe_text = b"the weather forecast indicates mild temperatures";
+        let code =
+            crate::c_abi::llmosafe_sift_and_process(handle, safe_text.as_ptr(), safe_text.len());
+        assert!((-8..=2).contains(&code));
+        crate::c_abi::llmosafe_destroy(handle);
     }
 }

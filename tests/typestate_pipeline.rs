@@ -1,8 +1,9 @@
-use llmosafe::{sift_perceptions, ReasoningLoop, Synapse, WorkingMemory};
+use llmosafe::{ReasoningLoop, SiftedProof, Synapse, WorkingMemory};
 
+#[cfg(feature = "testing")]
 #[test]
 fn test_wrong_tier_sifted_to_kernel() {
-    let (_sifted, _proof) = sift_perceptions(&["test"], "test");
+    let _proof = SiftedProof::for_testing();
     let _loop_guard = ReasoningLoop::<10>::new();
     // This should fail: ReasoningLoop::next_step expects ValidatedSynapse, not SiftedSynapse
     // _loop_guard.next_step(_sifted).unwrap();
