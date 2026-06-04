@@ -15,5 +15,8 @@ help: you might have meant to use an associated function to build this type
 3 +     let forged = llmosafe::SiftedProof::mint();
   |
 3 -     let forged = llmosafe::SiftedProof(());
+3 +     let forged = llmosafe::SiftedProof::for_testing();
+  |
+3 -     let forged = llmosafe::SiftedProof(());
 3 +     let forged = llmosafe::SiftedProof::from_raw_bits_bypass();
   |
