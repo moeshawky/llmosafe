@@ -30,7 +30,6 @@
 //! ```
 
 use crate::control_types::OverrideFlags;
-use crate::llmosafe_classifier::classify_text;
 use crate::llmosafe_detection::{
     ConfidenceTracker, CusumDetector, DriftDetector, RepetitionDetector,
 };
@@ -40,9 +39,9 @@ use crate::llmosafe_integration::SafetyDecision;
 #[cfg(not(feature = "std"))]
 use crate::llmosafe_integration::SafetyDecision;
 use crate::llmosafe_kernel::{
-    DynamicStabilityMonitor, KernelError, KernelOutput, ReasoningLoop, SiftedProof, SiftedSynapse,
-    StabilityResult, Synapse, ValidatedSynapse, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING,
-    FLAG_LOW_CONFIDENCE, FLAG_STUCK, STABILITY_THRESHOLD,
+    DynamicStabilityMonitor, KernelError, KernelOutput, ReasoningLoop, StabilityResult, Synapse,
+    ValidatedSynapse, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING, FLAG_LOW_CONFIDENCE, FLAG_STUCK,
+    STABILITY_THRESHOLD,
 };
 use crate::llmosafe_memory::WorkingMemory;
 use crate::llmosafe_pid::{PidConfig, PidState};
@@ -348,24 +347,18 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         let mut stages = 0u8;
 
         // ── Stage 1: SIFT (Tier 3) ──
+        // Single canonical entry point. Keyword-bias (innate layer) OR-s into
+        // the classifier result. One synapse, one proof, no duplicate compute.
         stages |= STAGE_SIFT;
-        let classification = classify_text(observation);
-        let sifter_output =
-            crate::llmosafe_sifter::SifterOutput::from_classification(&classification);
-        let entropy = sifter_output.raw_entropy;
-        let surprise_val = (classification.probability * 65535.0_f32) as u16;
-        let oov_ratio = (classification.oov_ratio * 255.0_f32) as u8;
-
-        let mut synapse = Synapse::new();
-        synapse.set_raw_entropy(entropy);
-        synapse.set_raw_surprise(surprise_val);
-        synapse.set_has_bias(sifter_output.has_bias);
-        synapse.set_oov_ratio(oov_ratio);
+        let (sifted, sifted_proof) = crate::llmosafe_sifter::sift_text(observation);
+        let entropy = sifted.raw_entropy();
+        let surprise_val = sifted.raw_surprise();
+        let oov_ratio = sifted.oov_ratio();
+        let has_bias = sifted.has_bias();
 
         // ── Stage 2: MEMORY (Tier 2) ──
         stages |= STAGE_MEMORY;
-        let sifted = SiftedSynapse::new(synapse);
-        let mem_result = self.memory.update(sifted, SiftedProof(()));
+        let mem_result = self.memory.update(sifted, sifted_proof);
         let validated = match mem_result {
             Ok((v, _p)) => v,
             Err(err) => {
@@ -401,7 +394,8 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         stages |= STAGE_DETECTION;
         self.repetition.observe(observation);
         self.drift.observe(observation);
-        self.confidence.observe(classification.probability);
+        let classifier_prob = f32::from(entropy) / 65535.0_f32;
+        self.confidence.observe(classifier_prob);
         let _cusum_anomaly = self.cusum.update(f64::from(entropy));
 
         let is_stuck = self.repetition.is_stuck();
@@ -428,29 +422,25 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         }
 
         // ── Stage 5: PID COMPOSITION ──
-        // P-term uses e_body (normalised body pressure error, [0.0, 1.0]).
-        // Compute equivalent pressure-in-percentage for the PID interface.
         let pressure_term = (e_body * 100.0_f32) as u8;
         let trend = self.memory.trend();
         let pure_risk = crate::llmosafe_pid::compute_pid_score_pure(
             entropy,
             trend,
             pressure_term,
-            classification.probability,
+            classifier_prob,
             flags,
             &self.pid_config,
             &mut self.pid_state,
         );
 
         let mut override_flags = OverrideFlags::empty();
-        if sifter_output.has_bias {
+        if has_bias {
             override_flags = override_flags | OverrideFlags::BIAS;
         }
         if e_body > 0.9 {
             override_flags = override_flags | OverrideFlags::EXHAUSTED;
         }
-        // Shadow validator: memory stage gates at 40000, so kernel_entropy > 50000
-        // can only be reached if the memory stage is bypassed or modified.
         if u32::from(kernel_entropy) > STABILITY_THRESHOLD as u32 {
             override_flags = override_flags | OverrideFlags::KERNEL_UNSTABLE;
         }

@@ -93,7 +93,7 @@ pub use llmosafe_pipeline::{
 };
 pub use llmosafe_sifter::SifterOutput;
 pub use llmosafe_sifter::{
-    calculate_halo_signal, calculate_utility, get_bias_breakdown, sift_perceptions,
+    calculate_halo_signal, calculate_utility, get_bias_breakdown, sift_perceptions, sift_text,
 };
 
 #[cfg(feature = "std")]

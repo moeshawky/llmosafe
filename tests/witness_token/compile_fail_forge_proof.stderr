@@ -1,16 +1,22 @@
-error[E0603]: tuple struct constructor `SiftedProof` is private
- --> tests/witness_token/compile_fail_forge_proof.rs:3:28
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/witness_token/compile_fail_forge_proof.rs:3:18
   |
 3 |     let forged = llmosafe::SiftedProof(());
-  |                            ^^^^^^^^^^^ private tuple struct constructor
+  |                  ^^^^^^^^^^^^^^^^^^^^^
   |
- ::: src/llmosafe_kernel.rs
+note: constructor is not visible here due to private fields
+ --> src/llmosafe_kernel.rs
   |
-  | pub struct SiftedProof(pub(crate) ());
-  |                        ------------- a constructor is private if any of the fields is private
+  | pub struct SiftedProof(());
+  |                        ^^ private field
+help: you might have meant to use an associated function to build this type
   |
-note: the tuple struct constructor `SiftedProof` is defined here
- --> src/lib.rs
+3 -     let forged = llmosafe::SiftedProof(());
+3 +     let forged = llmosafe::SiftedProof::mint();
   |
-  |     CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedProof,
-  |                                                                            ^^^^^^^^^^^
+3 -     let forged = llmosafe::SiftedProof(());
+3 +     let forged = llmosafe::SiftedProof::for_testing();
+  |
+3 -     let forged = llmosafe::SiftedProof(());
+3 +     let forged = llmosafe::SiftedProof::from_raw_bits_bypass();
+  |

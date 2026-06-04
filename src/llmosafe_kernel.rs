@@ -977,6 +977,14 @@ impl SiftedSynapse {
         self.synapse.raw_surprise()
     }
 
+    pub fn oov_ratio(&self) -> u8 {
+        self.synapse.oov_ratio()
+    }
+
+    pub fn detection_flags(&self) -> u8 {
+        self.synapse.detection_flags()
+    }
+
     pub fn stability(&self) -> CognitiveStability {
         self.synapse.stability()
     }
@@ -1046,12 +1054,26 @@ impl ValidatedSynapse {
 /// `Copy` and `Clone` are intentional: the proof attests to sifter execution,
 /// not to uniqueness. It is safe to reuse.
 #[derive(Debug, Clone, Copy)]
-pub struct SiftedProof(pub(crate) ());
+pub struct SiftedProof(());
 
 impl SiftedProof {
-    #[cfg(feature = "testing")]
+    /// Mint a SiftedProof. Only the sifter module should call this.
+    /// Prefer `sift_observation()` or `sift_perceptions()` — they mint the
+    /// proof as part of a complete (SiftedSynapse, SiftedProof) pair.
+    #[doc(hidden)]
+    pub(crate) fn mint() -> Self {
+        SiftedProof(())
+    }
+
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     pub fn for_testing() -> Self {
+        SiftedProof(())
+    }
+
+    #[cfg(feature = "std")]
+    #[doc(hidden)]
+    pub(crate) fn from_raw_bits_bypass() -> Self {
         SiftedProof(())
     }
 }

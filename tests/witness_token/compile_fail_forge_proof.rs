@@ -1,5 +1,5 @@
 fn main() {
-    // This MUST fail: the proof's inner field is pub(crate)
+    // This MUST fail: the proof's inner field is private
     let forged = llmosafe::SiftedProof(());
     let synapse = llmosafe::Synapse::from_raw_u128(0);
     let sifted = llmosafe::SiftedSynapse::from_synapse(synapse);

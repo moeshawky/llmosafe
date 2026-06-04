@@ -185,7 +185,7 @@ mod tests {
             let mut synapse = Synapse::new();
             synapse.set_raw_entropy(100 * (i + 1) as u16);
             let sifted = SiftedSynapse::new(synapse);
-            memory.update(sifted, SiftedProof(())).unwrap();
+            memory.update(sifted, SiftedProof::for_testing()).unwrap();
         }
         // Buffer after 4 updates (all values present):
         // Entropy stored: 100, 200, 300, 400
@@ -205,7 +205,7 @@ mod tests {
         synapse.set_raw_surprise(100);
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::new(synapse);
-        assert!(memory.update(sifted, SiftedProof(())).is_ok());
+        assert!(memory.update(sifted, SiftedProof::for_testing()).is_ok());
 
         // 2. Invalid update: Surprise too high (Hallucination)
         let mut synapse = Synapse::new();
@@ -214,7 +214,7 @@ mod tests {
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::new(synapse);
         assert_eq!(
-            memory.update(sifted, SiftedProof(())).unwrap_err(),
+            memory.update(sifted, SiftedProof::for_testing()).unwrap_err(),
             KernelError::HallucinationDetected
         );
 
@@ -225,7 +225,7 @@ mod tests {
         synapse.set_has_bias(true);
         let sifted = SiftedSynapse::new(synapse);
         assert_eq!(
-            memory.update(sifted, SiftedProof(())).unwrap_err(),
+            memory.update(sifted, SiftedProof::for_testing()).unwrap_err(),
             KernelError::BiasHaloDetected
         );
 
@@ -236,7 +236,7 @@ mod tests {
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::new(synapse);
         assert_eq!(
-            memory.update(sifted, SiftedProof(())).unwrap_err(),
+            memory.update(sifted, SiftedProof::for_testing()).unwrap_err(),
             KernelError::CognitiveInstability
         );
     }
@@ -248,14 +248,14 @@ mod tests {
         s1.set_raw_entropy(100);
         let sifted1 = SiftedSynapse::new(s1);
 
-        memory.update(sifted1, SiftedProof(())).unwrap();
+        memory.update(sifted1, SiftedProof::for_testing()).unwrap();
         assert!(memory.state[0].is_stable(100));
 
         let mut s2 = Synapse::new();
         s2.set_raw_entropy(200);
         let sifted2 = SiftedSynapse::new(s2);
 
-        memory.update(sifted2, SiftedProof(())).unwrap();
+        memory.update(sifted2, SiftedProof::for_testing()).unwrap();
         assert!(memory.state[0].is_stable(200));
         assert_eq!(memory.current_index, 0);
     }
@@ -274,7 +274,7 @@ mod tests {
         let sifted = SiftedSynapse::new(synapse);
         // Any surprise > 0 should fail
         assert_eq!(
-            memory.update(sifted, SiftedProof(())).unwrap_err(),
+            memory.update(sifted, SiftedProof::for_testing()).unwrap_err(),
             KernelError::HallucinationDetected
         );
     }
@@ -286,7 +286,7 @@ mod tests {
         let sifted = SiftedSynapse::new(synapse);
         // Even surprise 0 > -1, so it should fail
         assert_eq!(
-            memory.update(sifted, SiftedProof(())).unwrap_err(),
+            memory.update(sifted, SiftedProof::for_testing()).unwrap_err(),
             KernelError::HallucinationDetected
         );
     }
@@ -308,7 +308,7 @@ mod proptests {
                 let mut synapse = Synapse::new();
                 synapse.set_raw_entropy(e);
                 let sifted = SiftedSynapse::new(synapse);
-                prop_assert!(memory.update(sifted, SiftedProof(())).is_ok());
+                prop_assert!(memory.update(sifted, SiftedProof::for_testing()).is_ok());
             }
         }
     }
@@ -329,8 +329,10 @@ pub mod cognitive_memory {
         let synapse = Synapse::from_raw_u128(synapse_bits);
         let sifted = SiftedSynapse::new(synapse);
         // C-ABI callers bypass the Rust-side sifter; the caller is responsible
-        // for pre-sifting on their side. We mint the proof internally.
-        let proof = SiftedProof(());
+        // for pre-sifting on their side. We mint the proof via the explicit
+        // bypass path — this is a documented FFI boundary exception, not a
+        // proof-system violation.
+        let proof = SiftedProof::from_raw_bits_bypass();
 
         let mut memory = GLOBAL_MEMORY
             .lock()

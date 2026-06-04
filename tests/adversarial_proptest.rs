@@ -2,6 +2,7 @@
 mod tests {
     use llmosafe::{
         KernelError, ReasoningLoop, SiftedProof, SiftedSynapse, Synapse, WorkingMemory,
+        PRESSURE_THRESHOLD,
     };
     use proptest::prelude::*;
 
@@ -44,7 +45,7 @@ mod tests {
                     assert!(has_bias, "BiasHaloDetected but has_bias=false — false positive");
                 }
                 Err(KernelError::CognitiveInstability) => {
-                    assert!(entropy > 1000 || entropy == 0xFFFF,
+                    assert!(entropy > PRESSURE_THRESHOLD as u16 || entropy == 0xFFFF,
                         "CognitiveInstability but entropy={entropy} is within bounds");
                 }
                 Err(KernelError::HallucinationDetected) => {

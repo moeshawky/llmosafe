@@ -12,14 +12,14 @@ fn main() {
     let content = if model_path.exists() {
         generate_from_model(model_path)
     } else {
-        println!("cargo:warning=No vocab_model.bin found — using fail-closed empty vocabulary");
+        println!("cargo:warning=No vocab_model.bin found — using fail-closed vocabulary (all inputs flagged)");
         generate_fallback()
     };
 
     match &content {
         Ok(rs) => fs::write(&dest_path, rs).unwrap(),
         Err(e) => {
-            println!("cargo:warning=Failed to read vocab_model.bin: {e} — using fallback");
+            println!("cargo:warning=Failed to read vocab_model.bin: {e} — using fail-closed fallback (all inputs flagged)");
             fs::write(&dest_path, generate_fallback().unwrap()).unwrap();
         }
     }
@@ -118,10 +118,12 @@ fn generate_from_model(path: &Path) -> Result<String, String> {
 }
 
 fn generate_fallback() -> Result<String, String> {
+    // Fail-closed: when vocab is missing, INTERCEPT pushes every empty input
+    // above THRESHOLD so all text is classified as manipulation.
     Ok(r#"#[allow(dead_code)]
 const VOCAB_SIZE: usize = 0;
 const THRESHOLD: f32 = 0.5f32;
-const INTERCEPT: f32 = -2.0f32;
+const INTERCEPT: f32 = 1.0f32;
 const VOCAB: [(u64, f32, f32); 0] = [];
 const _VOCAB_SIZE_CHECK: () = assert!(VOCAB.len() == VOCAB_SIZE);
 "#

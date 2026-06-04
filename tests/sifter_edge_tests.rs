@@ -139,16 +139,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sift_perceptions_with_objective() {
-        let _result = SiftedSynapse::from_synapse(Synapse::new());
-
-        // Both should produce valid synapses
-
-        // Verify objective parameter is accepted
-        let _result2 = SiftedSynapse::from_synapse(Synapse::new());
-    }
-
-    #[test]
     fn test_halo_signal_null_bytes() {
         let signal = calculate_halo_signal("hello\0world expert");
         assert!(signal > 0, "Should handle null bytes in string");

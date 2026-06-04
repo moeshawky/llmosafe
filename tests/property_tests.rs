@@ -4,7 +4,7 @@
 #![allow(deprecated)]
 #[cfg(feature = "testing")]
 use llmosafe::{
-    calculate_halo_signal, get_bias_breakdown, sift_perceptions, ConfidenceTracker, DriftDetector,
+    calculate_halo_signal, get_bias_breakdown, sift_text, ConfidenceTracker, DriftDetector,
     EscalationPolicy, PressureLevel, RepetitionDetector, SiftedProof, Synapse, WorkingMemory,
 };
 #[cfg(feature = "testing")]
@@ -37,8 +37,8 @@ proptest! {
     /// Sifting should always produce a valid synapse (may have high entropy)
     #[test]
     fn sift_always_produces_synapse(observations in prop::collection::vec(".*", 0..10)) {
-        let obs_refs: Vec<&str> = observations.iter().map(|s| s.as_str()).collect();
-        let (_sifted, _proof) = sift_perceptions(&obs_refs, "test");
+        let text = observations.join(" ");
+        let (_sifted, _proof) = sift_text(&text);
 
         // Should always produce some entropy value
     }

@@ -3,7 +3,7 @@ use llmosafe::llmosafe_classifier::classify_text;
 #[cfg(feature = "testing")]
 use llmosafe::{
     KernelError, ReasoningLoop, SiftedProof, SiftedSynapse, SifterOutput, Synapse, ValidatedProof,
-    WorkingMemory,
+    WorkingMemory, sift_text,
 };
 
 #[cfg(feature = "testing")]
@@ -113,6 +113,22 @@ fn test_sifted_to_kernel_boundary() {
 
 #[cfg(feature = "testing")]
 #[test]
+fn test_sifted_to_kernel_boundary_via_sift_text() {
+    let (sifted, proof) = sift_text("the weather is sunny today");
+    let mut memory = WorkingMemory::<64>::new(500);
+    match memory.update(sifted, proof) {
+        Ok((validated, vproof)) => {
+            let mut guard = ReasoningLoop::<10>::new();
+            let _ = guard.next_step(validated, vproof);
+        }
+        Err(_) => {
+            // valid pipeline behavior
+        }
+    }
+}
+
+#[cfg(feature = "testing")]
+#[test]
 fn test_c_abi_rejects_biased_synapse() {
     let mut synapse = Synapse::new();
     synapse.set_raw_entropy(500);
@@ -142,7 +158,7 @@ fn test_c_abi_accepts_valid_synapse() {
 
 #[cfg(feature = "testing")]
 #[test]
-fn test_empty_sift_perceptions_returns_high_entropy() {
+fn test_manual_max_entropy_synapse() {
     let mut synapse = Synapse::new();
     synapse.set_raw_entropy(0xFFFF);
     let sifted = SiftedSynapse::from_synapse(synapse);
