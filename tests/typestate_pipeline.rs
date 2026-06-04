@@ -1,6 +1,6 @@
-use llmosafe::{Synapse, WorkingMemory};
 #[cfg(feature = "testing")]
 use llmosafe::{ReasoningLoop, SiftedProof};
+use llmosafe::{Synapse, WorkingMemory};
 
 #[cfg(feature = "testing")]
 #[test]
