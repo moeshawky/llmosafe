@@ -77,7 +77,7 @@ pub mod llmosafe_sifter;
 pub mod llmosafe_body;
 
 pub use control_types::{
-    ControlSignal, DesignAssuranceLevel, GainSchedule, OverrideFlags, PidInput, Setpoint,
+    ControlSignal, DesignAssuranceLevel, OverrideFlags, PidInput,
 };
 #[cfg(feature = "std")]
 pub use llmosafe_body::BodyOutput;
@@ -100,7 +100,7 @@ pub use llmosafe_kernel::{
 };
 pub use llmosafe_memory::MemoryOutput;
 pub use llmosafe_memory::WorkingMemory;
-pub use llmosafe_pid::{apply_safety_overrides, compute_pid_score_pure, PidConfig, PidState};
+pub use llmosafe_pid::{apply_safety_overrides, compute_pid_score, compute_pid_score_pure, PidConfig, PidState};
 #[cfg(feature = "std")]
 pub use llmosafe_pipeline::STAGE_BODY;
 pub use llmosafe_pipeline::{
@@ -113,7 +113,7 @@ pub use llmosafe_sifter::{
 };
 
 #[cfg(feature = "std")]
-mod c_abi {
+pub mod c_abi {
     use std::sync::Mutex;
 
     use crate::llmosafe_body::ResourceGuard;
@@ -287,6 +287,66 @@ mod c_abi {
         }
     }
 
+    /// Returns the classifier score from the last `sift_and_process` call
+    /// on the given handle.
+    ///
+    /// Negative = safe, positive = manipulation signal. Unbounded f32
+    /// returned as f64 for C-ABI compatibility. Returns -1.0 if the handle
+    /// is invalid, the slot is uninitialized, or no result is available.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_get_classifier_score(instance_id: u32) -> f64 {
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if (instance_id as usize) >= ARENA_SIZE {
+            return -1.0;
+        }
+        match &arena[instance_id as usize] {
+            Some(slot) => match &slot.last_result {
+                Some(r) => r.classifier_score as f64,
+                None => -1.0,
+            },
+            None => -1.0,
+        }
+    }
+
+    /// Reads PID state from the pipeline associated with `instance_id`.
+    ///
+    /// Writes `acute_entropy`, `chronic_entropy`, and `prev_pressure_norm`
+    /// (all `f64`, converted from internal `f32`) into the provided output
+    /// pointers. Returns 0 on success, 1 if `instance_id` is invalid or
+    /// the slot is uninitialized.
+    #[no_mangle]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_get_pid_state(
+        instance_id: u32,
+        acute: *mut f64,
+        chronic: *mut f64,
+        pressure: *mut f64,
+    ) -> u32 {
+        if acute.is_null() || chronic.is_null() || pressure.is_null() {
+            return 1;
+        }
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let handle = instance_id as usize;
+        if handle >= ARENA_SIZE {
+            return 1;
+        }
+        let slot = match &arena[handle] {
+            Some(s) => s,
+            None => return 1,
+        };
+        let state = slot.pipeline.pid_state();
+        unsafe {
+            *acute = state.acute_entropy as f64;
+            *chronic = state.chronic_entropy as f64;
+            *pressure = state.prev_pressure_norm as f64;
+        }
+        0
+    }
+
     /// Destroys the pipeline associated with `handle`, freeing the arena
     /// slot for reuse.  No-op if handle is invalid or already destroyed.
     #[no_mangle]
@@ -376,8 +436,296 @@ mod c_abi {
     }
 
     #[no_mangle]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_get_memory_stats(
+        instance_id: u32,
+        mean: *mut f64,
+        variance: *mut f64,
+        trend: *mut f64,
+        drifting: *mut u32,
+    ) -> u32 {
+        if mean.is_null() || variance.is_null() || trend.is_null() || drifting.is_null() {
+            return 1;
+        }
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let idx = instance_id as usize;
+        if idx >= ARENA_SIZE {
+            return 1;
+        }
+        let slot = match &arena[idx] {
+            Some(s) => s,
+            None => return 1,
+        };
+        let stats = slot.pipeline.memory_stats();
+        unsafe {
+            *mean = stats.mean;
+            *variance = stats.variance;
+            *trend = stats.trend;
+            *drifting = stats.is_drifting as u32;
+        }
+        0
+    }
+
+    #[no_mangle]
     pub extern "C" fn llmosafe_get_system_cpu_load() -> u8 {
         ResourceGuard::system_cpu_load()
+    }
+
+    /// Writes kernel output fields from the last pipeline invocation.
+    ///
+    /// `error_out` receives `error_kernel` (f32, normalised entropy error
+    /// where setpoint=0).  `is_stable_out` receives 1 if mean entropy was
+    /// below `STABILITY_THRESHOLD`, 0 otherwise.  `depth_out` receives the
+    /// reasoning step depth cast to u32.
+    /// Returns 0 on success, -9 if handle invalid, slot empty, no result,
+    /// or kernel output is `None`.
+    #[no_mangle]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_get_kernel_output(
+        instance_id: u32,
+        error_out: *mut f32,
+        is_stable_out: *mut u8,
+        depth_out: *mut u32,
+    ) -> i32 {
+        if error_out.is_null() || is_stable_out.is_null() || depth_out.is_null() {
+            return -9;
+        }
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if (instance_id as usize) >= ARENA_SIZE {
+            return -9;
+        }
+        match &arena[instance_id as usize] {
+            Some(slot) => match &slot.last_result {
+                Some(r) => match r.kernel_output() {
+                    Some(ko) => {
+                        unsafe {
+                            *error_out = ko.error_kernel;
+                            *is_stable_out = if ko.is_stable { 1 } else { 0 };
+                            *depth_out = ko.depth as u32;
+                        }
+                        0
+                    },
+                    None => return -9,
+                },
+                None => return -9,
+            },
+            None => -9,
+        }
+    }
+
+    /// Returns the body pressure from the last pipeline invocation.
+    ///
+    /// Returns the pressure value [0, 100] stored by `process_with_pressure()`.
+    /// Returns `u32::MAX` if handle is invalid, slot is uninitialized, or
+    /// no result is available.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_get_body_pressure(instance_id: u32) -> u32 {
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if (instance_id as usize) >= ARENA_SIZE {
+            return u32::MAX;
+        }
+        match &arena[instance_id as usize] {
+            Some(slot) => match &slot.last_result {
+                Some(r) => u32::from(r.body_pressure()),
+                None => u32::MAX,
+            },
+            None => u32::MAX,
+        }
+    }
+
+    /// Returns combined risk bits from a synapse.
+    ///
+    /// Packs OOV ratio (bits 6-13) and detection flags (bits 0-5) into u16.
+    /// See `Synapse::combined_risk_bits()` for the 2D risk-space encoding.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_combined_risk_bits(synapse_bits: u64) -> u16 {
+        let synapse = Synapse::from_raw_u64(synapse_bits);
+        synapse.combined_risk_bits()
+    }
+
+    /// Returns the entropy field from the last pipeline result.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_get_entropy(instance_id: u32) -> u16 {
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if (instance_id as usize) >= ARENA_SIZE {
+            return 0;
+        }
+        match &arena[instance_id as usize] {
+            Some(slot) => match &slot.last_result {
+                Some(ref r) => r.entropy,
+                None => 0,
+            },
+            None => 0,
+        }
+    }
+
+    /// Returns the surprise field from the last pipeline result.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_get_surprise(instance_id: u32) -> u16 {
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if (instance_id as usize) >= ARENA_SIZE {
+            return 0;
+        }
+        match &arena[instance_id as usize] {
+            Some(slot) => match &slot.last_result {
+                Some(ref r) => r.surprise,
+                None => 0,
+            },
+            None => 0,
+        }
+    }
+
+    /// Returns the detection_flags field from the last pipeline result.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_get_detection_flags(instance_id: u32) -> u8 {
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if (instance_id as usize) >= ARENA_SIZE {
+            return 0;
+        }
+        match &arena[instance_id as usize] {
+            Some(slot) => match &slot.last_result {
+                Some(ref r) => r.detection_flags,
+                None => 0,
+            },
+            None => 0,
+        }
+    }
+
+    /// Returns the oov_ratio field from the last pipeline result.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_get_oov_ratio(instance_id: u32) -> u8 {
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if (instance_id as usize) >= ARENA_SIZE {
+            return 0;
+        }
+        match &arena[instance_id as usize] {
+            Some(slot) => match &slot.last_result {
+                Some(ref r) => r.oov_ratio,
+                None => 0,
+            },
+            None => 0,
+        }
+    }
+
+    /// Returns the stages_executed field from the last pipeline result.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_get_stages_executed(instance_id: u32) -> u8 {
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if (instance_id as usize) >= ARENA_SIZE {
+            return 0;
+        }
+        match &arena[instance_id as usize] {
+            Some(slot) => match &slot.last_result {
+                Some(ref r) => r.stages_executed,
+                None => 0,
+            },
+            None => 0,
+        }
+    }
+
+    /// Returns the step_count field from the last pipeline result.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_get_step_count(instance_id: u32) -> u32 {
+        let arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if (instance_id as usize) >= ARENA_SIZE {
+            return 0;
+        }
+        match &arena[instance_id as usize] {
+            Some(slot) => match &slot.last_result {
+                Some(ref r) => r.step_count as u32,
+                None => 0,
+            },
+            None => 0,
+        }
+    }
+
+    /// Runs text through the pipeline with body pressure gating.
+    #[no_mangle]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_process_with_pressure(
+        handle: usize,
+        text_ptr: *const u8,
+        text_len: usize,
+        body_entropy: u16,
+        pressure: u8,
+    ) -> i32 {
+        if text_ptr.is_null()
+            || text_len == 0
+            || text_len > isize::MAX as usize
+            || text_len > 10 * 1024 * 1024
+        {
+            return -9;
+        }
+        let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
+        let text = String::from_utf8_lossy(slice);
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if handle >= ARENA_SIZE {
+            return -9;
+        }
+        let slot = match arena[handle].as_mut() {
+            Some(s) => s,
+            None => return -9,
+        };
+        let result = slot.pipeline.process_with_pressure(&text, body_entropy, pressure);
+        let code = decision_to_code(&result.decision);
+        slot.last_result = Some(result);
+        code
+    }
+
+    /// Resets detectors and monitor only (preserves memory and reasoning).
+    #[no_mangle]
+    pub extern "C" fn llmosafe_reset_detectors(handle: usize) -> u32 {
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if handle >= ARENA_SIZE {
+            return 1;
+        }
+        match arena[handle].as_mut() {
+            Some(s) => {
+                s.pipeline.reset_detectors();
+                0
+            }
+            None => 1,
+        }
+    }
+
+    /// Full reset to post-construction state.
+    #[no_mangle]
+    pub extern "C" fn llmosafe_reset_full(handle: usize) -> u32 {
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if handle >= ARENA_SIZE {
+            return 1;
+        }
+        match arena[handle].as_mut() {
+            Some(s) => {
+                s.pipeline.reset_full();
+                0
+            }
+            None => 1,
+        }
     }
 }
 

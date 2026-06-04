@@ -481,46 +481,6 @@ fn calculate_utility_with_cache(
     count.saturating_mul(100).min(u16::MAX as usize) as u16
 }
 
-/// Build a `(SiftedSynapse, SiftedProof)` pair from pre-computed classifier output.
-///
-/// Internal helper for `sift_perceptions()` (multi-observation legacy path) and
-/// testing. Production code should use `sift_text()` which runs both the classifier
-/// and keyword-bias pathways — the innate + adaptive immune layers.
-///
-/// # Fields
-///
-/// - `raw_entropy`: u16 — `classification.probability * 65535` clamped to `[0, 65535]`
-/// - `raw_surprise`: u16 — `classification.oov_ratio * 65535` (classifier uncertainty)
-/// - `has_bias`: bool — `classification.is_manipulation`
-/// - `anchor_hash`: u32 (B31) — Adler-32 of the observation bytes, masked to 31 bits
-/// - `oov_ratio`: u8 — packed into synapse reserved bits 6-13
-///
-/// # Returns
-///
-/// `(SiftedSynapse, SiftedProof)` — the proof is minted by this function only;
-/// callers outside the sifter module cannot construct `SiftedProof` directly.
-fn sift_observation_inner(
-    classification: &ClassificationResult,
-    observation: &str,
-) -> (SiftedSynapse, SiftedProof) {
-    let entropy = (65535.0_f32 * classification.probability.clamp(0.0, 1.0)) as u16;
-    let surprise = (65535.0_f32 * classification.oov_ratio.clamp(0.0, 1.0)) as u16;
-
-    let mut synapse = Synapse::new();
-    synapse.set_raw_entropy(entropy);
-    synapse.set_raw_surprise(surprise);
-    synapse.set_has_bias(classification.is_manipulation);
-    synapse.set_oov_ratio((classification.oov_ratio.clamp(0.0, 1.0) * 255.0) as u8);
-
-    let anchor_hash = adler32::adler32(observation.as_bytes());
-    synapse.set_anchor_hash(anchor_hash & 0x7FFFFFFF);
-
-    let sifted = SiftedSynapse::new(synapse);
-    let proof = SiftedProof::mint();
-
-    (sifted, proof)
-}
-
 /// Internal version of `sift_text` that also returns the raw classifier score.
 ///
 /// The score is the unbounded logistic regression sum before sigmoid.
@@ -585,15 +545,45 @@ pub fn sift_text(observation: &str) -> (SiftedSynapse, SiftedProof) {
     (sifted, proof)
 }
 
-/// Build a `(SiftedSynapse, SiftedProof)` pair from classifier output and
-/// observation text. Thin wrapper around `sift_observation_inner`.
+/// Build a `(SiftedSynapse, SiftedProof)` pair from pre-computed classifier output.
 ///
-/// Legacy public API — prefer `sift_text()` for new code.
+/// Runs the same dual-path (classifier + keyword-bias) composition as
+/// `sift_text()`, but accepts a pre-computed `ClassificationResult` to skip
+/// tokenization. The keyword-bias pathway is the innate immune backstop:
+/// even if classifier is compromised, keyword pattern-matching flags text with
+/// known manipulation markers. Entropy is `max(classifier_entropy, keyword_boost)`,
+/// and bias is `classifier.is_manipulation || bias_breakdown.total() > 0`.
 pub fn sift_observation(
     classification: &ClassificationResult,
     observation: &str,
 ) -> (SiftedSynapse, SiftedProof) {
-    sift_observation_inner(classification, observation)
+    let bias = get_bias_breakdown(observation);
+
+    let classifier_entropy =
+        (65535.0_f32 * classification.probability.clamp(0.0, 1.0)) as u16;
+    let keyword_boost = if bias.total() > 0 {
+        ((bias.total() as u32).saturating_mul(65535) / 9000).min(65535) as u16
+    } else {
+        0
+    };
+    let entropy = classifier_entropy.max(keyword_boost);
+
+    let surprise = (65535.0_f32 * classification.oov_ratio.clamp(0.0, 1.0)) as u16;
+    let has_bias = classification.is_manipulation || bias.total() > 0;
+
+    let mut synapse = Synapse::new();
+    synapse.set_raw_entropy(entropy);
+    synapse.set_raw_surprise(surprise);
+    synapse.set_has_bias(has_bias);
+    synapse.set_oov_ratio((classification.oov_ratio.clamp(0.0, 1.0) * 255.0) as u8);
+
+    let anchor_hash = adler32::adler32(observation.as_bytes());
+    synapse.set_anchor_hash(anchor_hash & 0x7FFFFFFF);
+
+    let sifted = SiftedSynapse::new(synapse);
+    let proof = SiftedProof::mint();
+
+    (sifted, proof)
 }
 
 /// Classify observations through the dual-path sifter (classifier + keyword)
@@ -611,7 +601,7 @@ pub fn sift_observation(
 /// use llmosafe::sift_perceptions;
 /// let (sifted, proof) = sift_perceptions(&["Observation 1", "Observation 2"], "safety");
 /// ```
-#[deprecated = "Use sift_observation() for the unified classifier pathway. sift_perceptions returns the legacy tuple format."]
+#[deprecated = "Use sift_text()"]
 pub fn sift_perceptions(observations: &[&str], _objective: &str) -> (SiftedSynapse, SiftedProof) {
     if observations.is_empty() {
         let mut synapse = Synapse::new();

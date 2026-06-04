@@ -349,4 +349,18 @@ pub mod cognitive_memory {
             Err(KernelError::DeadlineExceeded) => -7,
         }
     }
+
+    /// Returns (mean_entropy, entropy_variance, trend, is_drifting) from the global WorkingMemory.
+    ///
+    /// `is_drifting` uses a fixed threshold of 10.0.
+    pub fn get_memory_stats() -> (f64, f64, f64, bool) {
+        let memory = GLOBAL_MEMORY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mean = memory.mean_entropy();
+        let variance = memory.entropy_variance();
+        let trend = memory.trend();
+        let is_drifting = memory.is_drifting(10.0);
+        (mean, variance, trend, is_drifting)
+    }
 }

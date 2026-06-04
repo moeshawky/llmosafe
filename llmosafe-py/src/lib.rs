@@ -27,7 +27,15 @@ use ::llmosafe::llmosafe_body::ResourceGuard;
 use ::llmosafe::llmosafe_kernel::{KernelError, Synapse};
 use ::llmosafe::llmosafe_sifter::sift_text;
 use ::llmosafe::llmosafe_body::llmosafe_get_environmental_entropy;
-use ::llmosafe::llmosafe_memory::cognitive_memory::process_state_update;
+use ::llmosafe::llmosafe_memory::cognitive_memory::{process_state_update, get_memory_stats};
+use ::llmosafe::c_abi::{
+    llmosafe_create, llmosafe_sift_and_process,
+    llmosafe_get_classifier_score, llmosafe_get_pid_state, llmosafe_get_memory_stats as c_get_memory_stats,
+    llmosafe_get_kernel_output, llmosafe_get_body_pressure, llmosafe_destroy,
+    llmosafe_get_entropy, llmosafe_get_surprise, llmosafe_get_detection_flags,
+    llmosafe_get_oov_ratio, llmosafe_get_stages_executed, llmosafe_get_step_count,
+    llmosafe_process_with_pressure, llmosafe_reset_detectors, llmosafe_reset_full,
+};
 
 // ── Bias Detection ─────────────────────────────────────────────
 
@@ -238,6 +246,30 @@ fn get_environmental_entropy() -> u16 {
     llmosafe_get_environmental_entropy()
 }
 
+/// Get working-memory statistics from the global ring buffer.
+///
+/// Returns a dict with four keys:
+///
+/// | Key          | Type  | Description                                      |
+/// |--------------|-------|--------------------------------------------------|
+/// | ``mean``     | float | Running mean entropy [0, 65535]                  |
+/// | ``variance`` | float | Running variance of entropy                      |
+/// | ``trend``    | float | Linear regression slope over the buffer window   |
+/// | ``drifting`` | bool  | True when |trend| > 10.0                       |
+///
+/// Returns:
+///     dict with keys ``mean``, ``variance``, ``trend``, ``drifting``.
+#[pyfunction]
+fn memory_stats(py: Python<'_>) -> PyResult<PyObject> {
+    let (mean, variance, trend, is_drifting) = get_memory_stats();
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("mean", mean)?;
+    dict.set_item("variance", variance)?;
+    dict.set_item("trend", trend)?;
+    dict.set_item("drifting", is_drifting)?;
+    Ok(dict.into())
+}
+
 /// Process a cognitive state update through the safety pipeline.
 ///
 /// Pipeline: surprise gating → entropy check (via the global WorkingMemory,
@@ -270,6 +302,371 @@ fn get_environmental_entropy() -> u16 {
 #[pyfunction]
 fn process_synapse(synapse_bits: u64) -> i32 {
     process_state_update(synapse_bits.into())
+}
+
+// ── PID State Introspection ─────────────────────────────────────
+
+/// Read the live PID state from a CognitivePipeline instance.
+///
+/// Returns the dual-rate leaky integrators and step-change tracking
+/// field from the PID controller. All values are `f32` clamped to
+/// `[0, 1]`, returned as `float`.
+///
+/// Args:
+///     instance_id: Pipeline handle returned by `llmosafe_create()` (0–15).
+///
+/// Returns:
+///     A dict with keys `acute_entropy`, `chronic_entropy`,
+///     `prev_pressure_norm`. All values are `float`.
+///
+/// Raises:
+///     LLMOSafeError: If `instance_id` is invalid or the slot is
+///     uninitialized.
+///
+/// Example:
+///     >>> get_pid_state(0)
+///     {'acute_entropy': 0.0, 'chronic_entropy': 0.0, 'prev_pressure_norm': 0.0}
+#[pyfunction]
+fn get_pid_state(instance_id: u32) -> PyResult<PyObject> {
+    let mut acute: f64 = 0.0;
+    let mut chronic: f64 = 0.0;
+    let mut pressure: f64 = 0.0;
+    let result = ::llmosafe::c_abi::llmosafe_get_pid_state(instance_id, &mut acute, &mut chronic, &mut pressure);
+    if result != 0 {
+        return Err(LLMOSafeError::new_err(format!(
+            "instance {} not found",
+            instance_id
+        )));
+    }
+    Python::with_gil(|py| {
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("acute_entropy", acute)?;
+        dict.set_item("chronic_entropy", chronic)?;
+        dict.set_item("prev_pressure_norm", pressure)?;
+        Ok(dict.into())
+    })
+}
+
+// ── Arena-based Classifier Score ───────────────────────────────
+
+/// Get the raw classifier score from the most recent pipeline invocation.
+///
+/// Queries the arena slot identified by `instance_id` (the handle returned
+/// by a prior `llmosafe_create` call).  Returns the raw classifier logit
+/// score (f32→f64) from the last `sift_and_process` run.
+///
+/// Negative values indicate a safe-text classification; positive values
+/// indicate manipulation signal.  The score is unbounded.
+///
+/// Returns -1.0 if the instance_id is invalid, the slot is uninitialized,
+/// or no result is available yet.
+///
+/// Args:
+///     instance_id: Pipeline handle (returned by llmosafe_create).
+///
+/// Returns:
+///     Classifier logit score as float, or -1.0 on error.
+#[pyfunction]
+fn get_classifier_score(instance_id: u32) -> f64 {
+    ::llmosafe::c_abi::llmosafe_get_classifier_score(instance_id)
+}
+
+// ── Kernel Output Introspection ─────────────────────────────────
+
+/// Read kernel output fields from the last pipeline invocation.
+///
+/// Queries the arena slot identified by `instance_id`.  Returns a tuple
+/// of `(error_kernel, is_stable, depth)` from the kernel output of the
+/// most recent `sift_and_process` call.  `error_kernel` is the normalised
+/// entropy error `[0.0, 1.0]` (setpoint=0, the raw entropy divided by
+/// 65535).  `is_stable` is 1 when mean entropy was below the stability
+/// threshold, 0 otherwise.  `depth` is the reasoning step count.
+///
+/// Args:
+///     instance_id: Pipeline handle (returned by llmosafe_create).
+///
+/// Returns:
+///     `(error_kernel: float, is_stable: int, depth: int)`.
+///
+/// Raises:
+///     LLMOSafeError: If `instance_id` is invalid or no kernel output
+///     is available (pipeline halted before kernel stage).
+#[pyfunction]
+fn get_kernel_output(instance_id: u32) -> PyResult<(f32, u8, u32)> {
+    let mut error: f32 = 0.0;
+    let mut is_stable: u8 = 0;
+    let mut depth: u32 = 0;
+    let rc = ::llmosafe::c_abi::llmosafe_get_kernel_output(
+        instance_id,
+        &mut error,
+        &mut is_stable,
+        &mut depth,
+    );
+    if rc != 0 {
+        return Err(LLMOSafeError::new_err(format!(
+            "instance {} has no kernel output",
+            instance_id
+        )));
+    }
+    Ok((error, is_stable, depth))
+}
+
+/// Read the body pressure from the last pipeline invocation.
+///
+/// Queries the arena slot identified by `instance_id`.  Returns the
+/// RSS memory pressure percentage [0, 100] from the most recent
+/// `process_with_pressure` call.  Returns `u32::MAX` (4294967295) on
+/// invalid handle.
+///
+/// Args:
+///     instance_id: Pipeline handle (returned by llmosafe_create).
+///
+/// Returns:
+///     Body pressure percentage [0, 100], or 4294967295 on error.
+#[pyfunction]
+fn get_body_pressure(instance_id: u32) -> u32 {
+    ::llmosafe::c_abi::llmosafe_get_body_pressure(instance_id)
+}
+
+/// Packs OOV ratio and detection flags from a synapse into a single u16.
+///
+/// **Layout**: `[OOV:8 bits][FLAGS:6 bits]`.  The upper 8 bits carry the
+/// out-of-vocabulary ratio (0=0%, 255=100%).  The lower 6 bits carry
+/// detection flags (stuck, drifting, low-confidence, decaying, anomaly,
+/// adversarial).  Together they encode a 2D risk surface: high OOV +
+/// anomaly flag = distribution-shift attack, high OOV + adversarial
+/// flag = confirmed adversarial input.
+///
+/// Args:
+///     synapse_bits: 64-bit encoded synapse.
+///
+/// Returns:
+///     Combined risk bits (u16). Mask with `0b111111_11111111` for OOV,
+///     mask with `0b111111` for detection flags.
+#[pyfunction]
+fn combined_risk_bits(synapse_bits: u64) -> u16 {
+    let synapse = Synapse::from_raw_u64(synapse_bits);
+    synapse.combined_risk_bits()
+}
+
+// ── CognitivePipeline pyclass ────────────────────────────────
+
+/// Wraps a C-ABI arena-backed CognitivePipeline into a Python class.
+///
+/// Each instance holds an arena slot handle (0–15). The pipeline
+/// runs the full 5-stage safety analysis (SIFT → MEMORY → KERNEL →
+/// 6 detectors → PID → safety overrides) on every `process()` call.
+///
+/// Drop (or Python `del`) releases the arena slot for reuse.
+///
+/// Args:
+///     dal_level: DesignAssuranceLevel as u8 (0=A, 4=E). Reserved for
+///         future use — currently uses default (E).
+///     use_detection_gate: Whether to block on detection flags.
+///         Reserved for future use — currently always true.
+///     memory_depth: Maximum reasoning steps. Reserved for future
+///         use — currently fixed at 10.
+///
+/// Example:
+///     >>> pipeline = CognitivePipeline()
+///     >>> result = pipeline.process("some input text")
+///     >>> print(result["decision"], result["entropy"])
+#[pyclass]
+struct CognitivePipeline {
+    instance_id: u32,
+}
+
+#[pymethods]
+impl CognitivePipeline {
+    #[new]
+    fn new(
+        _dal_level: Option<u8>,
+        _use_detection_gate: Option<bool>,
+        _memory_depth: Option<usize>,
+    ) -> PyResult<Self> {
+        let objective = b"safety";
+        let handle = llmosafe_create(objective.as_ptr(), objective.len());
+        if handle == usize::MAX {
+            return Err(LLMOSafeError::new_err(
+                "Failed to create pipeline — arena full (max 16 instances)"
+            ));
+        }
+        Ok(Self { instance_id: handle as u32 })
+    }
+
+    /// Process text through the full 5-stage pipeline.
+    ///
+    /// Returns a dict with all PipelineResult fields:
+    /// decision, entropy, surprise, classifier_score, detection_flags,
+    /// oov_ratio, stages_executed, step_count, body_pressure,
+    /// kernel_error, kernel_is_stable, kernel_depth.
+    fn process(&mut self, text: &str) -> PyResult<PyObject> {
+        let code = llmosafe_sift_and_process(self.instance_id as usize, text.as_ptr(), text.len());
+        if code == -9 {
+            return Err(LLMOSafeError::new_err("Invalid pipeline instance"));
+        }
+        self.build_result_dict(code)
+    }
+
+    /// Process text with body pressure fed into the pre-SIFT gate.
+    ///
+    /// Args:
+    ///     text: Input text to analyze.
+    ///     entropy: Body entropy [0, 1000].
+    ///     pressure: RSS memory pressure [0, 100].
+    fn process_with_pressure(&mut self, text: &str, entropy: u16, pressure: u8) -> PyResult<PyObject> {
+        let code = llmosafe_process_with_pressure(
+            self.instance_id as usize,
+            text.as_ptr(),
+            text.len(),
+            entropy,
+            pressure,
+        );
+        if code == -9 {
+            return Err(LLMOSafeError::new_err("Invalid pipeline instance"));
+        }
+        self.build_result_dict(code)
+    }
+
+    /// Reset PID state and working memory (full reset).
+    fn reset(&mut self) -> PyResult<()> {
+        let rc = llmosafe_reset_full(self.instance_id as usize);
+        if rc != 0 {
+            return Err(LLMOSafeError::new_err("Invalid pipeline instance"));
+        }
+        Ok(())
+    }
+
+    /// Reset only the detectors (not PID/memory).
+    fn reset_detectors(&mut self) -> PyResult<()> {
+        let rc = llmosafe_reset_detectors(self.instance_id as usize);
+        if rc != 0 {
+            return Err(LLMOSafeError::new_err("Invalid pipeline instance"));
+        }
+        Ok(())
+    }
+
+    /// Get the raw classifier logit score from the last process().
+    fn get_classifier_score(&self) -> f64 {
+        llmosafe_get_classifier_score(self.instance_id)
+    }
+
+    /// Get live PID state from the pipeline.
+    ///
+    /// Returns dict with acute_entropy, chronic_entropy, prev_pressure_norm.
+    fn get_pid_state(&self) -> PyResult<PyObject> {
+        let mut acute: f64 = 0.0;
+        let mut chronic: f64 = 0.0;
+        let mut pressure: f64 = 0.0;
+        let rc = llmosafe_get_pid_state(self.instance_id, &mut acute, &mut chronic, &mut pressure);
+        if rc != 0 {
+            return Err(LLMOSafeError::new_err(format!(
+                "instance {} not found", self.instance_id
+            )));
+        }
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("acute_entropy", acute)?;
+            dict.set_item("chronic_entropy", chronic)?;
+            dict.set_item("prev_pressure_norm", pressure)?;
+            Ok(dict.into())
+        })
+    }
+
+    /// Get working-memory statistics from the pipeline.
+    ///
+    /// Returns dict with mean, variance, trend, drifting.
+    fn get_memory_stats(&self) -> PyResult<PyObject> {
+        let mut mean: f64 = 0.0;
+        let mut variance: f64 = 0.0;
+        let mut trend: f64 = 0.0;
+        let mut drifting: u32 = 0;
+        let rc = c_get_memory_stats(self.instance_id, &mut mean, &mut variance, &mut trend, &mut drifting);
+        if rc != 0 {
+            return Err(LLMOSafeError::new_err(format!(
+                "instance {} not found", self.instance_id
+            )));
+        }
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("mean", mean)?;
+            dict.set_item("variance", variance)?;
+            dict.set_item("trend", trend)?;
+            dict.set_item("drifting", drifting != 0)?;
+            Ok(dict.into())
+        })
+    }
+
+    /// Get kernel output from the last pipeline invocation.
+    ///
+    /// Returns tuple (error_kernel: float, is_stable: int, depth: int).
+    fn get_kernel_output(&self) -> PyResult<(f32, u8, u32)> {
+        let mut error: f32 = 0.0;
+        let mut is_stable: u8 = 0;
+        let mut depth: u32 = 0;
+        let rc = llmosafe_get_kernel_output(self.instance_id, &mut error, &mut is_stable, &mut depth);
+        if rc != 0 {
+            return Err(LLMOSafeError::new_err(format!(
+                "instance {} has no kernel output", self.instance_id
+            )));
+        }
+        Ok((error, is_stable, depth))
+    }
+
+    /// Get the body pressure from the last process_with_pressure() call.
+    fn get_body_pressure(&self) -> u32 {
+        llmosafe_get_body_pressure(self.instance_id)
+    }
+}
+
+impl CognitivePipeline {
+    fn build_result_dict(&self, code: i32) -> PyResult<PyObject> {
+        let entropy = llmosafe_get_entropy(self.instance_id);
+        let surprise = llmosafe_get_surprise(self.instance_id);
+        let detection_flags = llmosafe_get_detection_flags(self.instance_id);
+        let oov_ratio = llmosafe_get_oov_ratio(self.instance_id);
+        let stages_executed = llmosafe_get_stages_executed(self.instance_id);
+        let step_count = llmosafe_get_step_count(self.instance_id);
+        let classifier_score = llmosafe_get_classifier_score(self.instance_id);
+        let body_pressure = llmosafe_get_body_pressure(self.instance_id);
+
+        let (kernel_error, kernel_is_stable, kernel_depth) = {
+            let mut error: f32 = 0.0;
+            let mut is_stable: u8 = 0;
+            let mut depth: u32 = 0;
+            let rc = llmosafe_get_kernel_output(self.instance_id, &mut error, &mut is_stable, &mut depth);
+            if rc == 0 {
+                (Some(error), Some(is_stable), Some(depth))
+            } else {
+                (None, None, None)
+            }
+        };
+
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("decision", code)?;
+            dict.set_item("entropy", entropy)?;
+            dict.set_item("surprise", surprise)?;
+            dict.set_item("detection_flags", detection_flags)?;
+            dict.set_item("oov_ratio", oov_ratio)?;
+            dict.set_item("stages_executed", stages_executed)?;
+            dict.set_item("step_count", step_count)?;
+            dict.set_item("classifier_score", classifier_score)?;
+            dict.set_item("body_pressure", body_pressure)?;
+            if let (Some(e), Some(s), Some(d)) = (kernel_error, kernel_is_stable, kernel_depth) {
+                dict.set_item("kernel_error", e)?;
+                dict.set_item("kernel_is_stable", s != 0)?;
+                dict.set_item("kernel_depth", d)?;
+            }
+            Ok(dict.into())
+        })
+    }
+}
+
+impl Drop for CognitivePipeline {
+    fn drop(&mut self) {
+        llmosafe_destroy(self.instance_id as usize);
+    }
 }
 
 // ── Module registration ────────────────────────────────────────
@@ -308,9 +705,16 @@ fn _llmosafe(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_system_cpu_load, m)?)?;
     m.add_function(wrap_pyfunction!(get_environmental_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(process_synapse, m)?)?;
+    m.add_function(wrap_pyfunction!(memory_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(get_classifier_score, m)?)?;
+    m.add_function(wrap_pyfunction!(get_pid_state, m)?)?;
+    m.add_function(wrap_pyfunction!(get_kernel_output, m)?)?;
+    m.add_function(wrap_pyfunction!(get_body_pressure, m)?)?;
+    m.add_function(wrap_pyfunction!(combined_risk_bits, m)?)?;
     m.add("LLMOSafeError", _py.get_type::<LLMOSafeError>())?;
     m.add("ResourceExhaustedError", _py.get_type::<ResourceExhaustedError>())?;
     m.add("CognitiveInstabilityError", _py.get_type::<CognitiveInstabilityError>())?;
     m.add("BiasHaloDetectedError", _py.get_type::<BiasHaloDetectedError>())?;
+    m.add_class::<CognitivePipeline>()?;
     Ok(())
 }

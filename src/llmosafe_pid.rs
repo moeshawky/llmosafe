@@ -29,7 +29,7 @@
 //! boosts Kf ×1.5 (classifier amp), anomaly boosts Kd ×1.5 (rate-of-change)
 //! overrides drifting. When no flags are set, all multipliers return to 1.0.
 
-use crate::control_types::OverrideFlags;
+use crate::control_types::{OverrideFlags, PidInput};
 use crate::llmosafe_integration::{EscalationReason, SafetyDecision};
 use crate::llmosafe_kernel::{
     KernelError, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING, FLAG_LOW_CONFIDENCE, FLAG_STUCK,
@@ -221,27 +221,19 @@ fn modulate_gains(config: &PidConfig, flags: u8) -> EffectiveGains {
 ///
 /// Steps 1-4 of the PID algorithm. Step 5 (bias override) is caller's responsibility.
 ///
-/// Allow: 10 arguments is the minimum for composing entropy, trend, pressure,
-/// classifier probability, detection flags, pid config, and pid state
-/// into a single control-loop score. Individual struct grouping would
-/// require allocation or pass-through wrappers — inappropriate at Tier 2
-/// (see SYS-SPEC-602 paragraph 7.3.4).
-#[allow(clippy::too_many_arguments)]
+/// Reads all tier error signals and detection flags from `input` (PidInput),
+/// config from `config` (PidConfig), and mutates `state` (PidState).
 fn compute_pid_score_inner(
-    entropy_raw: u16,
-    trend: f64,
-    pressure: u8,
-    classifier_prob: f32,
-    detection_flags: u8,
+    input: &PidInput,
     config: &PidConfig,
     state: &mut PidState,
 ) -> f32 {
-    let entropy_norm = (f32::from(entropy_raw) / 65535.0_f32).clamp(0.0, 1.0);
-    let trend_abs_norm = ((trend.abs() as f32) / 65535.0_f32).clamp(0.0, 1.0);
-    let pressure_norm = (f32::from(pressure) / 100.0_f32).clamp(0.0, 1.0);
-    let f_norm = (1.0_f32 - classifier_prob).clamp(0.0, 1.0);
+    let entropy_norm = input.e_sift.clamp(0.0, 1.0);
+    let trend_abs_norm = ((input.trend.abs() as f32) / 65535.0_f32).clamp(0.0, 1.0);
+    let pressure_norm = (f32::from(input.pressure) / 100.0_f32).clamp(0.0, 1.0);
+    let f_norm = (1.0_f32 - input.classifier_prob).clamp(0.0, 1.0);
 
-    let eff = modulate_gains(config, detection_flags);
+    let eff = modulate_gains(config, input.detection_flags);
 
     let pressure_delta = (pressure_norm - state.prev_pressure_norm).abs();
     let kp_effective = if pressure_delta > config.step_change_threshold {
@@ -276,34 +268,25 @@ fn compute_pid_score_inner(
     risk
 }
 
-/// Computes a risk score from normalised sensor inputs using the PIDF formula.
+/// Computes a risk score from PidInput using the PIDF formula with bias override.
 ///
-/// Thin wrapper over `compute_pid_score_inner` that applies the bias override.
+/// Thin wrapper over `compute_pid_score_inner` that applies `input.has_bias`.
 /// See `compute_pid_score_pure` for the bias-free version.
-/// Allow: same justification as compute_pid_score_pure
-/// (Tier-2 no-allocation constraint precludes struct grouping).
-#[allow(clippy::too_many_arguments)]
-pub fn compute_pid_score(
-    entropy_raw: u16,
-    trend: f64,
-    pressure: u8,
-    classifier_prob: f32,
-    has_bias: bool,
-    detection_flags: u8,
-    config: &PidConfig,
-    state: &mut PidState,
-) -> f32 {
-    let mut risk = compute_pid_score_inner(
-        entropy_raw,
-        trend,
-        pressure,
-        classifier_prob,
-        detection_flags,
-        config,
-        state,
-    );
+///
+/// # Field mapping
+///
+/// | PidInput field     | PID term | Normalisation            |
+/// |--------------------|----------|--------------------------|
+/// | `e_sift`           | I (fast) | Already `[0, 1]`         |
+/// | `trend`            | D        | `abs(trend) / 65535`     |
+/// | `pressure`         | P        | `pressure / 100`         |
+/// | `classifier_prob`  | F        | `1.0 - classifier_prob`  |
+/// | `detection_flags`  | sidechain| Gain modulation          |
+/// | `has_bias`         | override | Forces `≥ halt_gain`     |
+pub fn compute_pid_score(input: &PidInput, config: &PidConfig, state: &mut PidState) -> f32 {
+    let mut risk = compute_pid_score_inner(input, config, state);
 
-    if has_bias {
+    if input.has_bias {
         risk = risk.max(config.halt_gain + 0.001);
     }
     risk.clamp(0.0, 1.0)
@@ -311,9 +294,22 @@ pub fn compute_pid_score(
 
 /// Pure PID risk computation — no safety overrides.
 ///
+/// Reads all tier error signals from `input` (PidInput), config from `config`
+/// (PidConfig), and mutates `state` (PidState). Returns `[0, 1]` risk score.
+///
 /// Implements the infusion pump pattern: this function computes risk
 /// from sensor fusion alone (P+I+D+F terms). Safety overrides are
 /// applied separately by `apply_safety_overrides()`.
+///
+/// # Field mapping
+///
+/// | PidInput field     | PID term | Normalisation            |
+/// |--------------------|----------|--------------------------|
+/// | `e_sift`           | I (fast) | Already `[0, 1]`         |
+/// | `trend`            | D        | `abs(trend) / 65535`     |
+/// | `pressure`         | P        | `pressure / 100`         |
+/// | `classifier_prob`  | F        | `1.0 - classifier_prob`  |
+/// | `detection_flags`  | sidechain| Gain modulation          |
 ///
 /// # DAL A
 ///
@@ -324,27 +320,8 @@ pub fn compute_pid_score(
 ///
 /// Each of 4 terms independently affects risk. Step-change detection
 /// independently doubles Kp. See traceability matrix R-05.
-/// Allow: 10 arguments is the minimum for Tier-2 PID composition
-/// (see justification on compute_pid_score_inner, SYS-SPEC-602 §7.3.4).
-#[allow(clippy::too_many_arguments)]
-pub fn compute_pid_score_pure(
-    entropy_raw: u16,
-    trend: f64,
-    pressure: u8,
-    classifier_prob: f32,
-    detection_flags: u8,
-    config: &PidConfig,
-    state: &mut PidState,
-) -> f32 {
-    compute_pid_score_inner(
-        entropy_raw,
-        trend,
-        pressure,
-        classifier_prob,
-        detection_flags,
-        config,
-        state,
-    )
+pub fn compute_pid_score_pure(input: &PidInput, config: &PidConfig, state: &mut PidState) -> f32 {
+    compute_pid_score_inner(input, config, state)
 }
 
 /// Applies safety overrides to a PID risk score.
@@ -353,7 +330,7 @@ pub fn compute_pid_score_pure(
 /// enforces hard limits. This prevents a PID bug from bypassing
 /// safety enforcement.
 ///
-/// # DAL A Overrides
+/// When the `dal` feature is enabled, hard limits are enforced:
 ///
 /// | Flag | Effect | Condition |
 /// |------|--------|-----------|
@@ -361,32 +338,42 @@ pub fn compute_pid_score_pure(
 /// | `EXHAUSTED` | `risk = 1.0` | Resource exhaustion is max priority |
 /// | `KERNEL_UNSTABLE` | `risk = max(risk, halt_gain)` | Kernel instability forces halt |
 ///
+/// When the `dal` feature is NOT enabled, risk passes through unchanged
+/// — no safety overrides are applied.
+///
 /// # MC/DC
 ///
 /// Each override flag must independently force Halt regardless of
 /// PID output. 100% MC/DC required on all 3 condition/decision pairs.
 pub fn apply_safety_overrides(risk: f32, flags: OverrideFlags, config: &PidConfig) -> f32 {
-    let mut risk = risk;
+    #[cfg(feature = "dal")]
+    {
+        let mut risk = risk;
 
-    // DAL A: bias detection forces halt regardless of PID
-    // MC/DC: has_bias independently forces risk >= halt_gain + ε
-    if flags.contains(OverrideFlags::BIAS) {
-        risk = risk.max(config.halt_gain + 0.001);
+        // DAL A: bias detection forces halt regardless of PID
+        // MC/DC: has_bias independently forces risk >= halt_gain + ε
+        if flags.contains(OverrideFlags::BIAS) {
+            risk = risk.max(config.halt_gain + 0.001);
+        }
+
+        // DAL A: resource exhaustion forces max risk
+        // MC/DC: is_exhausted independently forces risk = 1.0
+        if flags.contains(OverrideFlags::EXHAUSTED) {
+            risk = 1.0;
+        }
+
+        // DAL A: kernel instability forces halt-level risk
+        // MC/DC: is_kernel_unstable independently forces risk >= halt_gain
+        if flags.contains(OverrideFlags::KERNEL_UNSTABLE) {
+            risk = risk.max(config.halt_gain);
+        }
+
+        risk.clamp(0.0, 1.0)
     }
-
-    // DAL A: resource exhaustion forces max risk
-    // MC/DC: is_exhausted independently forces risk = 1.0
-    if flags.contains(OverrideFlags::EXHAUSTED) {
-        risk = 1.0;
+    #[cfg(not(feature = "dal"))]
+    {
+        risk
     }
-
-    // DAL A: kernel instability forces halt-level risk
-    // MC/DC: is_kernel_unstable independently forces risk >= halt_gain
-    if flags.contains(OverrideFlags::KERNEL_UNSTABLE) {
-        risk = risk.max(config.halt_gain);
-    }
-
-    risk.clamp(0.0, 1.0)
 }
 
 /// Maps a risk score to a `SafetyDecision` via gain thresholds.
@@ -573,7 +560,7 @@ mod tests {
     fn zero_input_produces_low_risk() {
         let config = PidConfig::default();
         let mut state = PidState::new();
-        let risk = compute_pid_score(0, 0.0, 0, 1.0, false, 0, &config, &mut state);
+        let risk = compute_pid_score(&PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
         // At prob=1.0, F_term = kf * (1 - 1) = 0. All other terms are zero.
         assert!((risk - 0.0).abs() < 0.01, "risk={}", risk);
     }
@@ -585,12 +572,12 @@ mod tests {
         // First cycle: integrators start at 0, then updated BEFORE I-term is computed.
         // acute = 0*0.9 + 1.0 = 1.0, chronic = 0*0.99 + 1.0 = 0.01 (clamped to 1.0)
         // Actually: acute=1.0, chronic=0.01. I_term = 0.5*1.0 + 0.3*0.01 = 0.503
-        let risk = compute_pid_score(65535, 0.0, 0, 1.0, false, 0, &config, &mut state);
+        let risk = compute_pid_score(&PidInput::new(0.0, 1.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
         // I_term alone ≈ 0.503, but F=0 (prob=1.0), P=0, D=0
         assert!(risk > 0.4, "risk should have I-term contribution: {}", risk);
 
         // Second cycle: integrators still saturated
-        let risk2 = compute_pid_score(65535, 0.0, 0, 1.0, false, 0, &config, &mut state);
+        let risk2 = compute_pid_score(&PidInput::new(0.0, 1.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
         assert!(risk2 > 0.4, "risk2 should also have I-term contribution");
     }
 
@@ -599,7 +586,7 @@ mod tests {
         let config = PidConfig::default();
         let mut state = PidState::new();
         // Seed integrators with high entropy (one cycle is enough to saturate)
-        compute_pid_score(65535, 0.0, 0, 1.0, false, 0, &config, &mut state);
+        compute_pid_score(&PidInput::new(0.0, 1.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
         let after_spike = state.chronic_entropy;
         assert!(
             after_spike > 0.9,
@@ -609,7 +596,7 @@ mod tests {
 
         // Feed zero entropy for 50 cycles
         for _ in 0..50 {
-            compute_pid_score(0, 0.0, 0, 1.0, false, 0, &config, &mut state);
+            compute_pid_score(&PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
         }
         assert!(
             state.chronic_entropy < after_spike,
@@ -625,7 +612,7 @@ mod tests {
         let mut state = PidState::new();
         // Start with prev_pressure_norm = 0.0 (default)
         // Feed pressure 80 → delta = 0.8 > 0.5 → Kp doubled
-        let risk_with_step = compute_pid_score(0, 0.0, 80, 1.0, false, 0, &config, &mut state);
+        let risk_with_step = compute_pid_score(&PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 80), &config, &mut state);
         // P_term = (kp * 2) * 0.8 = 2 * 0.8 = 1.6, clamped → 1.0
         assert!(
             (risk_with_step - 1.0).abs() < 0.01,
@@ -634,8 +621,7 @@ mod tests {
         );
 
         // Next cycle with same pressure: delta = 0.0 → no step change
-        let risk_no_step = compute_pid_score(0, 0.0, 80, 1.0, false, 0, &config, &mut state);
-        // P_term = kp * 0.8 = 1.0 * 0.8 = 0.8 (no doubling)
+        let risk_no_step = compute_pid_score(&PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 80), &config, &mut state);        // P_term = kp * 0.8 = 1.0 * 0.8 = 0.8 (no doubling)
         assert!(
             risk_no_step < risk_with_step,
             "step-change risk should be higher"
@@ -647,7 +633,7 @@ mod tests {
         let config = PidConfig::default();
         let mut state = PidState::new();
         // All inputs clean, but has_bias=true
-        let risk = compute_pid_score(0, 0.0, 0, 1.0, true, 0, &config, &mut state);
+        let risk = compute_pid_score(&PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, true, 0, 0), &config, &mut state);
         // risk >= halt_gain + 0.001 = 1.001, clamped to 1.0
         assert!(
             risk >= config.halt_gain,
@@ -671,12 +657,7 @@ mod tests {
         state.acute_entropy = 1.0;
         state.chronic_entropy = 1.0;
         let risk = compute_pid_score(
-            65535,
-            65535.0,
-            100,
-            0.0,
-            false,
-            FLAG_STUCK | FLAG_ANOMALY | FLAG_LOW_CONFIDENCE,
+            &PidInput::new(0.0, 1.0, 0.0, 0.0, 65535.0, 0.0, false, FLAG_STUCK | FLAG_ANOMALY | FLAG_LOW_CONFIDENCE, 100),
             &config,
             &mut state,
         );
@@ -690,11 +671,11 @@ mod tests {
         let mut state_low = PidState::new();
         let mut state_high = PidState::new();
         // Feed low entropy into both, then compare one step
-        let _ = compute_pid_score(1000, 0.0, 30, 0.8, false, 0, &config, &mut state_low);
-        let _ = compute_pid_score(1000, 0.0, 30, 0.8, false, 0, &config, &mut state_high);
+        let _ = compute_pid_score(&PidInput::new(0.0, f32::from(1000u16) / 65535.0_f32, 0.0, 0.0, 0.0, 0.8, false, 0, 30), &config, &mut state_low);
+        let _ = compute_pid_score(&PidInput::new(0.0, f32::from(1000u16) / 65535.0_f32, 0.0, 0.0, 0.0, 0.8, false, 0, 30), &config, &mut state_high);
 
-        let risk_low = compute_pid_score(5000, 0.0, 30, 0.8, false, 0, &config, &mut state_low);
-        let risk_high = compute_pid_score(50000, 0.0, 30, 0.8, false, 0, &config, &mut state_high);
+        let risk_low = compute_pid_score(&PidInput::new(0.0, f32::from(5000u16) / 65535.0_f32, 0.0, 0.0, 0.0, 0.8, false, 0, 30), &config, &mut state_low);
+        let risk_high = compute_pid_score(&PidInput::new(0.0, f32::from(50000u16) / 65535.0_f32, 0.0, 0.0, 0.0, 0.8, false, 0, 30), &config, &mut state_high);
         assert!(
             risk_high > risk_low,
             "higher entropy should produce higher risk: {} vs {}",
@@ -718,12 +699,7 @@ mod tests {
             ..PidConfig::default()
         };
         let risk = compute_pid_score(
-            65535,
-            65535.0,
-            100,
-            0.0,
-            false,
-            FLAG_STUCK | FLAG_ANOMALY,
+            &PidInput::new(0.0, 1.0, 0.0, 0.0, 65535.0, 0.0, false, FLAG_STUCK | FLAG_ANOMALY, 100),
             &forced_config,
             &mut state,
         );
@@ -733,12 +709,7 @@ mod tests {
         let chronic_before = state.chronic_entropy;
         // Feed more entropy while risk is at halt — integrator should bleed (0.999×)
         let _ = compute_pid_score(
-            65535,
-            65535.0,
-            100,
-            0.0,
-            false,
-            FLAG_STUCK,
+            &PidInput::new(0.0, 1.0, 0.0, 0.0, 65535.0, 0.0, false, FLAG_STUCK, 100),
             &forced_config,
             &mut state,
         );
@@ -758,11 +729,11 @@ mod tests {
         let mut state = PidState::new();
         // Build up integrators
         for _ in 0..5 {
-            compute_pid_score(65535, 0.0, 30, 0.5, false, 0, &config, &mut state);
+            compute_pid_score(&PidInput::new(0.0, 1.0, 0.0, 0.0, 0.0, 0.5, false, 0, 30), &config, &mut state);
         }
         let acute_before = state.acute_entropy;
         // Feed clean signal — risk should be below halt_gain, integrator must update
-        let _ = compute_pid_score(0, 0.0, 0, 1.0, false, 0, &config, &mut state);
+        let _ = compute_pid_score(&PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
         assert!(
             state.acute_entropy < acute_before,
             "integrator should decay on clean input: {} -> {}",
@@ -779,14 +750,9 @@ mod tests {
         let mut state_clean = PidState::new();
         let mut state_anomaly = PidState::new();
         // Give both the same trend input
-        let risk_clean = compute_pid_score(0, 32767.0, 0, 1.0, false, 0, &config, &mut state_clean);
+        let risk_clean = compute_pid_score(&PidInput::new(0.0, 0.0, 0.0, 0.0, 32767.0, 1.0, false, 0, 0), &config, &mut state_clean);
         let risk_anomaly = compute_pid_score(
-            0,
-            32767.0,
-            0,
-            1.0,
-            false,
-            FLAG_ANOMALY,
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 32767.0, 1.0, false, FLAG_ANOMALY, 0),
             &config,
             &mut state_anomaly,
         );
@@ -806,17 +772,12 @@ mod tests {
         let mut state_stuck = PidState::new();
         // Pre-seed integrators
         for _ in 0..3 {
-            compute_pid_score(32767, 0.0, 0, 1.0, false, 0, &config, &mut state_clean);
-            compute_pid_score(32767, 0.0, 0, 1.0, false, 0, &config, &mut state_stuck);
+            compute_pid_score(&PidInput::new(0.0, 0.5, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state_clean);
+            compute_pid_score(&PidInput::new(0.0, 0.5, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state_stuck);
         }
-        let risk_clean = compute_pid_score(32767, 0.0, 0, 1.0, false, 0, &config, &mut state_clean);
+        let risk_clean = compute_pid_score(&PidInput::new(0.0, 0.5, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state_clean);
         let risk_stuck = compute_pid_score(
-            32767,
-            0.0,
-            0,
-            1.0,
-            false,
-            FLAG_STUCK,
+            &PidInput::new(0.0, 0.5, 0.0, 0.0, 0.0, 1.0, false, FLAG_STUCK, 0),
             &config,
             &mut state_stuck,
         );
@@ -833,8 +794,8 @@ mod tests {
         let config = PidConfig::default();
         let mut state_a = PidState::new();
         let mut state_b = PidState::new();
-        let risk_a = compute_pid_score(10000, 5000.0, 30, 0.8, false, 0, &config, &mut state_a);
-        let risk_b = compute_pid_score(10000, 5000.0, 30, 0.8, false, 0, &config, &mut state_b);
+        let risk_a = compute_pid_score(&PidInput::new(0.0, f32::from(10000u16) / 65535.0_f32, 0.0, 0.0, 5000.0, 0.8, false, 0, 30), &config, &mut state_a);
+        let risk_b = compute_pid_score(&PidInput::new(0.0, f32::from(10000u16) / 65535.0_f32, 0.0, 0.0, 5000.0, 0.8, false, 0, 30), &config, &mut state_b);
         assert!(
             (risk_a - risk_b).abs() < 0.001,
             "same input, same state → same risk"
@@ -856,7 +817,7 @@ mod tests {
         state.chronic_entropy = 0.5;
         // Feed moderate entropy: the acute converges to steady-state faster
         for _ in 0..5 {
-            compute_pid_score(32767, 0.0, 0, 1.0, false, 0, &config, &mut state);
+            compute_pid_score(&PidInput::new(0.0, 0.5, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
         }
         // Both should be near saturation (steady-state > 1.0 for both, clamped to 1.0)
         // The key test: after 5 cycles of max input, both integrators approach 1.0
@@ -878,14 +839,14 @@ mod tests {
         let mut state = PidState::new();
         // Build up both
         for _ in 0..100 {
-            compute_pid_score(65535, 0.0, 0, 1.0, false, 0, &config, &mut state);
+            compute_pid_score(&PidInput::new(0.0, 1.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
         }
         let acute_peak = state.acute_entropy;
         let chronic_peak = state.chronic_entropy;
 
         // Feed clean for many cycles
         for _ in 0..20 {
-            compute_pid_score(0, 0.0, 0, 1.0, false, 0, &config, &mut state);
+            compute_pid_score(&PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
         }
         let acute_decay_ratio = acute_peak / state.acute_entropy.max(0.001);
         let chronic_decay_ratio = chronic_peak / state.chronic_entropy.max(0.001);
@@ -925,7 +886,7 @@ mod tests {
         let config = PidConfig::default();
         // Compute risk from max signals (guaranteed to be >= halt_gain=1.0 after clamp)
         let mut state = PidState::new();
-        let risk = compute_pid_score(65535, 65535.0, 100, 0.0, false, 0, &config, &mut state);
+        let risk = compute_pid_score(&PidInput::new(0.0, 1.0, 0.0, 0.0, 65535.0, 0.0, false, 0, 100), &config, &mut state);
         assert!(risk >= 1.0);
         let decision = pid_risk_to_decision(risk, &config);
         assert!(matches!(decision, SafetyDecision::Halt(..)));
@@ -948,7 +909,7 @@ mod tests {
         let config = PidConfig::default();
         let mut state = PidState::new();
         // Pure version must return ~0 for clean input regardless of has_bias
-        let risk = compute_pid_score_pure(0, 0.0, 0, 1.0, 0, &config, &mut state);
+        let risk = compute_pid_score_pure(&PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
         assert!(
             (risk - 0.0).abs() < 0.01,
             "pure risk should be ~0: {}",
@@ -961,8 +922,8 @@ mod tests {
         let config = PidConfig::default();
         let mut state_pure = PidState::new();
         let mut state_orig = PidState::new();
-        let r_pure = compute_pid_score_pure(32767, 5000.0, 50, 0.7, 0, &config, &mut state_pure);
-        let r_orig = compute_pid_score(32767, 5000.0, 50, 0.7, false, 0, &config, &mut state_orig);
+        let r_pure = compute_pid_score_pure(&PidInput::new(0.0, 0.5, 0.0, 0.0, 5000.0, 0.7, false, 0, 50), &config, &mut state_pure);
+        let r_orig = compute_pid_score(&PidInput::new(0.0, 0.5, 0.0, 0.0, 5000.0, 0.7, false, 0, 50), &config, &mut state_orig);
         assert!(
             (r_pure - r_orig).abs() < 0.001,
             "pure and original should match without bias: pure={}, orig={}",
@@ -980,6 +941,7 @@ mod tests {
         assert!((result - 0.3).abs() < 0.001, "no flags: {}", result);
     }
 
+    #[cfg(feature = "dal")]
     #[test]
     fn safety_overrides_bias_forces_halt() {
         let config = PidConfig::default();
@@ -992,6 +954,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "dal")]
     #[test]
     fn safety_overrides_exhausted_forces_max() {
         let config = PidConfig::default();
@@ -1003,6 +966,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "dal")]
     #[test]
     fn safety_overrides_kernel_unstable_forces_halt() {
         let config = PidConfig::default();
@@ -1014,6 +978,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "dal")]
     #[test]
     fn safety_overrides_bias_exhausted_combined() {
         let config = PidConfig::default();
@@ -1023,6 +988,7 @@ mod tests {
         assert!((result - 1.0).abs() < 0.001, "exhausted+bias: {}", result);
     }
 
+    #[cfg(feature = "dal")]
     #[test]
     fn safety_overrides_dal_a_monotonic() {
         // MC/DC: each override independently forces halt

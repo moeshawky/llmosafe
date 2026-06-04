@@ -254,7 +254,7 @@ fn fault_injection_zero_ceiling_always_exhausted() {
 
 #[test]
 fn fault_injection_entropy_interaction_ordering() {
-    let policy = EscalationPolicy::default();
+    let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
     // entropy > halt_entropy (50000) → Halt regardless of bias
     let decision = policy.decide(50001, 0, true);
     assert!(
@@ -275,6 +275,30 @@ fn fault_injection_entropy_interaction_ordering() {
 fn fault_injection_check_blocking_max_retries() {
     let guard = ResourceGuard::auto(0.5);
     let result = guard.check_blocking_with_max_retries(0);
+    assert_eq!(result, Err(KernelError::DeadlineExceeded));
+}
+
+#[test]
+#[cfg(feature = "testing")]
+fn check_blocking_succeeds_with_safe_entropy() {
+    let guard = ResourceGuard::for_testing(usize::MAX, 0, 0);
+    let result = guard.check_blocking_with_max_retries(1);
+    assert!(result.is_ok(), "safe entropy should return Ok, got {:?}", result);
+}
+
+#[test]
+#[cfg(feature = "testing")]
+fn check_with_deadline_expired_returns_error() {
+    let guard = ResourceGuard::for_testing(usize::MAX, 0, 0);
+    let result = guard.check_with_deadline(std::time::Instant::now());
+    assert_eq!(result, Err(KernelError::DeadlineExceeded));
+}
+
+#[test]
+#[cfg(feature = "testing")]
+fn check_blocking_retries_exhaust_sustained_pressure() {
+    let guard = ResourceGuard::for_testing(usize::MAX, 0, 80);
+    let result = guard.check_blocking_with_max_retries(3);
     assert_eq!(result, Err(KernelError::DeadlineExceeded));
 }
 
@@ -392,22 +416,12 @@ fn pid_sidechain_flags_effect_different_risk() {
     let mut state_anomaly = PidState::new();
     // Small inputs so both risks stay below 1.0 to see the differential effect
     let risk_clean = llmosafe_pid::compute_pid_score(
-        10000,
-        5000.0,
-        10,
-        0.9,
-        false,
-        0,
+        &PidInput::new(0.0, f32::from(10000u16) / 65535.0_f32, 0.0, 0.0, 5000.0, 0.9, false, 0, 10),
         &config,
         &mut state_clean,
     );
     let risk_anomaly = llmosafe_pid::compute_pid_score(
-        10000,
-        5000.0,
-        10,
-        0.9,
-        false,
-        FLAG_ANOMALY,
+        &PidInput::new(0.0, f32::from(10000u16) / 65535.0_f32, 0.0, 0.0, 5000.0, 0.9, false, FLAG_ANOMALY, 10),
         &config,
         &mut state_anomaly,
     );
@@ -425,12 +439,12 @@ fn pid_dual_rate_integrator_time_scale_separation() {
     let mut state = PidState::new();
     // Build up integrators
     for _ in 0..100 {
-        llmosafe_pid::compute_pid_score(65535, 0.0, 0, 1.0, false, 0, &config, &mut state);
+        llmosafe_pid::compute_pid_score(&PidInput::new(0.0, 1.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
     }
     let acute_peak = state.acute_entropy;
     // Feed clean for many cycles
     for _ in 0..30 {
-        llmosafe_pid::compute_pid_score(0, 0.0, 0, 1.0, false, 0, &config, &mut state);
+        llmosafe_pid::compute_pid_score(&PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
     }
     // Acute (decay 0.9) should decay much faster than chronic (decay 0.99)
     assert!(
@@ -455,12 +469,7 @@ fn pid_anti_windup_integrator_frozen_during_halt() {
         ..PidConfig::default()
     };
     let risk = llmosafe_pid::compute_pid_score(
-        65535,
-        65535.0,
-        100,
-        0.0,
-        false,
-        FLAG_STUCK | FLAG_ANOMALY,
+        &PidInput::new(0.0, 1.0, 0.0, 0.0, 65535.0, 0.0, false, FLAG_STUCK | FLAG_ANOMALY, 100),
         &forced_config,
         &mut state,
     );
@@ -468,12 +477,7 @@ fn pid_anti_windup_integrator_frozen_during_halt() {
     let acute_before = state.acute_entropy;
     // Next cycle with same max inputs — integrator should bleed, not grow
     let _ = llmosafe_pid::compute_pid_score(
-        65535,
-        65535.0,
-        100,
-        0.0,
-        false,
-        FLAG_STUCK,
+        &PidInput::new(0.0, 1.0, 0.0, 0.0, 65535.0, 0.0, false, FLAG_STUCK, 100),
         &forced_config,
         &mut state,
     );
@@ -566,37 +570,6 @@ proptest! {
         }
     }
 
-    // GainSchedule invariants
-    #[test]
-    fn gain_schedule_kp_in_range(kp in 0.0f32..=5.0f32) {
-        let g = GainSchedule { kp, ..GainSchedule::default() };
-        prop_assert!((0.0..=5.0).contains(&g.kp));
-    }
-
-    #[test]
-    fn gain_schedule_ki_fast_in_range(ki_fast in 0.0f32..=3.0f32) {
-        let g = GainSchedule { ki_fast, ..GainSchedule::default() };
-        prop_assert!((0.0..=3.0).contains(&g.ki_fast));
-    }
-
-    #[test]
-    fn gain_schedule_ki_slow_in_range(ki_slow in 0.0f32..=3.0f32) {
-        let g = GainSchedule { ki_slow, ..GainSchedule::default() };
-        prop_assert!((0.0..=3.0).contains(&g.ki_slow));
-    }
-
-    #[test]
-    fn gain_schedule_kd_in_range(kd in 0.0f32..=5.0f32) {
-        let g = GainSchedule { kd, ..GainSchedule::default() };
-        prop_assert!((0.0..=5.0).contains(&g.kd));
-    }
-
-    #[test]
-    fn gain_schedule_kf_in_range(kf in 0.0f32..=1.0f32) {
-        let g = GainSchedule { kf, ..GainSchedule::default() };
-        prop_assert!((0.0..=1.0).contains(&g.kf));
-    }
-
     // DesignAssuranceLevel ordering invariant
     #[test]
     fn dal_ordering_severity_monotonic(a_level in 0u8..=4u8, b_level in 0u8..=4u8) {
@@ -651,7 +624,9 @@ proptest! {
 
 // ── Safety Override MC/DC Independence Proptests ──
 // Each override flag must independently force Halt regardless of PID output.
+// These tests require the `dal` feature — without it, apply_safety_overrides is a passthrough.
 
+#[cfg(feature = "dal")]
 proptest! {
     #[test]
     fn mcdc_bias_independent_of_risk(risk in 0.0f32..=1.0f32) {

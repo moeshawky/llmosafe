@@ -35,15 +35,19 @@ from llmosafe._llmosafe import (
     get_system_cpu_load,
     get_environmental_entropy,
     process_synapse,
+    get_classifier_score,
+    CognitivePipeline,
     LLMOSafeError,
     ResourceExhaustedError,
     CognitiveInstabilityError,
     BiasHaloDetectedError,
 )
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 __all__ = [
+    # Classes
+    "CognitivePipeline",
     # Functions
     "calculate_halo",
     "check_resources",
@@ -52,6 +56,7 @@ __all__ = [
     "get_system_cpu_load",
     "get_environmental_entropy",
     "process_synapse",
+    "get_classifier_score",
     "make_synapse",
     "parse_synapse",
     # Exceptions

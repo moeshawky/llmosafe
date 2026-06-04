@@ -127,8 +127,7 @@ mod std_tests {
 
     #[test]
     fn pressure_level_decision_override() {
-        let policy = EscalationPolicy::default();
-        // Normal entropy with nominal pressure = proceed
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
         let d1 = policy.decide_with_pressure(400, 100, false, PressureLevel::Nominal);
         assert!(matches!(d1, SafetyDecision::Proceed));
         // Normal entropy with critical pressure = escalate

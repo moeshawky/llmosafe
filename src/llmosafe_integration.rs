@@ -30,6 +30,7 @@
 //! assert!(matches!(decision, SafetyDecision::Proceed));
 //! ```
 
+use crate::control_types::DesignAssuranceLevel;
 use crate::llmosafe_kernel::{CognitiveStability, KernelError};
 
 #[cfg(feature = "std")]
@@ -203,6 +204,25 @@ pub struct EscalationPolicy {
     pub bias_escalates: bool,
     /// Pressure level that triggers Escalate.
     pub escalate_pressure: PressureLevel,
+    /// Design Assurance Level (DO-178C) controlling runtime escalation behavior.
+    ///
+    /// This is the output-side gate — it downgrades or suppresses decisions
+    /// after the PID control loop has computed a risk score. The `dal` feature
+    /// (compile-time) controls `apply_safety_overrides` inside the PID loop.
+    /// This field controls `decide_from_detection()` and `decide_with_pressure()`
+    /// at runtime.
+    ///
+    /// | DAL | Effect |
+    /// |-----|--------|
+    /// | A   | No suppression — Halt/Escalate/Warn/Proceed pass through |
+    /// | B   | Halt → Escalate; Escalate/Warn/Proceed pass through |
+    /// | C   | Halt → Warn; Escalate → Warn; Warn/Proceed pass through |
+    /// | D   | Halt/Escalate → Warn; Warn/Proceed pass through |
+    /// | E   | All decisions → Proceed (no enforcement) |
+    ///
+    /// Default: E (no runtime gating). Both the compile-time `dal` feature AND
+    /// a runtime DAL of A must be active for Halt decisions to reach the actuator.
+    pub dal: DesignAssuranceLevel,
 }
 
 impl Default for EscalationPolicy {
@@ -215,6 +235,7 @@ impl Default for EscalationPolicy {
             escalate_surprise: 55700,
             bias_escalates: true,
             escalate_pressure: PressureLevel::Critical,
+            dal: DesignAssuranceLevel::E,
         }
     }
 }
@@ -246,6 +267,12 @@ impl EscalationPolicy {
     /// Builder: set bias escalation behavior.
     pub const fn with_bias_escalates(mut self, value: bool) -> Self {
         self.bias_escalates = value;
+        self
+    }
+
+    /// Builder: set Design Assurance Level for runtime decision gating.
+    pub const fn with_dal(mut self, dal: DesignAssuranceLevel) -> Self {
+        self.dal = dal;
         self
     }
 
@@ -308,19 +335,22 @@ impl EscalationPolicy {
     ) -> SafetyDecision {
         // Halt takes priority over everything
         if entropy > self.halt_entropy {
-            return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
+            return self.apply_dal_to_decision(SafetyDecision::Halt(
+                KernelError::CognitiveInstability,
+                30000,
+            ));
         }
 
         // Pressure escalation (only when not at Halt threshold)
         if pressure >= self.escalate_pressure {
-            return SafetyDecision::Escalate {
+            return self.apply_dal_to_decision(SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::ResourcePressure,
                 cooldown_ms: 5000,
-            };
+            });
         }
 
-        self.decide(entropy, surprise, has_bias)
+        self.apply_dal_to_decision(self.decide(entropy, surprise, has_bias))
     }
 
     /// Evaluate from CognitiveStability.
@@ -331,6 +361,44 @@ impl EscalationPolicy {
             CognitiveStability::Unstable => {
                 SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)
             }
+        }
+    }
+
+    /// Apply runtime DAL gating to a raw decision.
+    ///
+    /// This is the output-side safety gate: after the PID loop or threshold
+    /// checks produce a decision, this method downgrades or suppresses it
+    /// based on the configured Design Assurance Level.
+    ///
+    /// | DAL | Halt → | Escalate → | Warn → | Proceed → |
+    /// |-----|--------|------------|--------|-----------|
+    /// | A   | Halt   | Escalate   | Warn   | Proceed   |
+    /// | B   | Escalate | Escalate | Warn   | Proceed   |
+    /// | C   | Warn   | Warn      | Warn   | Proceed   |
+    /// | D   | Warn   | Warn      | Warn   | Proceed   |
+    /// | E   | Proceed | Proceed  | Proceed | Proceed   |
+    fn apply_dal_to_decision(&self, decision: SafetyDecision) -> SafetyDecision {
+        match self.dal {
+            DesignAssuranceLevel::A => decision,
+            DesignAssuranceLevel::B => match decision {
+                SafetyDecision::Halt(_, cooldown_ms) => SafetyDecision::Escalate {
+                    entropy: 0,
+                    reason: EscalationReason::Custom("DAL B: Halt downgraded"),
+                    cooldown_ms,
+                },
+                other => other,
+            },
+            DesignAssuranceLevel::C => match decision {
+                SafetyDecision::Halt(..) | SafetyDecision::Escalate { .. } => {
+                    SafetyDecision::Warn("DAL C: Escalation downgraded")
+                }
+                other => other,
+            },
+            DesignAssuranceLevel::D => match decision {
+                SafetyDecision::Proceed | SafetyDecision::Warn(_) => decision,
+                _ => SafetyDecision::Warn("DAL D: Capped at Warn"),
+            },
+            DesignAssuranceLevel::E => SafetyDecision::Proceed,
         }
     }
 
@@ -354,38 +422,44 @@ impl EscalationPolicy {
     ) -> SafetyDecision {
         // Halt conditions: adversarial attack or high composite risk
         if !detection.adversarial_patterns.is_empty() {
-            return SafetyDecision::Halt(KernelError::BiasHaloDetected, 30000);
+            return self.apply_dal_to_decision(SafetyDecision::Halt(
+                KernelError::BiasHaloDetected,
+                30000,
+            ));
         }
         if detection.risk_score > 0.85 {
-            return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
+            return self.apply_dal_to_decision(SafetyDecision::Halt(
+                KernelError::CognitiveInstability,
+                30000,
+            ));
         }
 
         // Escalate conditions: stuck agent or goal drift
         if detection.is_stuck {
-            return SafetyDecision::Escalate {
+            return self.apply_dal_to_decision(SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::StuckAgent,
                 cooldown_ms: 5000,
-            };
+            });
         }
         if detection.is_drifting {
-            return SafetyDecision::Escalate {
+            return self.apply_dal_to_decision(SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::GoalDriftDetected,
                 cooldown_ms: 5000,
-            };
+            });
         }
 
         // Warn conditions: decaying or low confidence
         if detection.is_decaying {
-            return SafetyDecision::Warn("Confidence decay detected");
+            return self.apply_dal_to_decision(SafetyDecision::Warn("Confidence decay detected"));
         }
         if detection.is_low_confidence {
-            return SafetyDecision::Warn("Low model confidence");
+            return self.apply_dal_to_decision(SafetyDecision::Warn("Low model confidence"));
         }
 
         // Fall through to standard decide()
-        self.decide(entropy, surprise, false)
+        self.apply_dal_to_decision(self.decide(entropy, surprise, false))
     }
 }
 
@@ -575,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_escalation_policy_with_pressure() {
-        let policy = EscalationPolicy::default();
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
         // Normal case
         let decision = policy.decide_with_pressure(400, 100, false, PressureLevel::Nominal);
         assert!(matches!(decision, SafetyDecision::Proceed));

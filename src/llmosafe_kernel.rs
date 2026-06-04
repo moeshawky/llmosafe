@@ -453,6 +453,22 @@ impl Synapse {
         let current = self.reserved();
         self.set_reserved(current & !0x3FFFu32);
     }
+
+    /// Returns OOV ratio and detection flags packed into a single u16.
+    ///
+    /// **Layout**: `[OOV:8 (bits 6-13)][FLAGS:6 (bits 0-5)]`. Upper 2 bits are zero.
+    ///
+    /// **2D risk space**: High OOV + anomaly flag signals a distribution-shift
+    /// attack (unfamiliar token distribution triggering anomaly detection). High
+    /// OOV + adversarial flag signals a confirmed adversarial input (both
+    /// unfamiliar vocabulary and known adversarial patterns). Low OOV with
+    /// stuck + drifting flags signals goal-derailment within familiar vocabulary.
+    pub fn combined_risk_bits(&self) -> u16 {
+        let reserved = self.reserved();
+        let oov = (reserved >> 6) & 0xFF;
+        let flags = reserved & 0x3F;
+        ((oov as u16) << 6) | (flags as u16)
+    }
 }
 
 #[cfg(test)]

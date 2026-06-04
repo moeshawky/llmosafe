@@ -126,6 +126,10 @@ impl ControlSignal for BodyOutput {
 #[derive(Debug, Clone)]
 pub struct ResourceGuard {
     memory_ceiling_bytes: usize,
+    #[cfg(any(test, feature = "testing"))]
+    raw_entropy_override: Option<u16>,
+    #[cfg(any(test, feature = "testing"))]
+    pressure_override: Option<u8>,
 }
 
 impl ResourceGuard {
@@ -136,6 +140,29 @@ impl ResourceGuard {
     pub fn new(memory_ceiling_bytes: usize) -> Self {
         Self {
             memory_ceiling_bytes,
+            #[cfg(any(test, feature = "testing"))]
+            raw_entropy_override: None,
+            #[cfg(any(test, feature = "testing"))]
+            pressure_override: None,
+        }
+    }
+
+    /// Creates a ResourceGuard with controllable entropy and pressure for testing.
+    ///
+    /// # Arguments
+    /// * `ceiling_bytes` - Memory ceiling in bytes
+    /// * `raw_entropy_val` - Overrides the `raw_entropy()` return value
+    /// * `pressure_val` - Overrides the `pressure()` return value
+    #[cfg(any(test, feature = "testing"))]
+    pub fn for_testing(
+        ceiling_bytes: usize,
+        raw_entropy_val: u16,
+        pressure_val: u8,
+    ) -> Self {
+        Self {
+            memory_ceiling_bytes: ceiling_bytes,
+            raw_entropy_override: Some(raw_entropy_val),
+            pressure_override: Some(pressure_val),
         }
     }
 
@@ -148,6 +175,10 @@ impl ResourceGuard {
     /// the cap (1000) triggers Escalate, not Halt. Use Halt for entropy values
     /// > 1000 from composite/synthetic sources outside the resource body.
     pub fn raw_entropy(&self) -> u16 {
+        #[cfg(any(test, feature = "testing"))]
+        if let Some(v) = self.raw_entropy_override {
+            return v;
+        }
         let current_rss = Self::try_current_rss_bytes().unwrap_or(self.memory_ceiling_bytes);
         let rss_ratio = if self.memory_ceiling_bytes > 0 {
             (current_rss as f64 / self.memory_ceiling_bytes as f64).min(1.0)
@@ -176,6 +207,10 @@ impl ResourceGuard {
 
     /// Returns the current resource pressure as a percentage of the ceiling (0-100).
     pub fn pressure(&self) -> u8 {
+        #[cfg(any(test, feature = "testing"))]
+        if let Some(v) = self.pressure_override {
+            return v;
+        }
         if self.memory_ceiling_bytes == 0 {
             return 100;
         }

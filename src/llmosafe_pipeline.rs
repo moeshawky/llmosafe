@@ -33,6 +33,8 @@ use crate::control_types::OverrideFlags;
 use crate::llmosafe_detection::{
     AdversarialDetector, ConfidenceTracker, CusumDetector, DriftDetector, RepetitionDetector,
 };
+#[cfg(feature = "std")]
+use crate::llmosafe_detection::DetectionResult;
 use crate::llmosafe_integration::EscalationPolicy;
 #[cfg(feature = "std")]
 use crate::llmosafe_integration::SafetyDecision;
@@ -45,6 +47,8 @@ use crate::llmosafe_kernel::{
 };
 use crate::llmosafe_memory::WorkingMemory;
 use crate::llmosafe_pid::{PidConfig, PidState};
+#[cfg(feature = "std")]
+use crate::ResourceGuard;
 
 /// Bitmask constants for `PipelineResult.stages_executed`.
 /// Set in `process_ctrl()` during sequential stage execution.
@@ -86,6 +90,12 @@ pub struct PipelineConfig {
     pub decay_threshold: usize,
     /// `DynamicStabilityMonitor` safety margin k (1–5). Controls envelope sensitivity.
     pub monitor_k: u8,
+    /// When true, routes decisions through `decide_from_detection()` (first-match-wins
+    /// severity ordering: Anomaly > Adversarial > Drifting > Stuck > Confidence) instead
+    /// of the PID weighted summation path.  The detection-gate path avoids PID integrator
+    /// state entirely — it is simpler and faster but does not remember past observations
+    /// beyond what the individual detectors track.  Default: false (PID path).
+    pub use_detection_gate: bool,
 }
 
 impl Default for PipelineConfig {
@@ -100,6 +110,7 @@ impl Default for PipelineConfig {
             min_confidence: 0.3,
             decay_threshold: 3,
             monitor_k: 3,
+            use_detection_gate: false,
         }
     }
 }
@@ -130,6 +141,21 @@ impl PipelineConfig {
         self.pid_config.validate()?;
         Ok(())
     }
+}
+
+/// Snapshot of working-memory statistics.
+///
+/// All fields are computed from the ring-buffer state at call time.
+/// `is_drifting` compares `trend` against a fixed threshold of 10.0.
+pub struct MemoryStats {
+    /// Running mean entropy of the ring buffer `[0, 65535]`.
+    pub mean: f64,
+    /// Running variance of ring-buffer entropy.
+    pub variance: f64,
+    /// Linear regression slope over the buffer window.
+    pub trend: f64,
+    /// `true` when `|trend| > 10.0`.
+    pub is_drifting: bool,
 }
 
 /// Aggregate output of a single `CognitivePipeline::process()` invocation.
@@ -180,7 +206,28 @@ impl PipelineResult {
             _ => None,
         }
     }
+
+    /// Returns a reference to the kernel output if the reasoning loop ran.
+    ///
+    /// `None` when the pipeline halted before the kernel stage completed
+    /// (SIFT or MEMORY short-circuit, or kernel error).  The kernel output
+    /// carries the normalised entropy error `[0.0, 1.0]`, a stability
+    /// boolean, and the reasoning step depth at output time.
+    pub fn kernel_output(&self) -> Option<&KernelOutput> {
+        self.kernel_output.as_ref()
+    }
+
+    /// Returns the resource body pressure percentage [0, 100].
+    ///
+    /// Returns 0 when `process()` was used instead of `process_with_pressure()`
+    /// (no resource data available).  Pressure is the RSS memory percentage of
+    /// the configured ceiling fed through `process_with_pressure()`.
+    #[cfg(feature = "std")]
+    pub fn body_pressure(&self) -> u8 {
+        self.body_pressure.unwrap_or(0)
+    }
 }
+
 
 /// Five-stage cognitive safety pipeline.
 ///
@@ -209,6 +256,9 @@ pub struct CognitivePipeline<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> 
     step_count: usize,
     pid_state: PidState,
     pid_config: PidConfig,
+    esc_policy: EscalationPolicy,
+    /// When true, routes decisions through the detection-gate path instead of PID.
+    use_detection_gate: bool,
     /// Drift threshold [0.0, 1.0]. Stored for `reset_detectors()` and `reset_full()`.
     drift_threshold: f32,
     /// Surprise threshold for `WorkingMemory` reconstruction in `reset_full()`.
@@ -244,6 +294,8 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             step_count: 0,
             pid_state: PidState::new(),
             pid_config: config.pid_config,
+            esc_policy: config.policy,
+            use_detection_gate: config.use_detection_gate,
             drift_threshold: config.drift_threshold,
             surprise_threshold: config.surprise_threshold,
         })
@@ -293,6 +345,33 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         self.process_ctrl(observation, e_body, pressure)
     }
 
+    /// Pre-flight resource gate on the cognitive pipeline.
+    ///
+    /// Calls `ResourceGuard::check_with_deadline()` with a 5-second deadline
+    /// before processing. If resources are safe (guard returns `Ok`), the full
+    /// pipeline runs via `process()`. If the deadline is exceeded (guard returns
+    /// `DeadlineExceeded`), the pipeline still runs but via
+    /// `process_with_pressure()` — passing the guard's `raw_entropy()` and
+    /// `pressure()` values so resource body state is recorded in the result.
+    /// All other guard errors are returned without running the pipeline.
+    #[cfg(feature = "std")]
+    pub fn process_safe(
+        &mut self,
+        text: &str,
+        guard: &ResourceGuard,
+    ) -> Result<PipelineResult, KernelError> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        match guard.check_with_deadline(deadline) {
+            Ok(_synapse) => Ok(self.process(text)),
+            Err(KernelError::DeadlineExceeded) => Ok(self.process_with_pressure(
+                text,
+                guard.raw_entropy(),
+                guard.pressure(),
+            )),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Resets all 6 detectors and the `DynamicStabilityMonitor`.
     ///
     /// Preserves `WorkingMemory` ring-buffer state and `ReasoningLoop` step count.
@@ -321,6 +400,32 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         self.adversarial = AdversarialDetector::new();
         self.step_count = 0;
         self.pid_state.reset();
+    }
+
+    /// Returns a reference to the PID state.
+    ///
+    /// `PidState` holds the dual-rate leaky integrators (`acute_entropy`,
+    /// `chronic_entropy`) and `prev_pressure_norm` for step-change detection.
+    /// All fields are `f32` clamped to `[0, 1]`. The state mutates across
+    /// `process()` calls; this getter returns the live state for introspection.
+    pub fn pid_state(&self) -> &PidState {
+        &self.pid_state
+    }
+
+    /// Returns a snapshot of working-memory statistics.
+    ///
+    /// `is_drifting` uses a fixed threshold of 10.0 — positive values
+    /// indicate rising entropy, negative values indicate falling entropy.
+    pub fn memory_stats(&self) -> MemoryStats {
+        let mean = self.memory.mean_entropy();
+        let variance = self.memory.entropy_variance();
+        let trend = self.memory.trend();
+        MemoryStats {
+            mean,
+            variance,
+            trend,
+            is_drifting: self.memory.is_drifting(10.0),
+        }
     }
 
     // ── Control Theory Composition Path ────────────────────────────
@@ -434,18 +539,77 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             flags |= FLAG_ADVERSARIAL;
         }
 
+        // ── Stage 5a: DETECTION GATE (optional, non-PID path) ──
+        // First-match-wins severity ordering: Anomaly > Adversarial > Drifting > Stuck > Confidence.
+        // Avoids PID integrator state entirely. If the gate produces a Halt, return early;
+        // otherwise fall through to the PID composition below.
+        #[cfg(feature = "std")]
+        if self.use_detection_gate {
+            let detection_result = DetectionResult {
+                is_stuck,
+                is_drifting,
+                is_low_confidence,
+                is_decaying,
+                adversarial_patterns: if adversarial_detected {
+                    vec!["adversarial"]
+                } else {
+                    vec![]
+                },
+                risk_score: if anomaly_detected { 0.9 } else { 0.0 },
+            };
+            let gate_decision = self.esc_policy.decide_from_detection(
+                &detection_result,
+                entropy,
+                surprise_val,
+            );
+            if gate_decision.must_halt() {
+                stages |= STAGE_MONITOR;
+                let monitor_state = self.monitor.update(u32::from(entropy));
+                let kernel_output = Some(crate::llmosafe_kernel::KernelOutput {
+                    error_kernel: f32::from(kernel_entropy) / 65535.0_f32,
+                    is_stable: u32::from(kernel_entropy)
+                        < crate::llmosafe_kernel::STABILITY_THRESHOLD as u32,
+                    depth: self.step_count,
+                });
+                return PipelineResult {
+                    decision: gate_decision,
+                    synapse: kernel_synapse_out,
+                    stages_executed: stages,
+                    detection_flags: flags,
+                    oov_ratio,
+                    entropy,
+                    surprise: surprise_val,
+                    monitor_state,
+                    #[cfg(feature = "std")]
+                    body_pressure: Some(pressure),
+                    step_count: self.step_count,
+                    kernel_output,
+                    classifier_score,
+                };
+            }
+        }
+
         // ── Stage 5: PID COMPOSITION ──
         let pressure_term = (e_body * 100.0_f32) as u8;
         let trend = self.memory.trend();
-        let pure_risk = crate::llmosafe_pid::compute_pid_score_pure(
-            entropy,
+        let pid_input = crate::control_types::PidInput::new(
+            e_body,
+            f32::from(entropy) / 65535.0_f32,
+            0.0,
+            0.0,
             trend,
-            pressure_term,
             classifier_prob,
+            has_bias,
             flags,
+            pressure_term,
+        );
+        let pure_risk = crate::llmosafe_pid::compute_pid_score_pure(
+            &pid_input,
             &self.pid_config,
             &mut self.pid_state,
         );
+        let pure_risk =
+            crate::llmosafe_pid::compute_pid_score_pure(&pid_input, &self.pid_config, &mut self.pid_state);
 
         let mut override_flags = OverrideFlags::empty();
         if has_bias {

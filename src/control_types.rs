@@ -8,6 +8,9 @@
 //!
 //! # DAL Partitioning
 //!
+//! DAL (Design Assurance Level) safety overrides are gated behind the `dal` feature.
+//! With `dal` enabled, the following tiers apply:
+//!
 //! | DAL | Path | Description |
 //! |-----|------|-------------|
 //! | A | Halt | Catastrophic — bias/exhaustion/kernel → halt |
@@ -16,6 +19,9 @@
 //! | D | Monitor | Minor — informational |
 //! | E | Proceed | No effect — pass-through |
 //!
+//! Without the `dal` feature, `apply_safety_overrides` is a passthrough — no
+//! hard limits are enforced on risk scores.
+//!
 //! # MC/DC
 //!
 //! All decision branches in `apply_safety_overrides` and
@@ -23,6 +29,28 @@
 //! See `mc_dc` annotations in the traceability matrix.
 
 /// Design Assurance Level per DO-178C.
+///
+/// # Runtime vs Compile-Time
+///
+/// Three enforcement layers operate simultaneously:
+///
+/// 1. **Compile-time** (conditional compilation): The `dal` feature gate controls
+///    whether `apply_safety_overrides` applies hard limits at all. Without the
+///    feature, overrides are a passthrough — no safety constraints are enforced
+///    in PID computation. This is the coarse control.
+///
+/// 2. **Runtime** (this enum): `EscalationPolicy.dal` gates the output-side
+///    escalation decisions (`decide_from_detection`, `decide_with_pressure`)
+///    regardless of the compile-time feature. Setting DAL E means "proceed
+///    always" even if `dal` feature is active. This is the fine control.
+///
+/// 3. **Static check** (design review): DAL A/B paths are traceable in the
+///    MC/DC matrix. Every path from detection to decision must have independent
+///    condition coverage. See `invariants.toml` §4.
+///
+/// The runtime DAL gates decisions AFTER PID computation. The compile-time
+/// feature gates safety overrides DURING PID computation. Both must pass
+/// for a Halt decision to reach the actuator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesignAssuranceLevel {
     /// Catastrophic — halt failure → system compromise.
@@ -37,12 +65,6 @@ pub enum DesignAssuranceLevel {
     E,
 }
 
-/// Compile-time setpoint constant.
-///
-/// `REF` is the ideal value in the signal's native units.
-/// For normalised signals, `REF = 0.0` (zero deviation from ideal).
-pub struct Setpoint<const REF: i128>;
-
 /// Control signal contract: every tier output must provide error and setpoint.
 pub trait ControlSignal {
     /// Signed deviation from setpoint, normalised to `[0.0, 1.0]`.
@@ -51,46 +73,6 @@ pub trait ControlSignal {
     fn setpoint(&self) -> f32;
 }
 
-/// Dimensionless gain schedule for PID composition.
-///
-/// All gains are multipliers on normalised `[0.0, 1.0]` signals.
-/// Default values calibrated for classifier entropy `[0, 65535]` range.
-/// See `design_ctrl_v0.9.0.yaml` gain_schedule section for derivations.
-///
-/// # MC/DC
-///
-/// Each gain independently affects the P/I/D/F term it modulates.
-/// Gain validation rejects NaN, out-of-range, and `warn_gain >= halt_gain`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GainSchedule {
-    /// Proportional gain for resource pressure `[0, 5.0]`, default 1.0.
-    /// DAL A: Kp=1.0 → 100% pressure maps to P-term=1.0 → RiskScore ≥ halt_gain.
-    pub kp: f32,
-    /// Fast integral gain for acute entropy `[0, 3.0]`, default 0.5.
-    /// DAL B: captures request-level risk spikes (~10 cycle memory).
-    pub ki_fast: f32,
-    /// Slow integral gain for chronic entropy `[0, 3.0]`, default 0.3.
-    /// DAL B: captures session-level risk elevation (~100 cycle memory).
-    pub ki_slow: f32,
-    /// Derivative gain for entropy trend `[0, 5.0]`, default 2.0.
-    /// DAL B: panic button for sudden entropy jumps.
-    pub kd: f32,
-    /// Feed-forward gain for classifier probability `[0, 1.0]`, default 0.3.
-    /// DAL C: provides baseline safety credit for confident "safe" classifications.
-    pub kf: f32,
-}
-
-impl Default for GainSchedule {
-    fn default() -> Self {
-        Self {
-            kp: 1.0,
-            ki_fast: 0.5,
-            ki_slow: 0.3,
-            kd: 2.0,
-            kf: 0.3,
-        }
-    }
-}
 
 /// Safety override flags applied AFTER PID computation.
 ///
@@ -148,6 +130,20 @@ impl core::ops::BitOr for OverrideFlags {
 ///
 /// Carries normalised error signals from all 4 tiers plus
 /// detection sidechain flags for gain modulation.
+///
+/// # Tier provenance
+///
+/// | Field            | Tier | Source                           |
+/// |------------------|------|----------------------------------|
+/// | `e_body`         | 0    | `BodyOutput.error_body`          |
+/// | `e_sift`         | 3    | `SifterOutput.error_sift`        |
+/// | `e_mem`          | 2    | `MemoryOutput.error_mem`         |
+/// | `e_kernel`       | 1    | `KernelOutput.error_kernel`      |
+/// | `trend`          | 2    | `WorkingMemory::trend()`         |
+/// | `classifier_prob`| 3    | `SifterOutput.classifier_prob`   |
+/// | `has_bias`       | 3    | `SifterOutput.has_bias`          |
+/// | `detection_flags`| DET  | Packed from 6 detectors          |
+/// | `pressure`       | 0    | `BodyOutput.pressure`            |
 ///
 /// # DAL A
 ///
@@ -232,16 +228,6 @@ mod tests {
         assert!(flags.contains(OverrideFlags::BIAS));
         assert!(flags.contains(OverrideFlags::EXHAUSTED));
         assert!(!flags.contains(OverrideFlags::KERNEL_UNSTABLE));
-    }
-
-    #[test]
-    fn test_gain_schedule_default() {
-        let g = GainSchedule::default();
-        assert!((g.kp - 1.0).abs() < 1e-6);
-        assert!((g.ki_fast - 0.5).abs() < 1e-6);
-        assert!((g.ki_slow - 0.3).abs() < 1e-6);
-        assert!((g.kd - 2.0).abs() < 1e-6);
-        assert!((g.kf - 0.3).abs() < 1e-6);
     }
 
     #[test]
