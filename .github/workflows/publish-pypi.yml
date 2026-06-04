@@ -30,10 +30,13 @@ jobs:
         with:
           working-directory: llmosafe-py
           target: ${{ matrix.target }}
-          args: --release --out dist
+          args: --release --out dist --find-interpreter
           manylinux: auto
           before-script-linux: |
             pip install ziglang
+          # Force build against the Python 3.12 set up above,
+          # not the system default (which may be 3.9 on ARM)
+          python-version: '3.12'
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
