@@ -283,10 +283,7 @@ fn phrase_matches(window: &[&str], phrase: &str) -> bool {
         .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
-/// Returns a breakdown of detected biases by category.
-pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
-    let mut breakdown = BiasBreakdown::default();
-
+fn detect_single_word_biases(text: &str, breakdown: &mut BiasBreakdown) {
     let mut negation_ttl = 0u8;
 
     for raw_word in text.split_whitespace() {
@@ -338,54 +335,66 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             breakdown.emphasis = breakdown.emphasis.saturating_add(50);
         }
     }
+}
+
+#[cfg(feature = "std")]
+fn detect_multi_word_biases(text: &str, breakdown: &mut BiasBreakdown) {
+    let tokens: Vec<&str> = text
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| c.is_ascii_punctuation()))
+        .collect();
+
+    let mut negated_positions = vec![false; tokens.len()];
+    let mut neg_ttl = 0u8;
+    for (i, token) in tokens.iter().enumerate() {
+        let is_neg = word_in_list(token, NEGATION_WORDS);
+        let curr_negated = neg_ttl > 0;
+        if is_neg {
+            neg_ttl = 6;
+        } else {
+            neg_ttl = neg_ttl.saturating_sub(1);
+        }
+        negated_positions[i] = curr_negated;
+    }
+
+    for phrase in SEMANTIC_TRAPS {
+        if !phrase.contains(' ') {
+            continue;
+        }
+        if tokens
+            .windows(phrase.split_whitespace().count())
+            .enumerate()
+            .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
+        {
+            breakdown.semantic_traps = breakdown.semantic_traps.saturating_add(100);
+        }
+    }
+
+    for phrase in TEMPLATE_FITTING {
+        if !phrase.contains(' ') {
+            continue;
+        }
+        if tokens
+            .windows(phrase.split_whitespace().count())
+            .enumerate()
+            .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
+        {
+            breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
+        }
+    }
+}
+
+/// Returns a breakdown of detected biases by category.
+pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
+    let mut breakdown = BiasBreakdown::default();
+
+    detect_single_word_biases(text, &mut breakdown);
 
     // Phase 2: Multi-word phrase matching (for entries containing spaces).
     // Requires `std` for Vec allocation. no_std users get single-word detection only.
     #[cfg(feature = "std")]
     {
-        let tokens: Vec<&str> = text
-            .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| c.is_ascii_punctuation()))
-            .collect();
-
-        let mut negated_positions = vec![false; tokens.len()];
-        let mut neg_ttl = 0u8;
-        for (i, token) in tokens.iter().enumerate() {
-            let is_neg = word_in_list(token, NEGATION_WORDS);
-            let curr_negated = neg_ttl > 0;
-            if is_neg {
-                neg_ttl = 6;
-            } else {
-                neg_ttl = neg_ttl.saturating_sub(1);
-            }
-            negated_positions[i] = curr_negated;
-        }
-
-        for phrase in SEMANTIC_TRAPS {
-            if !phrase.contains(' ') {
-                continue;
-            }
-            if tokens
-                .windows(phrase.split_whitespace().count())
-                .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
-            {
-                breakdown.semantic_traps = breakdown.semantic_traps.saturating_add(100);
-            }
-        }
-
-        for phrase in TEMPLATE_FITTING {
-            if !phrase.contains(' ') {
-                continue;
-            }
-            if tokens
-                .windows(phrase.split_whitespace().count())
-                .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
-            {
-                breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
-            }
-        }
+        detect_multi_word_biases(text, &mut breakdown);
     }
 
     breakdown
