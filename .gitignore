@@ -31,10 +31,18 @@ libtest_mod.rlib
 # Test artifacts
 *.log
 
-# Generated training data and model binaries
+# --- Training infrastructure (operator-only, never published) ---
 data/
-# tools/vocab_model.bin is the COMMITTED classifier — do NOT ignore
-# (see TRAINING.md for reproducible build process)
+scripts/
+TRAINING.md
+tools/__init__.py
+tools/train_full_pipeline.py
+tools/train_tfidf_classifier.py
+tools/download_hf_datasets.py
+tools/generate_sifter_data/
+# tools/vocab_model.bin is the single exception — it is the compiled
+# classifier embedded into the Rust crate at build time.  Without it
+# the crate falls back to a fail-closed no-op model.  Tracked.
 
 # ML Training Artifacts - NOT PART OF RUST LIBRARY
 *.pt
@@ -78,12 +86,7 @@ COMPREHENSIVE_ANALYSIS.md
 ARCHITECTURE_*.md
 SUBAGENT_*.md
 TEST_PROTOCOL_*.md
-tools/generate_sifter_data/DESIGN.md
-tools/generate_sifter_data/OPTIMIZE.md
 .pi/
-
-# --- ML training scripts (not part of Rust library) ---
-/scripts/
 
 # --- Profiling and valgrind artifacts ---
 *.prof*
