@@ -42,7 +42,8 @@ use crate::llmosafe_kernel::Synapse;
 ///
 /// - `0.0 ≤ error_sift ≤ 1.0`
 /// - `0 ≤ raw_entropy ≤ 65535`
-/// - `has_bias == (classifier_prob > THRESHOLD)` [sift_bias_flag_matches_breakdown]
+/// - `has_bias == classification.is_manipulation` (classifier-only path;
+///   `sift_text()` OR-s the keyword-bias breakdown into its output)
 #[derive(Debug, Clone, Copy)]
 pub struct SifterOutput {
     /// Error signal = classifier probability (setpoint=0).
@@ -54,7 +55,7 @@ pub struct SifterOutput {
     pub classifier_prob: f32,
     /// Bias flag from classifier.
     pub has_bias: bool,
-    /// Out-of-vocabulary ratio [0, 255] (0=0%, 255=100%).
+    /// Out-of-vocabulary ratio `[0, 255]` (0=0%, 255=100%).
     pub oov_ratio: u8,
 }
 
@@ -272,13 +273,13 @@ fn word_in_list(word: &str, list: &[&str]) -> bool {
 #[cfg(feature = "std")]
 #[inline]
 fn phrase_matches(window: &[&str], phrase: &str) -> bool {
-    let phrase_tokens: Vec<&str> = phrase.split_whitespace().collect();
-    if window.len() < phrase_tokens.len() {
+    let phrase_len = phrase.split_whitespace().count();
+    if window.len() < phrase_len {
         return false;
     }
-    window[..phrase_tokens.len()]
+    window[..phrase_len]
         .iter()
-        .zip(phrase_tokens.iter())
+        .zip(phrase.split_whitespace())
         .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
@@ -333,7 +334,7 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
         // typographic manipulation independent of keyword membership.
         // Only fires on ASCII-uppercase — excludes emoji, Unicode scripts,
         // and camelCase/PascalCase (technical notation, not manipulation).
-        if !negated && trimmed.len() >= 2 && trimmed.chars().all(|c| c.is_ascii_uppercase()) {
+        if trimmed.len() >= 2 && trimmed.chars().all(|c| c.is_ascii_uppercase()) {
             breakdown.emphasis = breakdown.emphasis.saturating_add(50);
         }
     }
@@ -420,15 +421,15 @@ pub fn calculate_halo_signal(text: &str) -> u16 {
 /// assert!(utility > 0);
 /// ```
 pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
-    let mut obj_words = [""; 64];
+    let mut obj_words = [""; 128];
     let mut obj_len = 0;
 
     for word_b in objective.split_whitespace() {
-        if obj_len < 64 {
+        if obj_len < 128 {
             obj_words[obj_len] = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
             obj_len += 1;
         } else {
-            break; // O(N*M) is acceptable for elements beyond the cache
+            break;
         }
     }
 
@@ -441,6 +442,18 @@ fn calculate_utility_with_cache(
     obj_words: &[&str],
     obj_len: usize,
 ) -> u16 {
+    let mut excess_words = [""; 128];
+    let mut excess_len = 0;
+    for word_b in objective.split_whitespace().skip(obj_len) {
+        if excess_len < 128 {
+            excess_words[excess_len] =
+                word_b.trim_matches(|c: char| c.is_ascii_punctuation());
+            excess_len += 1;
+        } else {
+            break;
+        }
+    }
+
     let mut count = 0usize;
 
     for word_a in observation.split_whitespace() {
@@ -455,11 +468,9 @@ fn calculate_utility_with_cache(
             }
         }
 
-        // Fallback for excess elements
-        if !found && obj_len == 64 {
-            for word_b in objective.split_whitespace().skip(64) {
-                let trimmed_b = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
-                if trimmed_a.eq_ignore_ascii_case(trimmed_b) {
+        if !found && excess_len > 0 {
+            for word_b in excess_words.iter().take(excess_len) {
+                if trimmed_a.eq_ignore_ascii_case(*word_b) {
                     count += 1;
                     break;
                 }
@@ -482,7 +493,7 @@ fn calculate_utility_with_cache(
 /// - `raw_surprise`: u16 — `classification.oov_ratio * 65535` (classifier uncertainty)
 /// - `has_bias`: bool — `classification.is_manipulation`
 /// - `anchor_hash`: u32 (B31) — Adler-32 of the observation bytes, masked to 31 bits
-/// - `oov_ratio`: u8 — packed into synapse reserved bits 5-12
+/// - `oov_ratio`: u8 — packed into synapse reserved bits 6-13
 ///
 /// # Returns
 ///
@@ -510,29 +521,13 @@ fn sift_observation_inner(
     (sifted, proof)
 }
 
-/// Canonical single-entry sifter: classifier (adaptive layer) + keyword bias
-/// (innate layer). Both pathways contribute to the result — either can flag bias.
+/// Internal version of `sift_text` that also returns the raw classifier score.
 ///
-/// This is the ONLY function `CognitivePipeline` calls. It replaces the
-/// three-representation pattern (SifterOutput + ClassificationResult +
-/// SiftedSynapse) that existed in `process_ctrl()`.
-///
-/// The keyword-bias pathway is the innate immune layer: fast pattern-matching
-/// against known manipulation markers. It runs on every input and OR-s into
-/// the bias flag. It stays as a separately-auditable module — if the classifier
-/// is ever compromised by adversarial ML, the keyword path provides a
-/// backstop.
-///
-/// # Fields set on Synapse
-///
-/// - `raw_entropy`: u16 — `classifier.probability * 65535`, boosted by
-///   keyword-bias total when the innate layer fires
-/// - `raw_surprise`: u16 — `classifier.oov_ratio * 65535` (classifier
-///   uncertainty — how much vocabulary the model doesn't recognize)
-/// - `has_bias`: bool — `classifier.is_manipulation || bias_breakdown.total() > 0`
-/// - `oov_ratio`: u8 — packed into synapse reserved bits 5-12
-/// - `anchor_hash`: u31 — Adler-32 of observation bytes
-pub fn sift_text(observation: &str) -> (SiftedSynapse, SiftedProof) {
+/// The score is the unbounded logistic regression sum before sigmoid.
+/// Callers that need only the synapse/proof pair should use `sift_text()`.
+pub(crate) fn sift_text_with_score(
+    observation: &str,
+) -> (SiftedSynapse, SiftedProof, f32) {
     let classification = classify_text(observation);
     let bias = get_bias_breakdown(observation);
 
@@ -543,7 +538,7 @@ pub fn sift_text(observation: &str) -> (SiftedSynapse, SiftedProof) {
     } else {
         0
     };
-    let entropy = classifier_entropy.saturating_add(keyword_boost);
+    let entropy = classifier_entropy.max(keyword_boost);
 
     let surprise = (65535.0_f32 * classification.oov_ratio.clamp(0.0, 1.0)) as u16;
     let has_bias = classification.is_manipulation || bias.total() > 0;
@@ -560,6 +555,33 @@ pub fn sift_text(observation: &str) -> (SiftedSynapse, SiftedProof) {
     let sifted = SiftedSynapse::new(synapse);
     let proof = SiftedProof::mint();
 
+    (sifted, proof, classification.score)
+}
+
+/// Canonical single-entry sifter: classifier (adaptive layer) + keyword bias
+/// (innate layer). Both pathways contribute to the result — either can flag bias.
+///
+/// This is the ONLY function `CognitivePipeline` calls. It replaces the
+/// three-representation pattern (SifterOutput + ClassificationResult +
+/// SiftedSynapse) that existed in `process_ctrl()`.
+///
+/// The keyword-bias pathway is the innate immune layer: fast pattern-matching
+/// against known manipulation markers. It runs on every input and OR-s into
+/// the bias flag. It stays as a separately-auditable module — if the classifier
+/// is ever compromised by adversarial ML, the keyword path provides a
+/// backstop.
+///
+/// # Fields set on Synapse
+///
+/// - `raw_entropy`: u16 — `max(classifier_entropy, keyword_boost)`, taking
+///   the greater of the adaptive (classifier) and innate (keyword) layers
+/// - `raw_surprise`: u16 — `classifier.oov_ratio * 65535` (classifier
+///   uncertainty — how much vocabulary the model doesn't recognize)
+/// - `has_bias`: bool — `classifier.is_manipulation || bias_breakdown.total() > 0`
+/// - `oov_ratio`: u8 — packed into synapse reserved bits 6-13
+/// - `anchor_hash`: u31 — Adler-32 of observation bytes
+pub fn sift_text(observation: &str) -> (SiftedSynapse, SiftedProof) {
+    let (sifted, proof, _score) = sift_text_with_score(observation);
     (sifted, proof)
 }
 
@@ -574,14 +596,12 @@ pub fn sift_observation(
     sift_observation_inner(classification, observation)
 }
 
-/// Classify observations through the TF-IDF model and return the highest-scoring
-/// result as a `SiftedSynapse`.
+/// Classify observations through the dual-path sifter (classifier + keyword)
+/// and return the result with highest entropy.
 ///
-/// For each observation, calls `classify_text()`. Selects the observation with
-/// the highest `classification.score`. Maps the classifier output to synapse fields:
-/// - `raw_entropy` = `probability * 65535` — confidence of classifier
-/// - `raw_surprise` = `0` — surprise is a memory-layer concept
-/// - `has_bias` = `classification.is_manipulation` — boolean flag
+/// For each observation, calls `sift_text()`. Selects the observation with
+/// the highest `raw_entropy()` (not raw classifier score — the dual-path
+/// entropymax includes keyword-bias contribution).
 ///
 /// Empty observations list returns a max-entropy (0xFFFF) synapse.
 ///
@@ -602,20 +622,26 @@ pub fn sift_perceptions(observations: &[&str], _objective: &str) -> (SiftedSynap
         return (SiftedSynapse::new(synapse), SiftedProof::mint());
     }
 
-    let mut best_classification: Option<ClassificationResult> = None;
-    let mut best_obs: &str = "";
+    let mut best_entropy: u16 = 0;
+    let mut best_result: Option<(SiftedSynapse, SiftedProof)> = None;
 
     for obs in observations {
-        let classification = classify_text(obs);
-        if best_classification.is_none_or(|c: ClassificationResult| classification.score > c.score)
-        {
-            best_classification = Some(classification);
-            best_obs = obs;
+        let result = sift_text(obs);
+        let entropy = result.0.raw_entropy();
+        if entropy > best_entropy {
+            best_entropy = entropy;
+            best_result = Some(result);
         }
     }
 
-    let classification = best_classification.unwrap_or_default();
-    sift_observation_inner(&classification, best_obs)
+    best_result.unwrap_or_else(|| {
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(0xFFFF);
+        synapse.set_raw_surprise(0);
+        synapse.set_has_bias(false);
+        synapse.set_anchor_hash(0);
+        (SiftedSynapse::new(synapse), SiftedProof::mint())
+    })
 }
 
 mod adler32 {

@@ -31,7 +31,7 @@
 
 use crate::control_types::OverrideFlags;
 use crate::llmosafe_detection::{
-    ConfidenceTracker, CusumDetector, DriftDetector, RepetitionDetector,
+    AdversarialDetector, ConfidenceTracker, CusumDetector, DriftDetector, RepetitionDetector,
 };
 use crate::llmosafe_integration::EscalationPolicy;
 #[cfg(feature = "std")]
@@ -40,8 +40,8 @@ use crate::llmosafe_integration::SafetyDecision;
 use crate::llmosafe_integration::SafetyDecision;
 use crate::llmosafe_kernel::{
     DynamicStabilityMonitor, KernelError, KernelOutput, ReasoningLoop, StabilityResult, Synapse,
-    ValidatedSynapse, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING, FLAG_LOW_CONFIDENCE, FLAG_STUCK,
-    STABILITY_THRESHOLD,
+    ValidatedSynapse, FLAG_ADVERSARIAL, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING,
+    FLAG_LOW_CONFIDENCE, FLAG_STUCK,
 };
 use crate::llmosafe_memory::WorkingMemory;
 use crate::llmosafe_pid::{PidConfig, PidState};
@@ -161,6 +161,10 @@ pub struct PipelineResult {
     pub step_count: usize,
     /// Kernel output from the reasoning loop (diagnostic).
     pub kernel_output: Option<KernelOutput>,
+    /// Raw classifier logit (`ClassificationResult.score`) before sigmoid.
+    /// Unbounded f32 — negative = safe, positive = manipulation signal.
+    /// Set to 0.0 in error-path results where no classification was performed.
+    pub classifier_score: f32,
 }
 
 impl PipelineResult {
@@ -200,6 +204,7 @@ pub struct CognitivePipeline<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> 
     drift: DriftDetector,
     confidence: ConfidenceTracker,
     cusum: CusumDetector,
+    adversarial: AdversarialDetector,
     objective: &'a str,
     step_count: usize,
     pid_state: PidState,
@@ -234,6 +239,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             drift: DriftDetector::new(objective, config.drift_threshold),
             confidence: ConfidenceTracker::new(config.min_confidence, config.decay_threshold),
             cusum: CusumDetector::new(0.0, 50.0, 200.0),
+            adversarial: AdversarialDetector::new(),
             objective,
             step_count: 0,
             pid_state: PidState::new(),
@@ -287,7 +293,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         self.process_ctrl(observation, e_body, pressure)
     }
 
-    /// Resets all 5 detectors and the `DynamicStabilityMonitor`.
+    /// Resets all 6 detectors and the `DynamicStabilityMonitor`.
     ///
     /// Preserves `WorkingMemory` ring-buffer state and `ReasoningLoop` step count.
     /// Use `reset_full()` for a complete reset.
@@ -295,6 +301,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         self.repetition.reset();
         self.confidence.reset();
         self.cusum.reset();
+        self.adversarial = AdversarialDetector::new();
         self.monitor.reset();
         self.drift = DriftDetector::new(self.objective, self.drift_threshold);
     }
@@ -311,6 +318,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         self.drift = DriftDetector::new(self.objective, self.drift_threshold);
         self.confidence.reset();
         self.cusum.reset();
+        self.adversarial = AdversarialDetector::new();
         self.step_count = 0;
         self.pid_state.reset();
     }
@@ -350,7 +358,8 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         // Single canonical entry point. Keyword-bias (innate layer) OR-s into
         // the classifier result. One synapse, one proof, no duplicate compute.
         stages |= STAGE_SIFT;
-        let (sifted, sifted_proof) = crate::llmosafe_sifter::sift_text(observation);
+        let (sifted, sifted_proof, classifier_score) =
+            crate::llmosafe_sifter::sift_text_with_score(observation);
         let entropy = sifted.raw_entropy();
         let surprise_val = sifted.raw_surprise();
         let oov_ratio = sifted.oov_ratio();
@@ -403,6 +412,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         let is_low_confidence = self.confidence.is_low();
         let is_decaying = self.confidence.is_decaying();
         let anomaly_detected = self.cusum.detected();
+        let adversarial_detected = self.adversarial.is_adversarial(observation);
 
         let mut flags: u8 = 0;
         if is_stuck {
@@ -419,6 +429,9 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         }
         if anomaly_detected {
             flags |= FLAG_ANOMALY;
+        }
+        if adversarial_detected {
+            flags |= FLAG_ADVERSARIAL;
         }
 
         // ── Stage 5: PID COMPOSITION ──
@@ -440,9 +453,6 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         }
         if e_body > 0.9 {
             override_flags = override_flags | OverrideFlags::EXHAUSTED;
-        }
-        if u32::from(kernel_entropy) > STABILITY_THRESHOLD as u32 {
-            override_flags = override_flags | OverrideFlags::KERNEL_UNSTABLE;
         }
         let limited_risk = crate::llmosafe_pid::apply_safety_overrides(
             pure_risk,
@@ -475,6 +485,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             body_pressure: Some(pressure),
             step_count: self.step_count,
             kernel_output,
+            classifier_score,
         }
     }
 
@@ -544,6 +555,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             body_pressure: None,
             step_count: self.step_count,
             kernel_output: None,
+            classifier_score: 0.0,
         }
     }
 
@@ -594,6 +606,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             body_pressure: None,
             step_count: self.step_count,
             kernel_output: None,
+            classifier_score: 0.0,
         }
     }
 }
@@ -682,6 +695,7 @@ mod tests {
             body_pressure: None,
             step_count: 1,
             kernel_output: None,
+            classifier_score: 0.0,
         };
         assert!(result.is_safe());
         assert!(result.halt_reason().is_none());
@@ -703,6 +717,7 @@ mod tests {
             body_pressure: None,
             step_count: 0,
             kernel_output: None,
+            classifier_score: 0.0,
         };
         assert!(!result.is_safe());
         assert_eq!(
@@ -787,8 +802,13 @@ mod tests {
         assert_ne!(FLAG_LOW_CONFIDENCE, 0);
         assert_ne!(FLAG_DECAYING, 0);
         assert_ne!(FLAG_ANOMALY, 0);
-        let combined =
-            FLAG_STUCK | FLAG_DRIFTING | FLAG_LOW_CONFIDENCE | FLAG_DECAYING | FLAG_ANOMALY;
+        assert_ne!(FLAG_ADVERSARIAL, 0);
+        let combined = FLAG_STUCK
+            | FLAG_DRIFTING
+            | FLAG_LOW_CONFIDENCE
+            | FLAG_DECAYING
+            | FLAG_ANOMALY
+            | FLAG_ADVERSARIAL;
         assert_eq!(combined, DETECTION_FLAGS_MASK);
     }
 

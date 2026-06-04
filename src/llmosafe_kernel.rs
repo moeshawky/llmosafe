@@ -207,8 +207,10 @@ pub const FLAG_LOW_CONFIDENCE: u8 = 0x04;
 pub const FLAG_DECAYING: u8 = 0x08;
 /// Detection flag: CUSUM s_high or s_low exceeds threshold h.
 pub const FLAG_ANOMALY: u8 = 0x10;
+/// Detection flag: adversarial pattern detected.
+pub const FLAG_ADVERSARIAL: u8 = 0x20;
 /// All detection flag bits.
-pub const DETECTION_FLAGS_MASK: u8 = 0x1F;
+pub const DETECTION_FLAGS_MASK: u8 = 0x3F;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -414,42 +416,42 @@ impl Synapse {
         Ok(())
     }
 
-    /// Packs 5 detection flags into reserved bits 0-4.
+    /// Packs 6 detection flags into reserved bits 0-5.
     ///
-    /// Input `flags` is masked to lower 5 bits (`flags & 0x1F`).
-    /// Other reserved bits (5-27) are preserved.
+    /// Input `flags` is masked to lower 6 bits (`flags & 0x3F`).
+    /// Other reserved bits (6-27) are preserved.
     pub fn set_detection_flags(&mut self, flags: u8) {
         let current = self.reserved();
-        let cleared = current & !0x1Fu32;
-        self.set_reserved(cleared | (u32::from(flags) & 0x1F));
+        let cleared = current & !0x3Fu32;
+        self.set_reserved(cleared | (u32::from(flags) & 0x3F));
     }
 
-    /// Returns the lower 5 bits of the reserved field as detection flags.
+    /// Returns the lower 6 bits of the reserved field as detection flags.
     pub fn detection_flags(&self) -> u8 {
-        (self.reserved() & 0x1F) as u8
+        (self.reserved() & 0x3F) as u8
     }
 
-    /// Packs OOV ratio into reserved bits 5-12.
+    /// Packs OOV ratio into reserved bits 6-13.
     ///
-    /// Maps 0=0% OOV, 255=100% OOV. Preserves detection flags (bits 0-4)
-    /// and upper reserved bits (bits 13-27).
+    /// Maps 0=0% OOV, 255=100% OOV. Preserves detection flags (bits 0-5)
+    /// and upper reserved bits (bits 14-27).
     pub fn set_oov_ratio(&mut self, ratio: u8) {
         let current = self.reserved();
-        let cleared = current & !0x1FE0u32;
-        self.set_reserved(cleared | ((u32::from(ratio) & 0xFF) << 5));
+        let cleared = current & !0x3FC0u32;
+        self.set_reserved(cleared | ((u32::from(ratio) & 0xFF) << 6));
     }
 
-    /// Returns bits 5-12 of the reserved field as OOV ratio.
+    /// Returns bits 6-13 of the reserved field as OOV ratio.
     pub fn oov_ratio(&self) -> u8 {
-        ((self.reserved() >> 5) & 0xFF) as u8
+        ((self.reserved() >> 6) & 0xFF) as u8
     }
 
-    /// Zeros detection_flags (bits 0-4) and oov_ratio (bits 5-12) in reserved field.
+    /// Zeros detection_flags (bits 0-5) and oov_ratio (bits 6-13) in reserved field.
     ///
-    /// Upper reserved bits (13-27) are NOT modified.
+    /// Upper reserved bits (14-27) are NOT modified.
     pub fn clear_detection(&mut self) {
         let current = self.reserved();
-        self.set_reserved(current & !0x1FFFu32);
+        self.set_reserved(current & !0x3FFFu32);
     }
 }
 

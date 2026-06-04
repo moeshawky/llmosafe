@@ -16,9 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Entropy formula corrected** (`sifter.rs`): replaced `65535*(1-p)` with binary entropy `65535*4*p*(1-p)`. Old formula assigned maximum entropy to safe-confident text and zero entropy to dangerous-confident text, inverting the stability gate. Binary entropy peaks at p=0.5 (true uncertainty) and drops to 0 at both extremes.
+- **Entropy composition**: `saturating_add` changed to `max` in `sift_text()`. Classifier entropy and keyword-bias boost no longer double-count — the greater of the two pathways determines entropy. `PipelineResult.classifier_prob` now correctly recovers pure classifier probability via `entropy / 65535`.
+- **`sift_bias_flag_matches_breakdown` invariant**: description and check both updated to `has_bias == (classifier.is_manipulation || bias_breakdown.total() > 0)`, resolving self-contradiction with dual-path `sift_text()` OR-logic.
 - **Surprise thresholds recalibrated**: `warn_surprise` 300→42600, `escalate_surprise` 500→55700. Old thresholds were calibrated for keyword-halo [0,1000] range; classifier uses probability*65535 [0,65535].
 - **Body→policy mismatch**: `check_blocking()` and `check_with_deadline()` now call `decide_with_pressure()` instead of `decide()`, adding resource pressure signal. Body entropy [0,1000] was ~50x below policy thresholds [30000,50000], making resource pressure invisible.
 - **DriftDetector empty-objective fix**: `observe()` returns early, `is_drifting()` returns false when objective is empty. Previously caused perpetual drift.
+- **Dead code removed**: `!negated` check in emphasis scoring (redundant with prior `continue`), `KERNEL_UNSTABLE` override in `process_ctrl()` (masked by `PRESSURE_THRESHOLD < STABILITY_THRESHOLD`).
+- **`sift_perceptions()` dual-path**: deprecated function now uses `sift_text()` (classifier + keywords) per observation, selecting by highest `raw_entropy()`, instead of classifier-only inner path.
+- **`calculate_utility` excess-word fallback**: expanded objective cache to 128 words; pre-collects excess words once instead of re-splitting per unmatched observation word.
+- **`phrase_matches` zero-allocation**: iterator-based comparison replaces `Vec<&str>` allocation per multi-word phrase match.
+- **rustdoc warnings**: fixed unresolved link brackets in `SifterOutput`, `classify_text`, and `BodyOutput` doc comments.
+
+### Added
+
+- **AdversarialDetector wired** (`CognitivePipeline`): instantiated in `with_config()`, called during detection stage via `is_adversarial()`. New `FLAG_ADVERSARIAL = 0x20` and updated `DETECTION_FLAGS_MASK = 0x3F`. Reset in both `reset_detectors()` and `reset_full()`. New invariant `pipeline_adversarial_wired`.
+- **`classifier_score` on `PipelineResult`**: raw logistic regression logit (`ClassificationResult.score`) preserved through pipeline for diagnostic access. `sift_text_with_score()` added as `pub(crate)` internal helper; `sift_text()` delegates to it (backward-compatible).
 
 ### Changed
 
@@ -26,8 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **EscalationPolicy thresholds recalibrated**: `warn_entropy` 600→30000, `escalate_entropy` 800→40000, `halt_entropy` 1000→50000
 - **`raw_surprise` carries `classifier_score`**: `probability * 65535` stored in surprise field
 - **`has_bias` from classifier**: `is_manipulation = score > THRESHOLD`, not keyword breakdown
+- **Synapse reserved field layout**: detection flags expanded to 6 bits (bits 0-5), OOV ratio shifted to bits 6-13, clear mask updated to `0x3FFF`.
+- **C-ABI `calculate_halo`**: now routes through dual-path `sift_text()` instead of keyword-only `calculate_halo_signal()`, returning combined classifier + keyword entropy.
 - **4 invariants.toml entries updated**: threshold references, `best_halo`→`is_manipulation`, `last_entropy()`→`mean_entropy()`, pressure zone range
-- **`.gitignore` hardened**: excludes audit analysis artifacts, generated training data, model binaries
+- **`.gitignore` hardened**: excludes audit analysis artifacts, generated training data, model binaries, `.moeinclude`
 
 ## [0.6.0] - 2026-05-28
 

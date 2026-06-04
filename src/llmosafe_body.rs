@@ -100,7 +100,7 @@ impl EnvironmentalVitals {
 ///
 /// - `0.0 ≤ error_body ≤ 1.0` (ceiling=0 → 1.0 fail-closed)
 /// - `0 ≤ pressure ≤ 100`
-/// - `ceiling=0 → is_exhausted=true` [body_check_zero_ceiling]
+/// - `ceiling=0 → is_exhausted=true` `[body_check_zero_ceiling]`
 #[derive(Debug, Clone, Copy)]
 pub struct BodyOutput {
     /// Normalised RSS ratio error `[0.0, 1.0]`.

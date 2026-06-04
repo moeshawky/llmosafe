@@ -13,8 +13,8 @@ check = "0 <= sifted.raw_entropy() <= 0xFFFF"
 [[invariant]]
 name = "sift_bias_flag_matches_breakdown"
 chain = ["sift"]
-description = "has_bias must be true iff at least one bias category scored > 0"
-check = "sifted.has_bias() == classifier.is_manipulation"
+description = "has_bias == (classifier.is_manipulation || bias_breakdown.total() > 0)"
+check = "sifted.has_bias() == (classifier.is_manipulation || bias_breakdown.total() > 0)"
 
 [[invariant]]
 name = "memory_entropy_preserved"
@@ -139,6 +139,12 @@ name = "pipeline_reset_full_clears_state"
 chain = ["pipeline"]
 description = "reset_full() must zero step_count and clear all detector ring buffers."
 check = "step_count == 0 after reset_full(); calling process() again produces fresh PipelineResult"
+
+[[invariant]]
+name = "pipeline_adversarial_wired"
+chain = ["pipeline", "detection"]
+description = "AdversarialDetector must be instantiated in CognitivePipeline and called during detection stage. FLAG_ADVERSARIAL (0x20) contributes to detection_flags."
+check = "pipeline.adversarial.is_some() && detection_flags includes FLAG_ADVERSARIAL when adversarial input matches patterns"
 
 # ── C-ABI arena: handle lifecycle ─────────────────────────────────
 

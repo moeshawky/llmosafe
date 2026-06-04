@@ -179,7 +179,7 @@ const SIGMOID_LUT: [f32; 256] = [
 /// (SIGMOID_LUT) for x in [-8.0, 0.0]. For positive x, uses the identity
 /// sigmoid(x) = 1 - sigmoid(-x). For x <= -8.0, returns 0.0. LUT index
 /// is computed as ((x + 8.0) * (255.0 / 8.0)) clamped to 255, mapping
-/// [-8.0, 0.0] linearly onto [0, 255] with LUT[0] ≈ 0.000335 and LUT[255] = 0.5.
+/// `[-8.0, 0.0]` linearly onto `[0, 255]` with `LUT[0]` ≈ 0.000335 and `LUT[255]` = 0.5.
 #[inline]
 pub fn sigmoid(x: f32) -> f32 {
     if x.is_sign_positive() {
