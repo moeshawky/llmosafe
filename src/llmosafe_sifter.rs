@@ -272,8 +272,7 @@ fn word_in_list(word: &str, list: &[&str]) -> bool {
 /// Check if consecutive tokens match a multi-word phrase.
 #[cfg(feature = "std")]
 #[inline]
-fn phrase_matches(window: &[&str], phrase: &str) -> bool {
-    let phrase_len = phrase.split_whitespace().count();
+fn phrase_matches(window: &[&str], phrase: &str, phrase_len: usize) -> bool {
     if window.len() < phrase_len {
         return false;
     }
@@ -365,10 +364,12 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             if !phrase.contains(' ') {
                 continue;
             }
+            // ⚡ Bolt: Precompute phrase lengths to avoid redundant O(N) word counts on every token window.
+            let phrase_len = phrase.split_whitespace().count();
             if tokens
-                .windows(phrase.split_whitespace().count())
+                .windows(phrase_len)
                 .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
+                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase, phrase_len))
             {
                 breakdown.semantic_traps = breakdown.semantic_traps.saturating_add(100);
             }
@@ -378,10 +379,12 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             if !phrase.contains(' ') {
                 continue;
             }
+            // ⚡ Bolt: Precompute phrase lengths to avoid redundant O(N) word counts on every token window.
+            let phrase_len = phrase.split_whitespace().count();
             if tokens
-                .windows(phrase.split_whitespace().count())
+                .windows(phrase_len)
                 .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
+                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase, phrase_len))
             {
                 breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
             }
