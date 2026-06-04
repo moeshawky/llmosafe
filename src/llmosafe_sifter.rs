@@ -470,7 +470,7 @@ fn calculate_utility_with_cache(
 
         if !found && excess_len > 0 {
             for word_b in excess_words.iter().take(excess_len) {
-                if trimmed_a.eq_ignore_ascii_case(*word_b) {
+                if trimmed_a.eq_ignore_ascii_case(word_b) {
                     count += 1;
                     break;
                 }
