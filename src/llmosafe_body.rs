@@ -548,11 +548,11 @@ impl ResourceGuard {
         let file = fs::File::open("/proc/stat").ok()?;
         let line = BufReader::new(file).lines().next()?.ok()?;
         let mut parts = line.split_whitespace().skip(1);
-        let user: u64 = parts.next()?.parse().unwrap_or(0);
-        let nice: u64 = parts.next()?.parse().unwrap_or(0);
-        let system: u64 = parts.next()?.parse().unwrap_or(0);
-        let idle: u64 = parts.next()?.parse().unwrap_or(0);
-        let iowait: u64 = parts.next()?.parse().unwrap_or(0);
+        let user: u64 = parts.next()?.parse().ok()?;
+        let nice: u64 = parts.next()?.parse().ok()?;
+        let system: u64 = parts.next()?.parse().ok()?;
+        let idle: u64 = parts.next()?.parse().ok()?;
+        let iowait: u64 = parts.next()?.parse().ok()?;
         let active = user + nice + system;
         let total = active + idle + iowait;
         Some((active, total))
@@ -564,11 +564,11 @@ impl ResourceGuard {
         let file = fs::File::open("/proc/stat").ok()?;
         let line = BufReader::new(file).lines().next()?.ok()?;
         let mut parts = line.split_whitespace().skip(1);
-        let user: u64 = parts.next()?.parse().unwrap_or(0);
-        let nice: u64 = parts.next()?.parse().unwrap_or(0);
-        let system: u64 = parts.next()?.parse().unwrap_or(0);
-        let idle: u64 = parts.next()?.parse().unwrap_or(0);
-        let iowait: u64 = parts.next()?.parse().unwrap_or(0);
+        let user: u64 = parts.next()?.parse().ok()?;
+        let nice: u64 = parts.next()?.parse().ok()?;
+        let system: u64 = parts.next()?.parse().ok()?;
+        let idle: u64 = parts.next()?.parse().ok()?;
+        let iowait: u64 = parts.next()?.parse().ok()?;
         let active = user + nice + system;
         let total = active + idle + iowait;
         Some((iowait, total))
