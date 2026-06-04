@@ -26,9 +26,7 @@ impl SafetyMiddleware {
                 eprintln!("Warn: {}", msg);
                 Ok(())
             }
-            SafetyDecision::Escalate { reason, .. } => {
-                Err(format!("Escalated: {:?}", reason))
-            }
+            SafetyDecision::Escalate { reason, .. } => Err(format!("Escalated: {:?}", reason)),
             SafetyDecision::Halt(err, _) => Err(format!("Halted: {:?}", err)),
             SafetyDecision::Exit(err) => Err(format!("Exit: {:?}", err)),
         }
@@ -55,7 +53,7 @@ fn main() {
 
     middleware.pipeline.reset_full();
 
-    println!("");
+    println!();
     let more_requests = [
         "Another completely routine query about programming",
         "Another simple request for help",
