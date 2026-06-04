@@ -540,9 +540,28 @@ mod tests {
     #[test]
     fn test_repetition_detector_single() {
         let mut det = RepetitionDetector::new(3);
+        assert_eq!(det.repetition_count(), 0); // Initial state
         det.observe("hello");
         assert!(!det.is_stuck());
         assert_eq!(det.repetition_count(), 1);
+    }
+
+    #[test]
+    fn test_repetition_detector_count_lifecycle() {
+        let mut det = RepetitionDetector::new(3);
+        assert_eq!(det.repetition_count(), 0);
+
+        det.observe("hello");
+        assert_eq!(det.repetition_count(), 1);
+
+        det.observe("world"); // different pattern
+        assert_eq!(det.repetition_count(), 1);
+
+        det.observe("world"); // repeated pattern
+        assert_eq!(det.repetition_count(), 2);
+
+        det.reset();
+        assert_eq!(det.repetition_count(), 0);
     }
 
     #[test]
