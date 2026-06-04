@@ -65,10 +65,11 @@ impl EnvironmentalVitals {
 
     #[cfg(target_os = "linux")]
     fn read_loadavg() -> Option<f64> {
-        // ⚡ Bolt: Avoid BufReader allocation for tiny files
-        if let Ok(content) = fs::read_to_string("/proc/loadavg") {
-            if let Some(first_part) = content.split_whitespace().next() {
-                return Some(first_part.parse().unwrap_or(0.0));
+        if let Ok(file) = fs::File::open("/proc/loadavg") {
+            if let Some(Ok(line)) = BufReader::new(file).lines().next() {
+                if let Some(first_part) = line.split_whitespace().next() {
+                    return Some(first_part.parse().unwrap_or(0.0));
+                }
             }
         }
         None
