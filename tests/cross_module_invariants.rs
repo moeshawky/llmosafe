@@ -356,31 +356,18 @@ fn trend_respects_temporal_order_after_wraparound() {
 // ── PID Cross-Module Invariants ─────────────────────────────────
 
 #[test]
-fn pid_config_default_does_not_activate() {
+fn pid_config_default_validates() {
     let config = PipelineConfig::default();
-    assert!(!config.use_pid);
-    assert!(config.pid_config.is_none());
     assert!(config.validate().is_ok());
 }
 
 #[test]
 fn pid_config_with_pid_validates() {
     let config = PipelineConfig {
-        use_pid: true,
-        pid_config: Some(PidConfig::default()),
+        pid_config: PidConfig::default(),
         ..PipelineConfig::default()
     };
     assert!(config.validate().is_ok());
-}
-
-#[test]
-fn pid_config_use_pid_without_config_rejects() {
-    let config = PipelineConfig {
-        use_pid: true,
-        pid_config: None,
-        ..PipelineConfig::default()
-    };
-    assert!(config.validate().is_err());
 }
 
 #[test]
@@ -500,4 +487,212 @@ fn pid_anti_windup_integrator_frozen_during_halt() {
         acute_before,
         state.acute_entropy
     );
+}
+
+// ── Control Types Cross-Module Invariant Proptests ──
+
+proptest! {
+    // PidInput invariants
+    #[test]
+    fn pid_input_e_body_bounded(e_body in 0.0f32..=1.0f32) {
+        let input = PidInput::new(e_body, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0);
+        prop_assert!((0.0..=1.0).contains(&input.e_body));
+    }
+
+    #[test]
+    fn pid_input_e_sift_bounded(e_sift in 0.0f32..=1.0f32) {
+        let input = PidInput::new(0.0, e_sift, 0.0, 0.0, 0.0, 1.0, false, 0, 0);
+        prop_assert!((0.0..=1.0).contains(&input.e_sift));
+    }
+
+    #[test]
+    fn pid_input_e_mem_bounded(e_mem in 0.0f32..=1.0f32) {
+        let input = PidInput::new(0.0, 0.0, e_mem, 0.0, 0.0, 1.0, false, 0, 0);
+        prop_assert!((0.0..=1.0).contains(&input.e_mem));
+    }
+
+    #[test]
+    fn pid_input_e_kernel_bounded(e_kernel in 0.0f32..=1.0f32) {
+        let input = PidInput::new(0.0, 0.0, 0.0, e_kernel, 0.0, 1.0, false, 0, 0);
+        prop_assert!((0.0..=1.0).contains(&input.e_kernel));
+    }
+
+    #[test]
+    fn pid_input_classifier_prob_bounded(prob in 0.0f32..=1.0f32) {
+        let input = PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, prob, false, 0, 0);
+        prop_assert!((0.0..=1.0).contains(&input.classifier_prob));
+    }
+
+    #[test]
+    fn pid_input_pressure_bounded(pressure in 0u8..=100u8) {
+        let input = PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, pressure);
+        prop_assert!(input.pressure <= 100);
+    }
+
+    #[test]
+    fn pid_input_detection_flags_stored_as_is(flags in 0u8..=0x1Fu8) {
+        let input = PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, flags, 0);
+        // Detection flags in [0, 0x1F] range — only 5 valid bits
+        prop_assert!(input.detection_flags <= 0x1F);
+    }
+
+    // OverrideFlags invariants
+    #[test]
+    fn override_flags_bias_bit_independent(bias in proptest::bool::ANY) {
+        let flags = if bias { OverrideFlags::BIAS } else { OverrideFlags::empty() };
+        prop_assert_eq!(flags.contains(OverrideFlags::BIAS), bias);
+    }
+
+    #[test]
+    fn override_flags_exhausted_bit_independent(exhausted in proptest::bool::ANY) {
+        let flags = if exhausted { OverrideFlags::EXHAUSTED } else { OverrideFlags::empty() };
+        prop_assert_eq!(flags.contains(OverrideFlags::EXHAUSTED), exhausted);
+    }
+
+    #[test]
+    fn override_flags_kernel_bit_independent(kernel in proptest::bool::ANY) {
+        let flags = if kernel { OverrideFlags::KERNEL_UNSTABLE } else { OverrideFlags::empty() };
+        prop_assert_eq!(flags.contains(OverrideFlags::KERNEL_UNSTABLE), kernel);
+    }
+
+    #[test]
+    fn override_flags_from_bits_masks_upper(high_bits in 0u8..=255u8) {
+        let flags = OverrideFlags::from_bits(high_bits);
+        // Bits 3-7 masked: if the lower bit is not set, the flag should not be set
+        if high_bits & 0x01 == 0 {
+            prop_assert!(!flags.contains(OverrideFlags::BIAS));
+        }
+        if high_bits & 0x02 == 0 {
+            prop_assert!(!flags.contains(OverrideFlags::EXHAUSTED));
+        }
+        if high_bits & 0x04 == 0 {
+            prop_assert!(!flags.contains(OverrideFlags::KERNEL_UNSTABLE));
+        }
+    }
+
+    // GainSchedule invariants
+    #[test]
+    fn gain_schedule_kp_in_range(kp in 0.0f32..=5.0f32) {
+        let g = GainSchedule { kp, ..GainSchedule::default() };
+        prop_assert!((0.0..=5.0).contains(&g.kp));
+    }
+
+    #[test]
+    fn gain_schedule_ki_fast_in_range(ki_fast in 0.0f32..=3.0f32) {
+        let g = GainSchedule { ki_fast, ..GainSchedule::default() };
+        prop_assert!((0.0..=3.0).contains(&g.ki_fast));
+    }
+
+    #[test]
+    fn gain_schedule_ki_slow_in_range(ki_slow in 0.0f32..=3.0f32) {
+        let g = GainSchedule { ki_slow, ..GainSchedule::default() };
+        prop_assert!((0.0..=3.0).contains(&g.ki_slow));
+    }
+
+    #[test]
+    fn gain_schedule_kd_in_range(kd in 0.0f32..=5.0f32) {
+        let g = GainSchedule { kd, ..GainSchedule::default() };
+        prop_assert!((0.0..=5.0).contains(&g.kd));
+    }
+
+    #[test]
+    fn gain_schedule_kf_in_range(kf in 0.0f32..=1.0f32) {
+        let g = GainSchedule { kf, ..GainSchedule::default() };
+        prop_assert!((0.0..=1.0).contains(&g.kf));
+    }
+
+    // DesignAssuranceLevel ordering invariant
+    #[test]
+    fn dal_ordering_severity_monotonic(a_level in 0u8..=4u8, b_level in 0u8..=4u8) {
+        let da = match a_level { 0 => DesignAssuranceLevel::A, 1 => DesignAssuranceLevel::B, 2 => DesignAssuranceLevel::C, 3 => DesignAssuranceLevel::D, _ => DesignAssuranceLevel::E };
+        let db = match b_level { 0 => DesignAssuranceLevel::A, 1 => DesignAssuranceLevel::B, 2 => DesignAssuranceLevel::C, 3 => DesignAssuranceLevel::D, _ => DesignAssuranceLevel::E };
+        prop_assert_eq!(a_level.cmp(&b_level), (da as u8).cmp(&(db as u8)));
+    }
+
+    // BodyOutput invariants (std only)
+    #[cfg(feature = "std")]
+    #[test]
+    fn body_output_error_body_bounded(error_body in 0.0f32..=1.0f32) {
+        let bo = BodyOutput { error_body, pressure: 50, is_exhausted: false };
+        prop_assert!((0.0..=1.0).contains(&bo.error()));
+        prop_assert!((bo.error() - 0.0).abs() < 1.001);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn body_output_pressure_bounded(pressure in 0u8..=100u8) {
+        let bo = BodyOutput { error_body: 0.5, pressure, is_exhausted: false };
+        prop_assert!(bo.pressure <= 100);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn body_output_exhausted_implies_pressure_high(pressure in 76u8..=100u8) {
+        let bo = BodyOutput { error_body: 1.0, pressure, is_exhausted: true };
+        prop_assert!(bo.pressure >= 76);
+    }
+
+    // SifterOutput invariants
+    #[test]
+    fn sifter_output_error_bounded(prob in 0.0f32..=1.0f32) {
+        let class = llmosafe::llmosafe_classifier::ClassificationResult {
+            probability: prob,
+            ..llmosafe::llmosafe_classifier::ClassificationResult::default()
+        };
+        let so = llmosafe::llmosafe_sifter::SifterOutput::from_classification(&class);
+        prop_assert!((0.0..=1.0).contains(&so.error_sift));
+        // raw_entropy bounded-by-type: u16 always ≤65535
+    }
+
+    // KernelOutput invariants
+    #[test]
+    fn kernel_output_error_bounded(e_kernel in 0.0f32..=1.0f32) {
+        let ko = KernelOutput { error_kernel: e_kernel, is_stable: e_kernel < 0.763, depth: 5 };
+        prop_assert!((0.0..=1.0).contains(&ko.error_kernel));
+        if e_kernel >= 0.763 { prop_assert!(!ko.is_stable); }
+    }
+}
+
+// ── Safety Override MC/DC Independence Proptests ──
+// Each override flag must independently force Halt regardless of PID output.
+
+proptest! {
+    #[test]
+    fn mcdc_bias_independent_of_risk(risk in 0.0f32..=1.0f32) {
+        let config = PidConfig::default();
+        let result = apply_safety_overrides(risk, OverrideFlags::BIAS, &config);
+        prop_assert!(
+            result >= config.halt_gain,
+            "BIAS override must force >= halt_gain even at risk={}", risk
+        );
+    }
+
+    #[test]
+    fn mcdc_exhausted_independent_of_risk(risk in 0.0f32..=1.0f32) {
+        let config = PidConfig::default();
+        let result = apply_safety_overrides(risk, OverrideFlags::EXHAUSTED, &config);
+        prop_assert!(
+            (result - 1.0).abs() < 0.001,
+            "EXHAUSTED override must force 1.0 even at risk={}", risk
+        );
+    }
+
+    #[test]
+    fn mcdc_kernel_unstable_independent_of_risk(risk in 0.0f32..=1.0f32) {
+        let config = PidConfig::default();
+        let result = apply_safety_overrides(risk, OverrideFlags::KERNEL_UNSTABLE, &config);
+        prop_assert!(
+            result >= config.halt_gain,
+            "KERNEL_UNSTABLE override must force >= halt_gain even at risk={}", risk
+        );
+    }
+
+    #[test]
+    fn mcdc_override_priority_exhausted_over_bias(risk in 0.0f32..=1.0f32) {
+        let config = PidConfig::default();
+        let bias_result = apply_safety_overrides(risk, OverrideFlags::BIAS, &config);
+        let both_result = apply_safety_overrides(risk, OverrideFlags::BIAS | OverrideFlags::EXHAUSTED, &config);
+        // EXHAUSTED forces 1.0, which is >= what BIAS forces
+        prop_assert!(both_result >= bias_result);
+    }
 }

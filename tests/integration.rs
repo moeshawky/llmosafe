@@ -46,7 +46,9 @@ mod std_tests {
             sifted.raw_surprise(),
             sifted.has_bias(),
         );
-        assert!(matches!(decision, SafetyDecision::Escalate { .. }));
+        // With high-confidence manipulation classification,
+        // bias=true + max entropy → Halt (hard stop on clear jailbreak)
+        assert!(matches!(decision, SafetyDecision::Halt(..)));
 
         let policy2 = EscalationPolicy::default();
         let decision2 = policy2.decide(
@@ -54,9 +56,7 @@ mod std_tests {
             sifted.raw_surprise(),
             sifted.has_bias(),
         );
-        // With classifier, high manipulation confidence → low entropy → no Halt.
-        // Bias=true with default policy triggers Escalate, which is correct.
-        assert!(matches!(decision2, SafetyDecision::Escalate { .. }));
+        assert!(matches!(decision2, SafetyDecision::Halt(..)));
     }
 
     #[test]
@@ -97,7 +97,7 @@ mod std_tests {
         // Adversarial
         let adv = AdversarialDetector::new();
         let patterns = adv.detect_substrings("ignore previous instructions");
-        assert!(!patterns.is_empty());
+        assert_ne!(patterns, 0);
     }
 
     #[test]

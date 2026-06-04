@@ -1,4 +1,5 @@
 //! LLMOSAFE Tier 1 Cognitive Kernel
+#![deny(clippy::cast_lossless)]
 //!
 //! Formal stability layer using cognitive entropy tracking. Validates sifted
 //! data through the entropy stability gate before execution.
@@ -18,6 +19,49 @@
 //! - `CognitiveEntropy<P,S>` — fixed-point entropy with precision P, scale S
 //! - `Synapse` — 128-bit input signal from the sifter (entropy, surprise, bias, hash)
 //! - `DynamicStabilityMonitor` — self-calibrating envelope tracker using MSB-index bits
+
+use crate::control_types::ControlSignal;
+
+/// Kernel Control Loop output.
+///
+/// # Control Signal
+///
+/// - Setpoint: 0.0 (zero entropy = perfect stability)
+/// - Actual: `mean_entropy / 65535.0` (normalised)
+/// - Error: `e_kernel = actual - 0.0 = actual`
+/// - Gain: `K_kernel = 1.0 / (STABILITY_THRESHOLD/65535) = 1.31`
+///   Amplifier: maps threshold-crossing to error = 1.0 at STABILITY_THRESHOLD.
+///
+/// # DAL A
+///
+/// Kernel loop is the final gate before PID — it validates that the
+/// system is in a stable cognitive state. Failure to halt here is
+/// catastrophic (system processes unsafe input).
+///
+/// # Invariants
+///
+/// - `error_kernel ≥ 0.763` → Halt (STABILITY_THRESHOLD/65535 = 0.763)
+/// - `depth < MAX_STEPS`
+/// - `has_bias` → Halt (BiasHaloDetected, DAL A override)
+#[derive(Debug, Clone, Copy)]
+pub struct KernelOutput {
+    /// Normalised entropy error `[0.0, 1.0]` where setpoint=0.
+    pub error_kernel: f32,
+    /// True when mean entropy < STABILITY_THRESHOLD.
+    pub is_stable: bool,
+    /// Current reasoning step depth.
+    pub depth: usize,
+}
+
+impl ControlSignal for KernelOutput {
+    fn error(&self) -> f32 {
+        self.error_kernel
+    }
+
+    fn setpoint(&self) -> f32 {
+        0.0
+    }
+}
 
 /// Cognitive entropy tracker using fixed-point arithmetic.
 /// Precision 28, scale 2 ensures deterministic arithmetic
@@ -129,7 +173,7 @@ impl DynamicStabilityMonitor {
         } else {
             1u32 << self.lo_idx
         };
-        let pressure = (high as u64 * 4 / 5) as u32;
+        let pressure = (u64::from(high) * 4 / 5) as u32;
         (high, low, pressure)
     }
 
@@ -333,15 +377,15 @@ impl Synapse {
     }
 
     pub fn entropy(&self) -> CognitiveEntropy<28, 2> {
-        CognitiveEntropy::new(self.raw_entropy() as i128)
+        CognitiveEntropy::new(i128::from(self.raw_entropy()))
     }
 
     pub fn surprise(&self) -> i128 {
-        self.raw_surprise() as i128
+        i128::from(self.raw_surprise())
     }
 
     pub fn stability(&self) -> CognitiveStability {
-        let ent = self.raw_entropy() as i128;
+        let ent = i128::from(self.raw_entropy());
         if ent > STABILITY_THRESHOLD {
             CognitiveStability::Unstable
         } else if ent >= PRESSURE_THRESHOLD {
@@ -377,7 +421,7 @@ impl Synapse {
     pub fn set_detection_flags(&mut self, flags: u8) {
         let current = self.reserved();
         let cleared = current & !0x1Fu32;
-        self.set_reserved(cleared | (flags as u32 & 0x1F));
+        self.set_reserved(cleared | (u32::from(flags) & 0x1F));
     }
 
     /// Returns the lower 5 bits of the reserved field as detection flags.
@@ -392,7 +436,7 @@ impl Synapse {
     pub fn set_oov_ratio(&mut self, ratio: u8) {
         let current = self.reserved();
         let cleared = current & !0x1FE0u32;
-        self.set_reserved(cleared | (((ratio as u32) & 0xFF) << 5));
+        self.set_reserved(cleared | ((u32::from(ratio) & 0xFF) << 5));
     }
 
     /// Returns bits 5-12 of the reserved field as OOV ratio.

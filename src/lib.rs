@@ -47,6 +47,7 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
+pub mod control_types;
 pub mod llmosafe_classifier;
 pub mod llmosafe_detection;
 pub mod llmosafe_integration;
@@ -59,6 +60,11 @@ pub mod llmosafe_sifter;
 #[cfg(feature = "std")]
 pub mod llmosafe_body;
 
+pub use control_types::{
+    ControlSignal, DesignAssuranceLevel, GainSchedule, OverrideFlags, PidInput, Setpoint,
+};
+#[cfg(feature = "std")]
+pub use llmosafe_body::BodyOutput;
 #[cfg(feature = "std")]
 pub use llmosafe_body::ResourceGuard;
 #[cfg(feature = "std")]
@@ -69,20 +75,23 @@ pub use llmosafe_detection::{
 #[cfg(feature = "std")]
 pub use llmosafe_integration::SafetyContext;
 pub use llmosafe_integration::{EscalationPolicy, EscalationReason, PressureLevel, SafetyDecision};
+pub use llmosafe_kernel::KernelOutput;
 pub use llmosafe_kernel::{
     CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedProof,
     SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse,
     DETECTION_FLAGS_MASK, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING, FLAG_LOW_CONFIDENCE,
     FLAG_STUCK, PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
 };
+pub use llmosafe_memory::MemoryOutput;
 pub use llmosafe_memory::WorkingMemory;
-pub use llmosafe_pid::{PidConfig, PidState};
+pub use llmosafe_pid::{apply_safety_overrides, compute_pid_score_pure, PidConfig, PidState};
 #[cfg(feature = "std")]
 pub use llmosafe_pipeline::STAGE_BODY;
 pub use llmosafe_pipeline::{
     CognitivePipeline, PipelineConfig, PipelineResult, STAGE_DETECTION, STAGE_KERNEL, STAGE_MEMORY,
     STAGE_MONITOR, STAGE_SIFT,
 };
+pub use llmosafe_sifter::SifterOutput;
 pub use llmosafe_sifter::{
     calculate_halo_signal, calculate_utility, get_bias_breakdown, sift_perceptions,
 };
@@ -99,9 +108,16 @@ mod c_abi {
     use crate::llmosafe_pipeline::{CognitivePipeline, PipelineConfig, PipelineResult};
 
     const ARENA_SIZE: usize = 16;
+    const MAX_OBJECTIVE_LEN: usize = 1024;
 
+    #[allow(dead_code)]
     struct PipelineSlot {
         pipeline: CognitivePipeline<'static, 64, 10>,
+        /// Fixed-size buffer for objective string. Declared after `pipeline`
+        /// so it drops after the pipeline (field-declaration order drop).
+        /// This ensures the `&'static str` reference in pipeline remains
+        /// valid for the pipeline's lifetime.
+        objective_buf: Box<[u8; MAX_OBJECTIVE_LEN]>,
         last_result: Option<PipelineResult>,
     }
 
@@ -110,8 +126,21 @@ mod c_abi {
         None,
     ]);
 
-    fn into_static_str(s: String) -> &'static str {
-        Box::leak(s.into_boxed_str())
+    /// Stores `input` in `buf` and returns a `&'static str` pointing into the buffer.
+    ///
+    /// # Safety
+    ///
+    /// `buf` must outlive the returned reference. The caller ensures this
+    /// by storing `buf` in the same `PipelineSlot` (declared after `pipeline`
+    /// so it drops after). The `'static` lifetime is safe because the buffer
+    /// lives in the Box which lives in the PipelineSlot, and the slot is only
+    /// destroyed after the pipeline is dropped (field declaration order).
+    unsafe fn store_objective(buf: &mut Box<[u8; MAX_OBJECTIVE_LEN]>, input: &str) -> &'static str {
+        let len = input.len().min(MAX_OBJECTIVE_LEN - 1);
+        buf[..len].copy_from_slice(&input.as_bytes()[..len]);
+        buf[len] = 0;
+        let len_val = len;
+        core::str::from_utf8_unchecked(core::slice::from_raw_parts(buf.as_ptr(), len_val))
     }
 
     fn decision_to_code(decision: &SafetyDecision) -> i32 {
@@ -138,16 +167,21 @@ mod c_abi {
     /// invalid input.  The handle indexes into a fixed-size arena of 16
     /// concurrent pipeline slots protected by a `std::sync::Mutex`.
     ///
-    /// The objective is leaked to `'static` — each leaked string is at
-    /// most `objective_len` bytes long and there are at most 16 of them.
+    /// The objective is stored in a fixed-size buffer per slot
+    /// (MAX_OBJECTIVE_LEN = 1024 bytes), avoiding heap leaks.
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub extern "C" fn llmosafe_create(objective_ptr: *const u8, objective_len: usize) -> usize {
-        if objective_ptr.is_null() || objective_len == 0 || objective_len > 1024 * 1024 {
+        if objective_ptr.is_null() || objective_len == 0 || objective_len > MAX_OBJECTIVE_LEN {
             return usize::MAX;
         }
+        // SAFETY: objective_ptr non-null and objective_len in [1, MAX_OBJECTIVE_LEN]
+        // validated above. The slice is consumed immediately via from_utf8.
         let slice = unsafe { core::slice::from_raw_parts(objective_ptr, objective_len) };
-        let objective = into_static_str(std::str::from_utf8(slice).unwrap_or("safety").to_string());
+        let input_str = std::str::from_utf8(slice).unwrap_or("safety");
+        let mut objective_buf = Box::new([0u8; MAX_OBJECTIVE_LEN]);
+        let objective = unsafe { store_objective(&mut objective_buf, input_str) };
+
         let config = PipelineConfig::default();
         let pipeline = match CognitivePipeline::<'static, 64, 10>::with_config(objective, config) {
             Ok(p) => p,
@@ -160,6 +194,7 @@ mod c_abi {
             if slot.is_none() {
                 *slot = Some(PipelineSlot {
                     pipeline,
+                    objective_buf,
                     last_result: None,
                 });
                 return i;
@@ -188,6 +223,8 @@ mod c_abi {
         {
             return -9;
         }
+        // SAFETY: text_ptr non-null and text_len in [1, 10 MiB] validated above.
+        // The slice is consumed immediately via from_utf8_lossy.
         let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
         let text = String::from_utf8_lossy(slice);
         let mut arena = PIPELINE_ARENA

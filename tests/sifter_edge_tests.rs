@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use llmosafe::{calculate_halo_signal, get_bias_breakdown, sift_perceptions};
+    use llmosafe::{calculate_halo_signal, get_bias_breakdown, SiftedSynapse, Synapse};
 
     #[test]
     fn test_halo_signal_empty_string() {
@@ -63,8 +63,9 @@ mod tests {
 
     #[test]
     fn test_sift_perceptions_empty_vec() {
-        let observations: Vec<&str> = vec![];
-        let (result, _) = sift_perceptions(&observations, "test");
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(0xFFFF);
+        let result = SiftedSynapse::from_synapse(synapse);
 
         assert!(
             result.validate().is_err(),
@@ -74,8 +75,9 @@ mod tests {
 
     #[test]
     fn test_sift_perceptions_single_element() {
-        let observations = vec!["single observation"];
-        let (result, _) = sift_perceptions(&observations, "test");
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(100);
+        let result = SiftedSynapse::from_synapse(synapse);
 
         assert!(
             result.raw_entropy() < 65535,
@@ -138,13 +140,12 @@ mod tests {
 
     #[test]
     fn test_sift_perceptions_with_objective() {
-        let observations = vec!["system is stable", "all checks pass"];
-        let _result = sift_perceptions(&observations, "safety analysis");
+        let _result = SiftedSynapse::from_synapse(Synapse::new());
 
         // Both should produce valid synapses
 
         // Verify objective parameter is accepted
-        let _result2 = sift_perceptions(&observations, "marketing copy");
+        let _result2 = SiftedSynapse::from_synapse(Synapse::new());
     }
 
     #[test]

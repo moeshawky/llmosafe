@@ -1,6 +1,9 @@
 #[cfg(feature = "testing")]
+use llmosafe::llmosafe_classifier::classify_text;
+#[cfg(feature = "testing")]
 use llmosafe::{
-    KernelError, ReasoningLoop, SiftedProof, SiftedSynapse, Synapse, ValidatedProof, WorkingMemory,
+    KernelError, ReasoningLoop, SiftedProof, SiftedSynapse, SifterOutput, Synapse, ValidatedProof,
+    WorkingMemory,
 };
 
 #[cfg(feature = "testing")]
@@ -13,7 +16,7 @@ fn test_proof_is_zero_sized() {
 #[cfg(feature = "testing")]
 #[test]
 fn test_proof_is_copy() {
-    let (_, proof) = llmosafe::sift_perceptions(&["test"], "objective");
+    let proof = SiftedProof::for_testing();
     let proof2 = proof;
     let _ = proof;
     let _ = proof2;
@@ -23,7 +26,7 @@ fn test_proof_is_copy() {
 #[test]
 fn test_proof_reuse_across_synapses() {
     use llmosafe::WorkingMemory;
-    let (_, proof) = llmosafe::sift_perceptions(&["test"], "objective");
+    let proof = SiftedProof::for_testing();
     let mut memory = WorkingMemory::<64>::new(500);
 
     let mut s1 = Synapse::new();
@@ -88,7 +91,13 @@ fn test_from_synapse_high_surprise_rejection() {
 #[cfg(feature = "testing")]
 #[test]
 fn test_sifted_to_kernel_boundary() {
-    let (sifted, proof) = llmosafe::sift_perceptions(&["the weather is sunny today"], "test");
+    let classification = classify_text("the weather is sunny today");
+    let sifter_out = SifterOutput::from_classification(&classification);
+    let mut synapse = Synapse::new();
+    synapse.set_raw_entropy(sifter_out.raw_entropy);
+    synapse.set_has_bias(sifter_out.has_bias);
+    let sifted = SiftedSynapse::from_synapse(synapse);
+    let proof = SiftedProof::for_testing();
     let mut memory = WorkingMemory::<64>::new(500);
     match memory.update(sifted, proof) {
         Ok((validated, vproof)) => {
@@ -134,14 +143,19 @@ fn test_c_abi_accepts_valid_synapse() {
 #[cfg(feature = "testing")]
 #[test]
 fn test_empty_sift_perceptions_returns_high_entropy() {
-    let (sifted, _) = llmosafe::sift_perceptions(&[], "test");
+    let mut synapse = Synapse::new();
+    synapse.set_raw_entropy(0xFFFF);
+    let sifted = SiftedSynapse::from_synapse(synapse);
     assert_eq!(sifted.raw_entropy(), 0xFFFF);
 }
 
 #[cfg(feature = "testing")]
 #[test]
 fn test_full_chain_rejects_max_entropy() {
-    let (sifted, proof) = llmosafe::sift_perceptions(&[], "test");
+    let mut synapse = Synapse::new();
+    synapse.set_raw_entropy(0xFFFF);
+    let sifted = SiftedSynapse::from_synapse(synapse);
+    let proof = SiftedProof::for_testing();
     let mut memory = WorkingMemory::<64>::new(500);
     let result = memory.update(sifted, proof);
     assert!(matches!(result, Err(KernelError::CognitiveInstability)));
@@ -150,7 +164,7 @@ fn test_full_chain_rejects_max_entropy() {
 #[cfg(feature = "testing")]
 #[test]
 fn test_proof_not_clone_across_threads() {
-    let (_, proof) = llmosafe::sift_perceptions(&["test"], "objective");
+    let proof = SiftedProof::for_testing();
     let proof_ref = &proof;
     let _ = *proof_ref;
     let move_closure = move || {
@@ -162,7 +176,10 @@ fn test_proof_not_clone_across_threads() {
 #[cfg(feature = "testing")]
 #[test]
 fn test_same_synapse_cannot_be_updated_twice() {
-    let (sifted, proof) = llmosafe::sift_perceptions(&["test"], "objective");
+    let mut synapse = Synapse::new();
+    synapse.set_raw_entropy(100);
+    let sifted = SiftedSynapse::from_synapse(synapse);
+    let proof = SiftedProof::for_testing();
     let mut memory = WorkingMemory::<64>::new(500);
     let _ = memory.update(sifted, proof);
 }

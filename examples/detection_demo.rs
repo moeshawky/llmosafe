@@ -134,11 +134,13 @@ fn demo_adversarial() {
     for input in inputs {
         let patterns = detector.detect_substrings(input);
         let score = detector.adversarial_score(input);
-        if patterns.is_empty() {
+        if patterns == 0 {
             println!("✓ Safe: \"{}\"", input);
         } else {
-            println!("⚠ Adversarial (score={:.1}): \"{}\"", score, input);
-            println!("  Patterns: {:?}", patterns);
+            println!(
+                "⚠ Adversarial (score={:.1}): \"{}\" (mask={:#06x})",
+                score, input, patterns
+            );
         }
     }
 }

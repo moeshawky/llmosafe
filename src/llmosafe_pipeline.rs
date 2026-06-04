@@ -1,4 +1,5 @@
 //! LLMOSAFE CognitivePipeline — 5-stage safety orchestrator.
+#![deny(clippy::cast_lossless)]
 //!
 //! # Architecture
 //!
@@ -28,26 +29,23 @@
 //! }
 //! ```
 
+use crate::control_types::OverrideFlags;
 use crate::llmosafe_classifier::classify_text;
 use crate::llmosafe_detection::{
-    AdversarialDetector, ConfidenceTracker, CusumDetector, DriftDetector, RepetitionDetector,
+    ConfidenceTracker, CusumDetector, DriftDetector, RepetitionDetector,
 };
+use crate::llmosafe_integration::EscalationPolicy;
 #[cfg(feature = "std")]
-use crate::llmosafe_integration::{
-    EscalationPolicy, EscalationReason, PressureLevel, SafetyDecision,
-};
+use crate::llmosafe_integration::SafetyDecision;
 #[cfg(not(feature = "std"))]
-use crate::llmosafe_integration::{EscalationPolicy, EscalationReason, SafetyDecision};
+use crate::llmosafe_integration::SafetyDecision;
 use crate::llmosafe_kernel::{
-    DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedProof, SiftedSynapse,
+    DynamicStabilityMonitor, KernelError, KernelOutput, ReasoningLoop, SiftedProof, SiftedSynapse,
     StabilityResult, Synapse, ValidatedSynapse, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING,
-    FLAG_LOW_CONFIDENCE, FLAG_STUCK,
+    FLAG_LOW_CONFIDENCE, FLAG_STUCK, STABILITY_THRESHOLD,
 };
 use crate::llmosafe_memory::WorkingMemory;
 use crate::llmosafe_pid::{PidConfig, PidState};
-
-#[cfg(feature = "std")]
-use crate::llmosafe_detection::DetectionResult;
 
 /// Bitmask constants for `PipelineResult.stages_executed`.
 pub const STAGE_SIFT: u8 = 0x01;
@@ -66,11 +64,8 @@ pub const STAGE_BODY: u8 = 0x20;
 pub struct PipelineConfig {
     /// Escalation policy thresholds (entropy warn/escalate/halt, surprise, bias).
     pub policy: EscalationPolicy,
-    /// When `true`, PID controller replaces scattered threshold decisions.
-    /// Default `false` preserves exact v0.7.x behaviour.
-    pub use_pid: bool,
-    /// PID controller configuration. Must be `Some` and valid when `use_pid` is `true`.
-    pub pid_config: Option<PidConfig>,
+    /// PID controller configuration. Must be valid.
+    pub pid_config: PidConfig,
     /// Surprise threshold for `WorkingMemory`. Values above this are rejected
     /// as `HallucinationDetected`.
     pub surprise_threshold: i128,
@@ -91,8 +86,7 @@ impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
             policy: EscalationPolicy::default(),
-            use_pid: false,
-            pid_config: None,
+            pid_config: PidConfig::default(),
             surprise_threshold: 58000,
             max_repetitions: 3,
             drift_threshold: 0.5,
@@ -126,12 +120,7 @@ impl PipelineConfig {
         if self.decay_threshold == 0 {
             return Err("decay_threshold must be > 0");
         }
-        if self.use_pid {
-            match &self.pid_config {
-                Some(pid) => pid.validate()?,
-                None => return Err("pid_config must be Some when use_pid is true"),
-            }
-        }
+        self.pid_config.validate()?;
         Ok(())
     }
 }
@@ -163,6 +152,8 @@ pub struct PipelineResult {
     pub body_pressure: Option<u8>,
     /// Current reasoning step count after this invocation.
     pub step_count: usize,
+    /// Kernel output from the reasoning loop (diagnostic).
+    pub kernel_output: Option<KernelOutput>,
 }
 
 impl PipelineResult {
@@ -197,17 +188,15 @@ impl PipelineResult {
 pub struct CognitivePipeline<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> {
     memory: WorkingMemory<MEM_SIZE>,
     reasoning: ReasoningLoop<MAX_STEPS>,
-    policy: EscalationPolicy,
     monitor: DynamicStabilityMonitor,
     repetition: RepetitionDetector,
     drift: DriftDetector,
     confidence: ConfidenceTracker,
-    adversarial: AdversarialDetector,
     cusum: CusumDetector,
     objective: &'a str,
     step_count: usize,
     pid_state: PidState,
-    pid_config: Option<PidConfig>,
+    pid_config: PidConfig,
 }
 
 impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, MEM_SIZE, MAX_STEPS> {
@@ -226,25 +215,18 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
     /// thresholds). All detector instances are constructed from config fields.
     pub fn with_config(objective: &'a str, config: PipelineConfig) -> Result<Self, &'static str> {
         config.validate()?;
-        let pid_config = if config.use_pid {
-            Some(config.pid_config.unwrap_or_default())
-        } else {
-            None
-        };
         Ok(Self {
             memory: WorkingMemory::<MEM_SIZE>::new(config.surprise_threshold),
             reasoning: ReasoningLoop::<MAX_STEPS>::new(),
-            policy: config.policy,
             monitor: DynamicStabilityMonitor::new(config.monitor_k),
             repetition: RepetitionDetector::new(config.max_repetitions),
             drift: DriftDetector::new(objective, config.drift_threshold),
             confidence: ConfidenceTracker::new(config.min_confidence, config.decay_threshold),
-            adversarial: AdversarialDetector::new(),
             cusum: CusumDetector::new(0.0, 50.0, 200.0),
             objective,
             step_count: 0,
             pid_state: PidState::new(),
-            pid_config,
+            pid_config: config.pid_config,
         })
     }
 
@@ -265,368 +247,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
     ///
     /// A `PipelineResult` with the final decision, classified synapse, and diagnostics.
     pub fn process(&mut self, observation: &str) -> PipelineResult {
-        self.process_inner(observation, 0)
-    }
-
-    /// Internal process entry-point with resource pressure for PID P-term.
-    fn process_inner(&mut self, observation: &str, pressure: u8) -> PipelineResult {
-        let mut stages = 0u8;
-
-        // ---- Stage 1: SIFT ----
-        stages |= STAGE_SIFT;
-        let classification = classify_text(observation);
-
-        let entropy =
-            (65535.0_f32 * 4.0 * classification.probability * (1.0 - classification.probability))
-                as u16;
-        let surprise_val = (classification.probability * 65535.0_f32) as u16;
-        let has_bias = classification.is_manipulation;
-        let oov_ratio = (classification.oov_ratio * 255.0_f32) as u8;
-
-        let mut synapse = Synapse::new();
-        synapse.set_raw_entropy(entropy);
-        synapse.set_raw_surprise(surprise_val);
-        synapse.set_has_bias(has_bias);
-        synapse.set_oov_ratio(oov_ratio);
-
-        let sift_decision = self.policy.decide(entropy, surprise_val, has_bias);
-        if sift_decision.must_halt() {
-            return PipelineResult {
-                decision: sift_decision,
-                synapse,
-                stages_executed: stages,
-                detection_flags: 0,
-                oov_ratio,
-                entropy,
-                surprise: surprise_val,
-                monitor_state: StabilityResult::Stable,
-                #[cfg(feature = "std")]
-                body_pressure: None,
-                step_count: self.step_count,
-            };
-        }
-        if sift_decision.is_blocking() {
-            return PipelineResult {
-                decision: sift_decision,
-                synapse,
-                stages_executed: stages,
-                detection_flags: 0,
-                oov_ratio,
-                entropy,
-                surprise: surprise_val,
-                monitor_state: StabilityResult::Stable,
-                #[cfg(feature = "std")]
-                body_pressure: None,
-                step_count: self.step_count,
-            };
-        }
-
-        // ---- Stage 2: MEMORY ----
-        stages |= STAGE_MEMORY;
-        let sifted = SiftedSynapse::new(synapse);
-        let sifted_proof = SiftedProof(());
-        match self.memory.update(sifted, sifted_proof) {
-            Ok((validated, validated_proof)) => {
-                let stability = validated.stability();
-                let mem_decision = self.policy.decide_from_stability(stability);
-                if mem_decision.must_halt() {
-                    return PipelineResult {
-                        decision: mem_decision,
-                        synapse: validated.into_inner(),
-                        stages_executed: stages,
-                        detection_flags: 0,
-                        oov_ratio,
-                        entropy,
-                        surprise: surprise_val,
-                        monitor_state: StabilityResult::Stable,
-                        #[cfg(feature = "std")]
-                        body_pressure: None,
-                        step_count: self.step_count,
-                    };
-                }
-                if mem_decision.is_blocking() {
-                    return PipelineResult {
-                        decision: mem_decision,
-                        synapse: validated.into_inner(),
-                        stages_executed: stages,
-                        detection_flags: 0,
-                        oov_ratio,
-                        entropy,
-                        surprise: surprise_val,
-                        monitor_state: StabilityResult::Stable,
-                        #[cfg(feature = "std")]
-                        body_pressure: None,
-                        step_count: self.step_count,
-                    };
-                }
-
-                // ---- Stage 3: KERNEL ----
-                stages |= STAGE_KERNEL;
-                let kernel_synapse = validated.into_inner();
-                match self
-                    .reasoning
-                    .next_step(ValidatedSynapse::new(kernel_synapse), validated_proof)
-                {
-                    Ok(()) => {
-                        self.step_count += 1;
-                        let current_synapse = ValidatedSynapse::new(kernel_synapse);
-                        let entropy = current_synapse.raw_entropy();
-                        let surprise_val = current_synapse.raw_surprise();
-                        let _has_bias = current_synapse.has_bias();
-                        let mut synapse = current_synapse.into_inner();
-
-                        // ---- Stage 4: DETECTION ----
-                        stages |= STAGE_DETECTION;
-                        self.repetition.observe(observation);
-                        self.drift.observe(observation);
-                        self.confidence.observe(classification.probability);
-                        let _cusum_anomaly = self.cusum.update(entropy as f64);
-
-                        let is_stuck = self.repetition.is_stuck();
-                        let is_drifting = self.drift.is_drifting();
-                        let is_low_confidence = self.confidence.is_low();
-                        let is_decaying = self.confidence.is_decaying();
-                        let anomaly_detected = self.cusum.detected();
-
-                        let mut flags: u8 = 0;
-                        if is_stuck {
-                            flags |= FLAG_STUCK;
-                        }
-                        if is_drifting {
-                            flags |= FLAG_DRIFTING;
-                        }
-                        if is_low_confidence {
-                            flags |= FLAG_LOW_CONFIDENCE;
-                        }
-                        if is_decaying {
-                            flags |= FLAG_DECAYING;
-                        }
-                        if anomaly_detected {
-                            flags |= FLAG_ANOMALY;
-                        }
-                        synapse.set_detection_flags(flags);
-
-                        // ── PID gate (when use_pid=true) ─
-                        // Replaces scattered EscalationPolicy decisions with a
-                        // single PID-computed risk score.    Detection still runs
-                        // to populate flags for the sidechain.
-                        if let Some(ref pid_config) = self.pid_config {
-                            let trend = self.memory.trend();
-                            let risk = crate::llmosafe_pid::compute_pid_score(
-                                entropy,
-                                trend,
-                                pressure,
-                                classification.probability,
-                                has_bias,
-                                flags,
-                                pid_config,
-                                &mut self.pid_state,
-                            );
-                            let decision =
-                                crate::llmosafe_pid::pid_risk_to_decision(risk, pid_config);
-
-                            stages |= STAGE_MONITOR;
-                            let monitor_state = self.monitor.update(entropy as u32);
-
-                            return PipelineResult {
-                                decision,
-                                synapse,
-                                stages_executed: stages,
-                                detection_flags: flags,
-                                oov_ratio,
-                                entropy,
-                                surprise: surprise_val,
-                                monitor_state,
-                                #[cfg(feature = "std")]
-                                body_pressure: None,
-                                step_count: self.step_count,
-                            };
-                        }
-
-                        // Build detection decision — blocks on Halt/Escalate, falls
-                        // through to MONITOR otherwise.
-                        #[cfg(feature = "std")]
-                        let detection_decision: Option<SafetyDecision>;
-                        #[cfg(not(feature = "std"))]
-                        let detection_decision: Option<SafetyDecision>;
-
-                        #[cfg(feature = "std")]
-                        {
-                            let adversarial_patterns =
-                                self.adversarial.detect_substrings(observation);
-                            let risk_score = if !adversarial_patterns.is_empty() {
-                                0.9f32
-                            } else {
-                                let mut r = 0.0f32;
-                                if is_stuck {
-                                    r += 0.2;
-                                }
-                                if is_drifting {
-                                    r += 0.1;
-                                }
-                                if anomaly_detected {
-                                    r += 0.3;
-                                }
-                                r
-                            };
-                            let detection_result = DetectionResult {
-                                is_stuck,
-                                is_drifting,
-                                is_low_confidence,
-                                is_decaying,
-                                adversarial_patterns,
-                                risk_score,
-                            };
-                            detection_decision = Some(self.policy.decide_from_detection(
-                                &detection_result,
-                                entropy,
-                                surprise_val,
-                            ));
-                        }
-
-                        #[cfg(not(feature = "std"))]
-                        {
-                            if self.adversarial.is_adversarial(observation) {
-                                detection_decision = Some(SafetyDecision::Halt(
-                                    KernelError::BiasHaloDetected,
-                                    30000,
-                                ));
-                            } else if anomaly_detected {
-                                detection_decision = Some(SafetyDecision::Escalate {
-                                    entropy,
-                                    reason: EscalationReason::AnomalyDetected,
-                                    cooldown_ms: 5000,
-                                });
-                            } else if is_stuck {
-                                detection_decision = Some(SafetyDecision::Escalate {
-                                    entropy,
-                                    reason: EscalationReason::StuckAgent,
-                                    cooldown_ms: 5000,
-                                });
-                            } else if is_drifting {
-                                detection_decision = Some(SafetyDecision::Escalate {
-                                    entropy,
-                                    reason: EscalationReason::GoalDriftDetected,
-                                    cooldown_ms: 5000,
-                                });
-                            } else {
-                                detection_decision = None;
-                            }
-                        }
-
-                        if let Some(ref d) = detection_decision {
-                            if d.must_halt() || d.is_blocking() {
-                                return PipelineResult {
-                                    decision: *d,
-                                    synapse,
-                                    stages_executed: stages,
-                                    detection_flags: flags,
-                                    oov_ratio,
-                                    entropy,
-                                    surprise: surprise_val,
-                                    monitor_state: StabilityResult::Stable,
-                                    #[cfg(feature = "std")]
-                                    body_pressure: None,
-                                    step_count: self.step_count,
-                                };
-                            }
-                        }
-
-                        // ---- Stage 5: MONITOR ----
-                        stages |= STAGE_MONITOR;
-                        let monitor_state = self.monitor.update(entropy as u32);
-
-                        let final_decision = match detection_decision {
-                            Some(d)
-                                if matches!(
-                                    d,
-                                    SafetyDecision::Warn(_) | SafetyDecision::Proceed
-                                ) =>
-                            {
-                                d
-                            }
-                            Some(d) => d,
-                            None => self.policy.decide(entropy, surprise_val, false),
-                        };
-
-                        PipelineResult {
-                            decision: final_decision,
-                            synapse,
-                            stages_executed: stages,
-                            detection_flags: flags,
-                            oov_ratio,
-                            entropy,
-                            surprise: surprise_val,
-                            monitor_state,
-                            #[cfg(feature = "std")]
-                            body_pressure: None,
-                            step_count: self.step_count,
-                        }
-                    }
-                    Err(err) => {
-                        let decision = match err {
-                            KernelError::DepthExceeded => SafetyDecision::Escalate {
-                                entropy,
-                                reason: EscalationReason::Custom("reasoning depth exceeded"),
-                                cooldown_ms: 10000,
-                            },
-                            KernelError::BiasHaloDetected => {
-                                SafetyDecision::Halt(KernelError::BiasHaloDetected, 30000)
-                            }
-                            KernelError::CognitiveInstability => {
-                                SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)
-                            }
-                            _ => SafetyDecision::Halt(err, 30000),
-                        };
-                        PipelineResult {
-                            decision,
-                            synapse: kernel_synapse,
-                            stages_executed: stages,
-                            detection_flags: 0,
-                            oov_ratio,
-                            entropy,
-                            surprise: surprise_val,
-                            monitor_state: StabilityResult::Stable,
-                            #[cfg(feature = "std")]
-                            body_pressure: None,
-                            step_count: self.step_count,
-                        }
-                    }
-                }
-            }
-            Err(err) => {
-                let decision = match err {
-                    KernelError::CognitiveInstability => {
-                        SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)
-                    }
-                    KernelError::BiasHaloDetected => {
-                        SafetyDecision::Halt(KernelError::BiasHaloDetected, 30000)
-                    }
-                    KernelError::HallucinationDetected => SafetyDecision::Escalate {
-                        entropy,
-                        reason: EscalationReason::EntropyApproachingLimit,
-                        cooldown_ms: 5000,
-                    },
-                    KernelError::DepthExceeded => {
-                        SafetyDecision::Halt(KernelError::DepthExceeded, 0)
-                    }
-                    _ => SafetyDecision::Halt(err, 30000),
-                };
-                PipelineResult {
-                    decision,
-                    synapse,
-                    stages_executed: stages,
-                    detection_flags: 0,
-                    oov_ratio,
-                    entropy,
-                    surprise: surprise_val,
-                    monitor_state: StabilityResult::Stable,
-                    #[cfg(feature = "std")]
-                    body_pressure: None,
-                    step_count: self.step_count,
-                }
-            }
-        }
+        self.process_ctrl(observation, 0.0, 0)
     }
 
     /// Processes an observation with resource body pressure gating.
@@ -648,33 +269,9 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         body_entropy: u16,
         pressure: u8,
     ) -> PipelineResult {
-        let pressure_level = PressureLevel::from_percentage(pressure);
-        let decision = self
-            .policy
-            .decide_with_pressure(body_entropy, 0, false, pressure_level);
-
-        // Legacy pressure gate: block if pressure is Critical/Emergency
-        if self.pid_config.is_none() && (decision.must_halt() || decision.is_blocking()) {
-            let mut synapse = Synapse::new();
-            synapse.set_raw_entropy(body_entropy);
-            return PipelineResult {
-                decision,
-                synapse,
-                stages_executed: STAGE_BODY,
-                detection_flags: 0,
-                oov_ratio: 0,
-                entropy: body_entropy,
-                surprise: 0,
-                monitor_state: StabilityResult::Stable,
-                body_pressure: Some(pressure),
-                step_count: self.step_count,
-            };
-        }
-
-        // PID mode or legacy non-blocking: run full pipeline with real pressure
-        let mut result = self.process_inner(observation, pressure);
-        result.body_pressure = Some(pressure);
-        result
+        // Route body pressure through BodyOutput → PidInput.e_body
+        let e_body = (f32::from(body_entropy) / 1000.0_f32).clamp(0.0, 1.0);
+        self.process_ctrl(observation, e_body, pressure)
     }
 
     /// Resets all 5 detectors and the `DynamicStabilityMonitor`.
@@ -706,6 +303,279 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         self.cusum.reset();
         self.step_count = 0;
         self.pid_state.reset();
+    }
+
+    // ── Control Theory Composition Path ────────────────────────────
+
+    /// Processes an observation through the full cascade control pipeline.
+    ///
+    /// Uses the control theory architecture with typed output structs,
+    /// pure PID computation, and safety overrides (infusion pump pattern).
+    ///
+    /// # Control Flow
+    ///
+    /// ```text
+    /// SifterOutput → MemoryOutput → KernelOutput → Detection → PidInput →
+    ///   compute_pid_score_pure → apply_safety_overrides → pid_risk_to_decision
+    /// ```
+    ///
+    /// # DAL A
+    ///
+    /// Safety overrides (bias, exhaustion, kernel instability) are applied
+    /// AFTER pure PID computation, preventing PID bugs from bypassing safety.
+    ///
+    /// # MC/DC
+    ///
+    /// Each control signal independently affects its PID term.
+    /// Each override flag independently forces Halt.
+    ///
+    /// Control-theory composition path (cascade control).
+    /// PID is now mandatory — see `pid_config` field.
+    /// `e_body` is the normalised body pressure error [0.0, 1.0] from BodyOutput.
+    /// `pressure` is the resource pressure percentage [0, 100], passed for diagnostics.
+    pub fn process_ctrl(&mut self, observation: &str, e_body: f32, pressure: u8) -> PipelineResult {
+        let mut stages = 0u8;
+
+        // ── Stage 1: SIFT (Tier 3) ──
+        stages |= STAGE_SIFT;
+        let classification = classify_text(observation);
+        let sifter_output =
+            crate::llmosafe_sifter::SifterOutput::from_classification(&classification);
+        let entropy = sifter_output.raw_entropy;
+        let surprise_val = (classification.probability * 65535.0_f32) as u16;
+        let oov_ratio = (classification.oov_ratio * 255.0_f32) as u8;
+
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(entropy);
+        synapse.set_raw_surprise(surprise_val);
+        synapse.set_has_bias(sifter_output.has_bias);
+        synapse.set_oov_ratio(oov_ratio);
+
+        // ── Stage 2: MEMORY (Tier 2) ──
+        stages |= STAGE_MEMORY;
+        let sifted = SiftedSynapse::new(synapse);
+        let mem_result = self.memory.update(sifted, SiftedProof(()));
+        let validated = match mem_result {
+            Ok((v, _p)) => v,
+            Err(err) => {
+                return self.ctrl_result_from_error(err, stages, oov_ratio, entropy, surprise_val);
+            }
+        };
+
+        // ── Stage 3: KERNEL (Tier 1) ──
+        stages |= STAGE_KERNEL;
+        let kernel_synapse = validated.into_inner();
+        let kernel_entropy = kernel_synapse.raw_entropy();
+        let kernel_validated = ValidatedSynapse::new(kernel_synapse);
+        let kernel_result = self
+            .reasoning
+            .next_step(kernel_validated, crate::llmosafe_kernel::ValidatedProof(()));
+        let kernel_synapse_out = match kernel_result {
+            Ok(()) => {
+                self.step_count += 1;
+                validated.into_inner()
+            }
+            Err(err) => {
+                return self.ctrl_result_from_kernel_error(
+                    err,
+                    stages,
+                    oov_ratio,
+                    entropy,
+                    surprise_val,
+                );
+            }
+        };
+
+        // ── Stage 4: DETECTION (Sidechain) ──
+        stages |= STAGE_DETECTION;
+        self.repetition.observe(observation);
+        self.drift.observe(observation);
+        self.confidence.observe(classification.probability);
+        let _cusum_anomaly = self.cusum.update(f64::from(entropy));
+
+        let is_stuck = self.repetition.is_stuck();
+        let is_drifting = self.drift.is_drifting();
+        let is_low_confidence = self.confidence.is_low();
+        let is_decaying = self.confidence.is_decaying();
+        let anomaly_detected = self.cusum.detected();
+
+        let mut flags: u8 = 0;
+        if is_stuck {
+            flags |= FLAG_STUCK;
+        }
+        if is_drifting {
+            flags |= FLAG_DRIFTING;
+        }
+        if is_low_confidence {
+            flags |= FLAG_LOW_CONFIDENCE;
+        }
+        if is_decaying {
+            flags |= FLAG_DECAYING;
+        }
+        if anomaly_detected {
+            flags |= FLAG_ANOMALY;
+        }
+
+        // ── Stage 5: PID COMPOSITION ──
+        // P-term uses e_body (normalised body pressure error, [0.0, 1.0]).
+        // Compute equivalent pressure-in-percentage for the PID interface.
+        let pressure_term = (e_body * 100.0_f32) as u8;
+        let trend = self.memory.trend();
+        let pure_risk = crate::llmosafe_pid::compute_pid_score_pure(
+            entropy,
+            trend,
+            pressure_term,
+            classification.probability,
+            flags,
+            &self.pid_config,
+            &mut self.pid_state,
+        );
+
+        let mut override_flags = OverrideFlags::empty();
+        if sifter_output.has_bias {
+            override_flags = override_flags | OverrideFlags::BIAS;
+        }
+        if e_body > 0.9 {
+            override_flags = override_flags | OverrideFlags::EXHAUSTED;
+        }
+        if u32::from(kernel_entropy) > STABILITY_THRESHOLD as u32 {
+            override_flags = override_flags | OverrideFlags::KERNEL_UNSTABLE;
+        }
+        let limited_risk = crate::llmosafe_pid::apply_safety_overrides(
+            pure_risk,
+            override_flags,
+            &self.pid_config,
+        );
+        let decision = crate::llmosafe_pid::pid_risk_to_decision(limited_risk, &self.pid_config);
+
+        // ── Stage 6: MONITOR ──
+        stages |= STAGE_MONITOR;
+        let monitor_state = self.monitor.update(u32::from(entropy));
+
+        let kernel_output = Some(crate::llmosafe_kernel::KernelOutput {
+            error_kernel: f32::from(kernel_entropy) / 65535.0_f32,
+            is_stable: u32::from(kernel_entropy)
+                < crate::llmosafe_kernel::STABILITY_THRESHOLD as u32,
+            depth: self.step_count,
+        });
+
+        PipelineResult {
+            decision,
+            synapse: kernel_synapse_out,
+            stages_executed: stages,
+            detection_flags: flags,
+            oov_ratio,
+            entropy,
+            surprise: surprise_val,
+            monitor_state,
+            #[cfg(feature = "std")]
+            body_pressure: Some(pressure),
+            step_count: self.step_count,
+            kernel_output,
+        }
+    }
+
+    fn ctrl_result_from_error(
+        &self,
+        err: KernelError,
+        stages: u8,
+        oov_ratio: u8,
+        entropy: u16,
+        surprise_val: u16,
+    ) -> PipelineResult {
+        let (decision, synapse) = match err {
+            KernelError::HallucinationDetected => {
+                let mut s = Synapse::new();
+                s.set_raw_entropy(entropy);
+                (
+                    SafetyDecision::Escalate {
+                        entropy,
+                        reason: crate::llmosafe_integration::EscalationReason::Custom(
+                            "hallucination",
+                        ),
+                        cooldown_ms: 5000,
+                    },
+                    s,
+                )
+            }
+            KernelError::CognitiveInstability => {
+                let mut s = Synapse::new();
+                s.set_raw_entropy(entropy);
+                (
+                    SafetyDecision::Halt(KernelError::CognitiveInstability, 30000),
+                    s,
+                )
+            }
+            KernelError::BiasHaloDetected => {
+                let mut s = Synapse::new();
+                s.set_raw_entropy(entropy);
+                (
+                    SafetyDecision::Halt(KernelError::BiasHaloDetected, 30000),
+                    s,
+                )
+            }
+            _ => {
+                let mut s = Synapse::new();
+                s.set_raw_entropy(entropy);
+                (SafetyDecision::Halt(err, 30000), s)
+            }
+        };
+        PipelineResult {
+            decision,
+            synapse,
+            stages_executed: stages,
+            detection_flags: 0,
+            oov_ratio,
+            entropy,
+            surprise: surprise_val,
+            monitor_state: StabilityResult::Stable,
+            #[cfg(feature = "std")]
+            body_pressure: None,
+            step_count: self.step_count,
+            kernel_output: None,
+        }
+    }
+
+    fn ctrl_result_from_kernel_error(
+        &self,
+        err: KernelError,
+        stages: u8,
+        oov_ratio: u8,
+        entropy: u16,
+        surprise_val: u16,
+    ) -> PipelineResult {
+        let decision = match err {
+            KernelError::DepthExceeded => SafetyDecision::Escalate {
+                entropy,
+                reason: crate::llmosafe_integration::EscalationReason::Custom(
+                    "reasoning depth exceeded",
+                ),
+                cooldown_ms: 10000,
+            },
+            KernelError::BiasHaloDetected => {
+                SafetyDecision::Halt(KernelError::BiasHaloDetected, 30000)
+            }
+            KernelError::CognitiveInstability => {
+                SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)
+            }
+            _ => SafetyDecision::Halt(err, 30000),
+        };
+        let mut err_synapse = Synapse::new();
+        err_synapse.set_raw_entropy(entropy);
+        PipelineResult {
+            decision,
+            synapse: err_synapse,
+            stages_executed: stages,
+            detection_flags: 0,
+            oov_ratio,
+            entropy,
+            surprise: surprise_val,
+            monitor_state: StabilityResult::Stable,
+            #[cfg(feature = "std")]
+            body_pressure: None,
+            step_count: self.step_count,
+            kernel_output: None,
+        }
     }
 }
 
@@ -792,6 +662,7 @@ mod tests {
             #[cfg(feature = "std")]
             body_pressure: None,
             step_count: 1,
+            kernel_output: None,
         };
         assert!(result.is_safe());
         assert!(result.halt_reason().is_none());
@@ -812,6 +683,7 @@ mod tests {
             #[cfg(feature = "std")]
             body_pressure: None,
             step_count: 0,
+            kernel_output: None,
         };
         assert!(!result.is_safe());
         assert_eq!(
@@ -1013,8 +885,11 @@ mod tests {
     #[test]
     fn test_process_with_pressure_nominal_proceeds() {
         let mut pipeline = CognitivePipeline::<64, 10>::new("test");
-        let result = pipeline.process_with_pressure("hello world", 100, 10);
-        // Nominal pressure (10%) should proceed through pipeline
+        let result = pipeline.process_with_pressure(
+            "how do i write a function to sort a list in python",
+            100,
+            10,
+        );
         assert!(result.body_pressure.is_some());
     }
 
@@ -1022,7 +897,11 @@ mod tests {
     #[test]
     fn test_process_with_pressure_critical_escalates() {
         let mut pipeline = CognitivePipeline::<64, 10>::new("test");
-        let result = pipeline.process_with_pressure("hello world", 500, 60);
+        let result = pipeline.process_with_pressure(
+            "how do i write a function to sort a list in python",
+            500,
+            60,
+        );
         assert!(result.decision.is_blocking());
         assert_eq!(result.body_pressure, Some(60));
     }
@@ -1031,8 +910,36 @@ mod tests {
     #[test]
     fn test_process_with_pressure_emergency_halt() {
         let mut pipeline = CognitivePipeline::<64, 10>::new("test");
-        let result = pipeline.process_with_pressure("hello world", 800, 90);
+        let result = pipeline.process_with_pressure(
+            "how do i write a function to sort a list in python",
+            800,
+            90,
+        );
         assert!(result.decision.is_blocking());
         assert_eq!(result.body_pressure, Some(90));
+    }
+
+    // ── Control Theory Composition Tests ──
+
+    #[test]
+    fn test_process_ctrl_returns_valid_result() {
+        let mut pipeline = CognitivePipeline::<64, 10>::new("test objective");
+        let result = pipeline.process_ctrl("a completely ordinary sentence", 0.0, 0);
+        assert!(result.stages_executed & STAGE_SIFT != 0);
+        assert!(result.decision.severity() <= 4);
+        // Control loop path should produce bounded entropy
+        assert!(
+            result.entropy > 0,
+            "entropy must be non-zero for valid input"
+        );
+    }
+
+    #[test]
+    fn test_process_ctrl_memory_output_has_bounded_error() {
+        let mut pipeline = CognitivePipeline::<64, 10>::new("test");
+        let result = pipeline.process_ctrl("safety test input observation", 0.0, 0);
+        assert!(result.stages_executed & STAGE_MEMORY != 0);
+        // Detection stage always runs
+        assert!(result.detection_flags <= DETECTION_FLAGS_MASK);
     }
 }

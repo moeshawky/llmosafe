@@ -217,13 +217,7 @@ description = "reset_full() must zero cumulative_entropy (both acute and chronic
 check = "pid_state.acute_entropy == 0 && pid_state.chronic_entropy == 0 && pid_state.prev_pressure_norm == 0"
 
 [[invariant]]
-name = "pid_legacy_compat"
+name = "pid_full_through"
 chain = ["pid", "pipeline"]
-description = "When use_pid=false, pipeline behaviour must be identical to v0.7.x"
-check = "PipelineConfig::default().use_pid == false"
-
-[[invariant]]
-name = "pid_config_validates"
-chain = ["pid", "pipeline"]
-description = "When use_pid=true, pid_config must be Some and pass PidConfig::validate()"
-check = "if config.use_pid: config.pid_config.is_some() && config.pid_config.as_ref().unwrap().validate().is_ok()"
+description = "All decisions route through process_ctrl() — no legacy process_inner() fallback"
+check = "CognitivePipeline::process_ctrl is the only production decision path"

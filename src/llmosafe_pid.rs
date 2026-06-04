@@ -1,4 +1,5 @@
 //! LLMOSAFE PID Decision Subsystem.
+#![deny(clippy::cast_lossless)]
 //!
 //! Replaces scattered threshold logic with a Proportional-Integral-Derivative-FeedForward
 //! controller. All inputs normalised to `[0, 1]`; output is a risk score mapped to
@@ -27,6 +28,7 @@
 //! boosts Kf 100% (classifier amp), low_confidence cuts all gains 25% (conservatism),
 //! anomaly boosts Kd 100% (rate-of-change event).
 
+use crate::control_types::OverrideFlags;
 use crate::llmosafe_integration::{EscalationReason, SafetyDecision};
 use crate::llmosafe_kernel::{
     KernelError, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING, FLAG_LOW_CONFIDENCE, FLAG_STUCK,
@@ -208,35 +210,71 @@ fn modulate_gains(config: &PidConfig, flags: u8) -> EffectiveGains {
     }
 }
 
+/// Shared PID computation: normalise, modulate gains, update integrators, compute terms.
+///
+/// Steps 1-4 of the PID algorithm. Step 5 (bias override) is caller's responsibility.
+///
+/// Allow: 10 arguments is the minimum for composing entropy, trend, pressure,
+/// classifier probability, detection flags, pid config, and pid state
+/// into a single control-loop score. Individual struct grouping would
+/// require allocation or pass-through wrappers — inappropriate at Tier 2
+/// (see SYS-SPEC-602 paragraph 7.3.4).
+#[allow(clippy::too_many_arguments)]
+fn compute_pid_score_inner(
+    entropy_raw: u16,
+    trend: f64,
+    pressure: u8,
+    classifier_prob: f32,
+    detection_flags: u8,
+    config: &PidConfig,
+    state: &mut PidState,
+) -> f32 {
+    let entropy_norm = (f32::from(entropy_raw) / 65535.0_f32).clamp(0.0, 1.0);
+    let trend_abs_norm = ((trend.abs() as f32) / 65535.0_f32).clamp(0.0, 1.0);
+    let pressure_norm = (f32::from(pressure) / 100.0_f32).clamp(0.0, 1.0);
+    let f_norm = (1.0_f32 - classifier_prob).clamp(0.0, 1.0);
+
+    let eff = modulate_gains(config, detection_flags);
+
+    let pressure_delta = (pressure_norm - state.prev_pressure_norm).abs();
+    let kp_effective = if pressure_delta > config.step_change_threshold {
+        eff.kp * 2.0
+    } else {
+        eff.kp
+    };
+
+    let risk_estimate = (kp_effective * pressure_norm)
+        + (eff.ki_fast * state.acute_entropy + eff.ki_slow * state.chronic_entropy)
+        + (eff.kd * trend_abs_norm)
+        + (eff.kf * f_norm);
+
+    if risk_estimate < config.halt_gain {
+        state.acute_entropy = (state.acute_entropy * 0.9 + entropy_norm).clamp(0.0, 1.0);
+        state.chronic_entropy =
+            (state.chronic_entropy * config.integrator_decay + entropy_norm).clamp(0.0, 1.0);
+    } else {
+        state.acute_entropy *= 0.999;
+        state.chronic_entropy *= 0.999;
+    }
+
+    let p_term = kp_effective * pressure_norm;
+    let i_term = eff.ki_fast * state.acute_entropy + eff.ki_slow * state.chronic_entropy;
+    let d_term = eff.kd * trend_abs_norm;
+    let f_term = eff.kf * f_norm;
+
+    let risk = (p_term + i_term + d_term + f_term).clamp(0.0, 1.0);
+
+    state.prev_pressure_norm = pressure_norm;
+
+    risk
+}
+
 /// Computes a risk score from normalised sensor inputs using the PIDF formula.
 ///
-/// Updates `PidState.acute_entropy` and `PidState.chronic_entropy` via dual-rate
-/// leaky integrators (anti-windup gated). Applies gain-scheduled P when
-/// pressure delta exceeds `step_change_threshold`. Bias override forces
-/// the risk score to at least `halt_gain + epsilon`.
-///
-/// # Algorithm (5 logical steps)
-///
-/// 1. Normalise all inputs to [0, 1]
-/// 2. Compute effective gains via sidechain modulation
-/// 3. Update dual integrators (anti-windup gated when risk estimate >= halt_gain)
-/// 4. Compute 4 terms (P, I, D, F), sum, clamp to [0, 1]
-/// 5. Apply bias override, store prev_pressure, return risk
-///
-/// # Parameters
-///
-/// * `entropy_raw: u16` — Raw entropy [0, 65535] from synapse.
-/// * `trend: f64` — Linear regression slope from WorkingMemory::trend().
-/// * `pressure: u8` — Resource pressure percentage [0, 100].
-/// * `classifier_prob: f32` — Classifier confidence [0.0, 1.0].
-/// * `has_bias: bool` — Bias override forces risk >= halt_gain + epsilon.
-/// * `detection_flags: u8` — Packed flags from the DETECTION stage.
-/// * `config: &PidConfig` — Must have passed `validate()`.
-/// * `state: &mut PidState` — Mutated in place.
-///
-/// # Returns
-///
-/// Risk score `f32` in `[0.0, 1.0]`, guaranteed finite.
+/// Thin wrapper over `compute_pid_score_inner` that applies the bias override.
+/// See `compute_pid_score_pure` for the bias-free version.
+/// Allow: same justification as compute_pid_score_pure
+/// (Tier-2 no-allocation constraint precludes struct grouping).
 #[allow(clippy::too_many_arguments)]
 pub fn compute_pid_score(
     entropy_raw: u16,
@@ -248,61 +286,100 @@ pub fn compute_pid_score(
     config: &PidConfig,
     state: &mut PidState,
 ) -> f32 {
-    // Step 1: Normalise all inputs to [0, 1]
-    let entropy_norm = (entropy_raw as f32 / 65535.0_f32).clamp(0.0, 1.0);
-    let trend_abs_norm = ((trend.abs() as f32) / 65535.0_f32).clamp(0.0, 1.0);
-    let pressure_norm = (pressure as f32 / 100.0_f32).clamp(0.0, 1.0);
-    let f_norm = (1.0_f32 - classifier_prob).clamp(0.0, 1.0);
+    let mut risk = compute_pid_score_inner(
+        entropy_raw,
+        trend,
+        pressure,
+        classifier_prob,
+        detection_flags,
+        config,
+        state,
+    );
 
-    // Step 2: Compute effective gains via sidechain modulation
-    let eff = modulate_gains(config, detection_flags);
-
-    // Step-change detection: if pressure jumped > threshold, double Kp for this cycle
-    let pressure_delta = (pressure_norm - state.prev_pressure_norm).abs();
-    let kp_effective = if pressure_delta > config.step_change_threshold {
-        eff.kp * 2.0
-    } else {
-        eff.kp
-    };
-
-    // Step 3: Update dual-rate integrators (anti-windup gated)
-    // Compute a rough risk estimate BEFORE integrator update to gate anti-windup.
-    // Use pressure and F-terms as the forward-looking estimate; integrator
-    // contribution is from previous state.
-    let risk_estimate = (kp_effective * pressure_norm)
-        + (eff.ki_fast * state.acute_entropy + eff.ki_slow * state.chronic_entropy)
-        + (eff.kd * trend_abs_norm)
-        + (eff.kf * f_norm);
-
-    if risk_estimate < config.halt_gain {
-        // Anti-windup: only update integrators when not already saturated
-        state.acute_entropy = (state.acute_entropy * 0.9 + entropy_norm).clamp(0.0, 1.0);
-        state.chronic_entropy =
-            (state.chronic_entropy * config.integrator_decay + entropy_norm).clamp(0.0, 1.0);
-    } else {
-        // Windup prevention: slowly bleed integrators while saturated
-        state.acute_entropy *= 0.999;
-        state.chronic_entropy *= 0.999;
-    }
-
-    // Step 4: Compute 4 terms
-    let p_term = kp_effective * pressure_norm;
-    let i_term = eff.ki_fast * state.acute_entropy + eff.ki_slow * state.chronic_entropy;
-    let d_term = eff.kd * trend_abs_norm;
-    let f_term = eff.kf * f_norm;
-
-    let mut risk = (p_term + i_term + d_term + f_term).clamp(0.0, 1.0);
-
-    // Step 5: Bias override
     if has_bias {
         risk = risk.max(config.halt_gain + 0.001);
     }
-    // Clamp again after bias override (halt_gain + epsilon may exceed 1.0)
-    risk = risk.clamp(0.0, 1.0);
+    risk.clamp(0.0, 1.0)
+}
 
-    state.prev_pressure_norm = pressure_norm;
+/// Pure PID risk computation — no safety overrides.
+///
+/// Implements the infusion pump pattern: this function computes risk
+/// from sensor fusion alone (P+I+D+F terms). Safety overrides are
+/// applied separately by `apply_safety_overrides()`.
+///
+/// # DAL A
+///
+/// Core computation path. All inputs must be finite. Anti-windup
+/// prevents integrator saturation during sustained Halt.
+///
+/// # MC/DC
+///
+/// Each of 4 terms independently affects risk. Step-change detection
+/// independently doubles Kp. See traceability matrix R-05.
+/// Allow: 10 arguments is the minimum for Tier-2 PID composition
+/// (see justification on compute_pid_score_inner, SYS-SPEC-602 §7.3.4).
+#[allow(clippy::too_many_arguments)]
+pub fn compute_pid_score_pure(
+    entropy_raw: u16,
+    trend: f64,
+    pressure: u8,
+    classifier_prob: f32,
+    detection_flags: u8,
+    config: &PidConfig,
+    state: &mut PidState,
+) -> f32 {
+    compute_pid_score_inner(
+        entropy_raw,
+        trend,
+        pressure,
+        classifier_prob,
+        detection_flags,
+        config,
+        state,
+    )
+}
 
-    risk
+/// Applies safety overrides to a PID risk score.
+///
+/// Infusion pump pattern: PID computes pure risk, safety supervisor
+/// enforces hard limits. This prevents a PID bug from bypassing
+/// safety enforcement.
+///
+/// # DAL A Overrides
+///
+/// | Flag | Effect | Condition |
+/// |------|--------|-----------|
+/// | `BIAS` | `risk = max(risk, halt_gain + 0.001)` | Bias detection overrides all computation |
+/// | `EXHAUSTED` | `risk = 1.0` | Resource exhaustion is max priority |
+/// | `KERNEL_UNSTABLE` | `risk = max(risk, halt_gain)` | Kernel instability forces halt |
+///
+/// # MC/DC
+///
+/// Each override flag must independently force Halt regardless of
+/// PID output. 100% MC/DC required on all 3 condition/decision pairs.
+pub fn apply_safety_overrides(risk: f32, flags: OverrideFlags, config: &PidConfig) -> f32 {
+    let mut risk = risk;
+
+    // DAL A: bias detection forces halt regardless of PID
+    // MC/DC: has_bias independently forces risk >= halt_gain + ε
+    if flags.contains(OverrideFlags::BIAS) {
+        risk = risk.max(config.halt_gain + 0.001);
+    }
+
+    // DAL A: resource exhaustion forces max risk
+    // MC/DC: is_exhausted independently forces risk = 1.0
+    if flags.contains(OverrideFlags::EXHAUSTED) {
+        risk = 1.0;
+    }
+
+    // DAL A: kernel instability forces halt-level risk
+    // MC/DC: is_kernel_unstable independently forces risk >= halt_gain
+    if flags.contains(OverrideFlags::KERNEL_UNSTABLE) {
+        risk = risk.max(config.halt_gain);
+    }
+
+    risk.clamp(0.0, 1.0)
 }
 
 /// Maps a risk score to a `SafetyDecision` via gain thresholds.
@@ -855,5 +932,105 @@ mod tests {
         let d_high = pid_risk_to_decision(1.0, &config);
         assert!(d_high.severity() >= d_mid.severity());
         assert!(d_mid.severity() >= d_low.severity());
+    }
+
+    // ── compute_pid_score_pure tests ──────────────────────────────
+
+    #[test]
+    fn pure_score_no_bias_override() {
+        let config = PidConfig::default();
+        let mut state = PidState::new();
+        // Pure version must return ~0 for clean input regardless of has_bias
+        let risk = compute_pid_score_pure(0, 0.0, 0, 1.0, 0, &config, &mut state);
+        assert!(
+            (risk - 0.0).abs() < 0.01,
+            "pure risk should be ~0: {}",
+            risk
+        );
+    }
+
+    #[test]
+    fn pure_score_identical_to_original_without_bias() {
+        let config = PidConfig::default();
+        let mut state_pure = PidState::new();
+        let mut state_orig = PidState::new();
+        let r_pure = compute_pid_score_pure(32767, 5000.0, 50, 0.7, 0, &config, &mut state_pure);
+        let r_orig = compute_pid_score(32767, 5000.0, 50, 0.7, false, 0, &config, &mut state_orig);
+        assert!(
+            (r_pure - r_orig).abs() < 0.001,
+            "pure and original should match without bias: pure={}, orig={}",
+            r_pure,
+            r_orig
+        );
+    }
+
+    // ── apply_safety_overrides tests ──────────────────────────────
+
+    #[test]
+    fn safety_overrides_no_flags_passthrough() {
+        let config = PidConfig::default();
+        let result = apply_safety_overrides(0.3, OverrideFlags::empty(), &config);
+        assert!((result - 0.3).abs() < 0.001, "no flags: {}", result);
+    }
+
+    #[test]
+    fn safety_overrides_bias_forces_halt() {
+        let config = PidConfig::default();
+        // Even zero risk must become halt-level when bias is set
+        let result = apply_safety_overrides(0.0, OverrideFlags::BIAS, &config);
+        assert!(
+            result >= config.halt_gain,
+            "bias should force >= halt_gain: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn safety_overrides_exhausted_forces_max() {
+        let config = PidConfig::default();
+        let result = apply_safety_overrides(0.0, OverrideFlags::EXHAUSTED, &config);
+        assert!(
+            (result - 1.0).abs() < 0.001,
+            "exhausted should force 1.0: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn safety_overrides_kernel_unstable_forces_halt() {
+        let config = PidConfig::default();
+        let result = apply_safety_overrides(0.0, OverrideFlags::KERNEL_UNSTABLE, &config);
+        assert!(
+            result >= config.halt_gain,
+            "kernel unstable should force >= halt_gain: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn safety_overrides_bias_exhausted_combined() {
+        let config = PidConfig::default();
+        // EXHAUSTED takes priority (forces 1.0)
+        let result =
+            apply_safety_overrides(0.0, OverrideFlags::BIAS | OverrideFlags::EXHAUSTED, &config);
+        assert!((result - 1.0).abs() < 0.001, "exhausted+bias: {}", result);
+    }
+
+    #[test]
+    fn safety_overrides_dal_a_monotonic() {
+        // MC/DC: each override independently forces halt
+        let config = PidConfig::default();
+        let r_none = apply_safety_overrides(0.0, OverrideFlags::empty(), &config);
+        let r_bias = apply_safety_overrides(0.0, OverrideFlags::BIAS, &config);
+        let r_exhausted = apply_safety_overrides(0.0, OverrideFlags::EXHAUSTED, &config);
+        let r_kernel = apply_safety_overrides(0.0, OverrideFlags::KERNEL_UNSTABLE, &config);
+        assert!(r_none < r_bias, "none={} < bias={}", r_none, r_bias);
+        assert!(
+            r_bias <= r_exhausted,
+            "bias={} <= exhausted={}",
+            r_bias,
+            r_exhausted
+        );
+        assert!(r_none < r_kernel, "none={} < kernel={}", r_none, r_kernel);
     }
 }
