@@ -64,7 +64,7 @@ paru -S llmosafe-git      # git HEAD
 ### Basic Usage
 
 ```rust
-use llmosafe::CognitivePipeline;
+use llmosafe::{CognitivePipeline, SafetyDecision};
 
 let mut pipeline = CognitivePipeline::<64, 10>::new("safety analysis");
 let result = pipeline.process("observation text");
@@ -306,25 +306,19 @@ pip install llmosafe
 ```
 
 ```python
-from llmosafe import calculate_halo, process_synapse, make_synapse, check_resources
+from llmosafe import calculate_halo, get_environmental_entropy, check_resources
 
 # Bias detection via dual-path sift_text (classifier + keyword bias)
 halo = calculate_halo("The expert recommends this")
 print(halo)  # combined entropy [0, 65535]
 
-# Full pipeline (arena-based)
-pipeline = Pipeline("safety analysis")
-decision = pipeline.sift_and_process("user input text")
-print(decision)  # 0 = OK, negative = rejected
+# Predictive signal: weighted composite (RSS 50%, IO wait 25%, CPU 25%)
+entropy = get_environmental_entropy()
+print(entropy)  # 0–1000, IO wait is key metric for disk exhaustion
 
-# Legacy: process raw synapse bits
-bits = make_synapse(entropy=40000, surprise=100, has_bias=False)
-result = process_synapse(bits)
-print(result)  # 0 = OK, negative = rejected
-
-# Resource enforcement
+# Resource enforcement (raises ResourceExhaustedError)
 try:
-    check_resources(1024)
+    check_resources(ceiling_mb=1024)  # 1 GB RSS ceiling
 except ResourceExhaustedError:
     print("Memory ceiling breached")
 ```
