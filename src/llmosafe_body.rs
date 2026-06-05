@@ -391,9 +391,31 @@ impl ResourceGuard {
         &self,
         max_retries: u32,
     ) -> Result<Synapse, KernelError> {
-        use crate::llmosafe_integration::{EscalationPolicy, PressureLevel, SafetyDecision};
+        self.check_blocking_with_max_retries_and_policy(
+            max_retries,
+            &crate::llmosafe_integration::EscalationPolicy::default(),
+        )
+    }
 
-        let policy = EscalationPolicy::default();
+    /// Same as check_blocking() but with configurable max retries and policy.
+    ///
+    /// The policy parameter controls escalation thresholds and DAL gating.
+    /// Use `EscalationPolicy::default()` for standard behavior, or construct
+    /// a custom policy to test specific escalation paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DeadlineExceeded` after `max_retries` consecutive non-Proceed
+    /// decisions. Returns `KernelError` from `check_with_entropy()`.
+    /// Propagates `Exit(err)` directly.
+    #[cfg(feature = "std")]
+    pub fn check_blocking_with_max_retries_and_policy(
+        &self,
+        max_retries: u32,
+        policy: &crate::llmosafe_integration::EscalationPolicy,
+    ) -> Result<Synapse, KernelError> {
+        use crate::llmosafe_integration::{PressureLevel, SafetyDecision};
+
         let mut retries = 0u32;
         loop {
             if retries >= max_retries {

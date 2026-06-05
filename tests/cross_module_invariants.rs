@@ -305,7 +305,9 @@ fn check_with_deadline_expired_returns_error() {
 #[cfg(feature = "testing")]
 fn check_blocking_retries_exhaust_sustained_pressure() {
     let guard = ResourceGuard::for_testing(usize::MAX, 0, 80);
-    let result = guard.check_blocking_with_max_retries(3);
+    let policy = EscalationPolicy::default()
+        .with_dal(DesignAssuranceLevel::A);
+    let result = guard.check_blocking_with_max_retries_and_policy(3, &policy);
     assert_eq!(result, Err(KernelError::DeadlineExceeded));
 }
 
