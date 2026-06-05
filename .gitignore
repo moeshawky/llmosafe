@@ -67,6 +67,7 @@ __pycache__/
 *.ipynb
 .ipynb_checkpoints/
 .pytest_cache/
+.venv/
 !llmosafe-py/llmosafe/
 !examples/python_consumer/
 
