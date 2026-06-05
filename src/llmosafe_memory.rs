@@ -174,7 +174,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         for offset in 0..SIZE {
             let idx = (self.current_index + offset) % SIZE;
             let x = offset as i128;
-            let y = self.state[idx].mantissa(); // mantissa() already returns i128 natively
+            let y = self.state[idx].mantissa(); // mantissa() returns i128 natively
             sum_y += y;
             sum_x_times_y += x * y;
         }
