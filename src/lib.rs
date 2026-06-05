@@ -41,8 +41,8 @@
 //!   Bounded `ReasoningLoop<MAX_STEPS>`. Self-calibrating `DynamicStabilityMonitor`.
 //! - **Tier 0: Resource Body** (requires `std`) — RSS memory monitoring,
 //!   CPU load tracking, pressure-based escalation.
-//! - **Detection Layer** — 6 detectors (stuck, drifting, low-confidence, decaying,
-//!   anomaly, adversarial) wired into `CognitivePipeline` and packed into synapse
+//! - **Detection Layer** — 5 detectors (repetition, drift, confidence, adversarial,
+//!   CUSUM anomaly) wired into `CognitivePipeline` and packed into synapse
 //!   detection flags.
 //!
 //! # Primary API
@@ -108,8 +108,8 @@ pub use llmosafe_integration::SafetyContext;
 pub use llmosafe_integration::{EscalationPolicy, EscalationReason, PressureLevel, SafetyDecision};
 pub use llmosafe_kernel::KernelOutput;
 pub use llmosafe_kernel::{
-    CognitiveEntropy, DynamicStabilityMonitor, KernelError, ReasoningLoop, SiftedProof,
-    SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse,
+    CognitiveEntropy, CognitiveStability, DynamicStabilityMonitor, KernelError, ReasoningLoop,
+    SiftedProof, SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse,
     DETECTION_FLAGS_MASK, FLAG_ADVERSARIAL, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING,
     FLAG_LOW_CONFIDENCE, FLAG_STUCK, PRESSURE_THRESHOLD, STABILITY_THRESHOLD,
 };
@@ -119,12 +119,13 @@ pub use llmosafe_pid::{apply_safety_overrides, compute_pid_score, compute_pid_sc
 #[cfg(feature = "std")]
 pub use llmosafe_pipeline::STAGE_BODY;
 pub use llmosafe_pipeline::{
-    CognitivePipeline, PipelineConfig, PipelineResult, STAGE_DETECTION, STAGE_KERNEL, STAGE_MEMORY,
-    STAGE_MONITOR, STAGE_SIFT,
+    CognitivePipeline, MemoryStats, PipelineConfig, PipelineResult, STAGE_DETECTION, STAGE_KERNEL,
+    STAGE_MEMORY, STAGE_MONITOR, STAGE_SIFT,
 };
 pub use llmosafe_sifter::SifterOutput;
 pub use llmosafe_sifter::{
     calculate_halo_signal, calculate_utility, get_bias_breakdown, sift_perceptions, sift_text,
+    BiasBreakdown,
 };
 
 #[cfg(feature = "std")]

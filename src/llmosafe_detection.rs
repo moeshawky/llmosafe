@@ -7,10 +7,8 @@
 //! - `AdversarialDetector` — adversarial pattern recognition (substring matching)
 //! - `CusumDetector` — statistical process control anomaly detection
 //!
-//! **Note:** All five detectors are fully implemented and tested, but not yet
-//! wired into the default sift→memory→kernel pipeline. Use them independently
-//! or via `DetectionResult` + `decide_from_detection()`. Wiring is deferred to
-//! a future release.
+//! All five detectors are fully implemented, tested, and wired into
+//! `CognitivePipeline` via `DetectionResult` + `decide_from_detection()`.
 //!
 //! # Example
 //!

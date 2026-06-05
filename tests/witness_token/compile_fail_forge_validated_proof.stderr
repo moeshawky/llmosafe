@@ -12,8 +12,8 @@ error[E0603]: tuple struct constructor `ValidatedProof` is private
 note: the tuple struct constructor `ValidatedProof` is defined here
  --> src/lib.rs
   |
-  |     SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse,
-  |                                              ^^^^^^^^^^^^^^
+  |     SiftedProof, SiftedSynapse, StabilityResult, Synapse, ValidatedProof, ValidatedSynapse,
+  |                                                           ^^^^^^^^^^^^^^
 
 error[E0624]: associated function `new` is private
  --> tests/witness_token/compile_fail_forge_validated_proof.rs:5:49
