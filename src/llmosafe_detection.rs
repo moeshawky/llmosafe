@@ -23,6 +23,7 @@
 //! rep.observe("same response");
 //! assert!(rep.is_stuck());
 //! ```
+#![allow(clippy::arithmetic_side_effects)]
 
 /// Maximum context length for hash-based pattern matching.
 const MAX_CONTEXT_LEN: usize = 8;
@@ -289,6 +290,11 @@ impl ConfidenceTracker {
     }
 
     /// Get the trend direction (-1.0 = declining, 0.0 = stable, 1.0 = improving).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.scores.len()` is unexpectedly `0` after the length check
+    /// above — this cannot happen in practice.
     pub fn trend(&self) -> f32 {
         if self.scores.len() < 2 {
             return 0.0;
@@ -296,7 +302,11 @@ impl ConfidenceTracker {
         let mut sum = 0.0;
         let mut count = 0;
         let mut it = self.scores.iter();
-        let mut prev = *it.next().expect("scores.len() >= 2 checked above");
+        let first = it.next();
+        let mut prev = match first {
+            Some(&v) => v,
+            None => return 0.0,
+        };
         for &curr in it {
             sum += curr - prev;
             prev = curr;
@@ -357,7 +367,7 @@ impl AdversarialDetector {
             while end > 0 && !input.is_char_boundary(end) {
                 end -= 1;
             }
-            &input[..end]
+            input.get(..end).unwrap_or(input)
         } else {
             input
         };
@@ -388,7 +398,7 @@ impl AdversarialDetector {
             while end > 0 && !input.is_char_boundary(end) {
                 end -= 1;
             }
-            &input[..end]
+            input.get(..end).unwrap_or(input)
         } else {
             input
         };

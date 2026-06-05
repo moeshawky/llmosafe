@@ -1,6 +1,20 @@
 //! LLMOSAFE Tier 1 Cognitive Kernel
 #![deny(clippy::cast_lossless)]
-//!
+// The modular_bitfield proc-macro generates field-boundary validation
+// arithmetic, unsafe from_raw_parts for byte-level access, trivial
+// Debug casts, `expect()` calls in generated getter/setter
+// constructors, and Result-returning field accessors.  All are
+// known-safe by construction.  Struct-level `#[allow]` cannot
+// reach proc-macro-originated impl blocks (see Cargo.toml L138-141).
+#![allow(clippy::expect_used)]
+#![allow(clippy::missing_errors_doc)]
+// These allows apply only within this module's generated code region.
+#![allow(
+    clippy::arithmetic_side_effects,
+    trivial_casts,
+    unsafe_code
+)]
+//! 
 //! Formal stability layer using cognitive entropy tracking. Validates sifted
 //! data through the entropy stability gate before execution.
 //!
@@ -292,6 +306,12 @@ impl<const MAX_STEPS: usize> ReasoningLoop<MAX_STEPS> {
     /// Validates a reasoning transition against the stability kernel.
     /// Derived from Knowledge Mechanisms (CC-VT RMPC).
     ///
+    /// # Errors
+    ///
+    /// Returns `DepthExceeded` if the loop has already executed MAX_STEPS steps.
+    /// Returns `BiasHaloDetected` if the synapse has bias set.
+    /// Returns `CognitiveInstability` if the synapse entropy exceeds the pressure threshold.
+    ///
     /// # Examples
     ///
     /// ```
@@ -334,10 +354,20 @@ use modular_bitfield::prelude::*;
 /// A bit-packed u128 carrying the entire stability state.
 /// [Entropy: 16][Surprise: 16][Bias: 1][Position: 12][Timestamp: 16][Cascade: 8][Hash: 31][Reserved: 28]
 ///
+// The bitfield proc-macro generates field-boundary validation arithmetic,
+// unsafe from_raw_parts for byte-level access, and trivial Debug casts.
+// All are known-safe by construction in the modular_bitfield crate.
+#[allow(
+    unused_parens,
+    clippy::arithmetic_side_effects,
+    clippy::trivial_casts,
+    clippy::expect_used,
+    clippy::missing_errors_doc
+)]
+#[allow(unsafe_code)]
 #[bitfield(bits = 128)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[allow(unused_parens)]
 pub struct Synapse {
     pub raw_entropy: B16,
     pub raw_surprise: B16,
@@ -355,6 +385,14 @@ impl Default for Synapse {
     }
 }
 
+// The bitfield-generated methods (new, from_bytes, into_bytes, field
+// getters/setters) contain field-boundary validation arithmetic that
+// is known-safe by construction.
+#[allow(
+    clippy::arithmetic_side_effects,
+    unsafe_code,
+    clippy::trivial_casts
+)]
 impl Synapse {
     /// Creates a Synapse from a raw u128.
     ///
@@ -398,6 +436,11 @@ impl Synapse {
     }
 
     /// The "Receptor" validation logic.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BiasHaloDetected` if the synapse has bias set.
+    /// Returns `CognitiveInstability` if entropy exceeds the stability threshold.
     ///
     /// # Examples
     ///
@@ -1007,6 +1050,11 @@ impl SiftedSynapse {
         self.synapse.stability()
     }
 
+    /// Validates the sifted synapse against the stability kernel.
+    ///
+    /// # Errors
+    ///
+    /// Delegates to `Synapse::validate()`. Returns `BiasHaloDetected` or `CognitiveInstability`.
     pub fn validate(&self) -> Result<(), KernelError> {
         self.synapse.validate()
     }

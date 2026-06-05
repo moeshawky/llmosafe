@@ -1,3 +1,14 @@
+// Benchmarks and examples use print, unwrap, and raw operations that
+// are correct in their context. DO-178C runtime rules do not apply
+// to demonstration and measurement code.
+#![allow(clippy::print_stdout)]
+#![allow(clippy::print_stderr)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(clippy::indexing_slicing)]
+#![allow(unused_results)]
+
 //! Example: llmosafe as a Tower middleware
 //!
 //! Demonstrates wrapping HTTP/gRPC services with CognitivePipeline
@@ -35,6 +46,7 @@ impl SafetyMiddleware {
     }
 }
 
+#[allow(clippy::print_stdout, clippy::print_stderr)]
 fn main() {
     println!("=== llmosafe Tower Middleware Example ===\n");
 
@@ -55,7 +67,7 @@ fn main() {
 
     middleware.pipeline.reset_full();
 
-    println!("");
+    println!();
     let more_requests = [
         "Another completely routine query about programming",
         "Another simple request for help",

@@ -89,6 +89,9 @@ impl<'a> Iterator for StreamingTokenizer<'a> {
     ///    caching the unigram for the next call via `pending_unigram`.
     /// 5. If no previous token, yields the unigram directly.
     ///    Returns None when input is exhausted.
+    // Position increments are bounded by text.len(); length increments are
+    // bounded by MAX_TOKEN_LEN; wrapping_mul is intentional for FNV hashing.
+    #[allow(clippy::arithmetic_side_effects)]
     fn next(&mut self) -> Option<u64> {
         if let Some(h) = self.pending_unigram.take() {
             return Some(h);
@@ -258,6 +261,9 @@ fn binary_search_vocab(hash: u64) -> Result<usize, usize> {
 /// a `ClassificationResult` with probability, OOV ratio, and token counts.
 ///
 /// Zero allocation. Runs in `no_std`.
+// Counters are bounded by the number of tokens in the input; no overflow possible
+// for inputs smaller than 2^32 tokens.
+#[allow(clippy::arithmetic_side_effects)]
 pub fn classify_text(text: &str) -> ClassificationResult {
     let mut score: f32 = INTERCEPT;
     let mut matched: u32 = 0;

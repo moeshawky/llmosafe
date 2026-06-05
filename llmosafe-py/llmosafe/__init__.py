@@ -25,57 +25,83 @@ Example:
     0
     >>> get_environmental_entropy()  # 0-1000, IO wait is key for disk
     15
+
 """
 
 from llmosafe._llmosafe import (
-    calculate_halo,
-    check_resources,
-    get_resource_pressure,
-    get_stability,
-    get_system_cpu_load,
-    get_environmental_entropy,
-    process_synapse,
-    get_classifier_score,
+    BiasHaloDetectedError,
+    CognitiveInstabilityError,
     CognitivePipeline,
     LLMOSafeError,
     ResourceExhaustedError,
-    CognitiveInstabilityError,
-    BiasHaloDetectedError,
+    calculate_halo,
+    check_resources,
+    combined_risk_bits,
+    get_body_pressure,
+    get_classifier_score,
+    get_decision,
+    get_detection_flags,
+    get_entropy,
+    get_environmental_entropy,
+    get_kernel_output,
+    get_oov_ratio,
+    get_pid_state,
+    get_resource_pressure,
+    get_stability,
+    get_stages_executed,
+    get_step_count,
+    get_surprise,
+    get_system_cpu_load,
+    memory_stats,
+    process_synapse,
 )
 
-__version__ = "0.7.1"
+__version__: str = "0.7.1"
 
 __all__ = [
+    "BiasHaloDetectedError",
+    "CognitiveInstabilityError",
     # Classes
     "CognitivePipeline",
-    # Functions
-    "calculate_halo",
-    "check_resources",
-    "get_resource_pressure",
-    "get_stability",
-    "get_system_cpu_load",
-    "get_environmental_entropy",
-    "process_synapse",
-    "get_classifier_score",
-    "make_synapse",
-    "parse_synapse",
     # Exceptions
     "LLMOSafeError",
     "ResourceExhaustedError",
-    "CognitiveInstabilityError",
-    "BiasHaloDetectedError",
+    # Functions
+    "calculate_halo",
+    "check_resources",
+    "combined_risk_bits",
+    "get_body_pressure",
+    "get_classifier_score",
+    "get_decision",
+    "get_detection_flags",
+    "get_entropy",
+    "get_environmental_entropy",
+    "get_kernel_output",
+    "get_oov_ratio",
+    "get_pid_state",
+    "get_resource_pressure",
+    "get_stability",
+    "get_stages_executed",
+    "get_step_count",
+    "get_surprise",
+    "get_system_cpu_load",
+    "make_synapse",
+    "memory_stats",
+    "parse_synapse",
+    "process_synapse",
 ]
 
 
 # ── Synapse constructor ────────────────────────────────────────
+
 
 def make_synapse(entropy: int, surprise: int = 0, has_bias: bool = False) -> int:
     """Construct a synapse_bits value for get_stability() / process_synapse().
 
     The synapse encodes cognitive state in a 64-bit integer:
 
-        Bits [0:15]  → raw_entropy   (u16, 0–65535)
-        Bits [16:31] → raw_surprise  (u16, 0–65535)
+        Bits [0:15]  → raw_entropy   (u16, 0-65535)
+        Bits [16:31] → raw_surprise  (u16, 0-65535)
         Bit  [32]    → has_bias      (0 or 1)
         Bits [33:44] → position      (u12)
         Bits [45:60] → timestamp     (u16)
@@ -85,12 +111,12 @@ def make_synapse(entropy: int, surprise: int = 0, has_bias: bool = False) -> int
 
     **v0.7.0 thresholds:**
     Entropy is now in classifier probability space [0, 65535]:
-      0–40000  = stable, 40000–50000 = pressure, >50000 = unstable.
-    Previous v0.6.x keyword-range thresholds (0–1000) are obsolete.
+      0-40000  = stable, 40000-50000 = pressure, >50000 = unstable.
+    Previous v0.6.x keyword-range thresholds (0-1000) are obsolete.
 
     Args:
-        entropy:  Cognitive entropy score (0–65535).
-        surprise: Surprise level (0–65535).
+        entropy:  Cognitive entropy score (0-65535).
+        surprise: Surprise level (0-65535).
         has_bias: Whether bias was detected in the input.
 
     Returns:
@@ -104,15 +130,12 @@ def make_synapse(entropy: int, surprise: int = 0, has_bias: bool = False) -> int
         -2
         >>> get_stability(make_synapse(entropy=500, has_bias=True))
         -3
+
     """
-    return (
-        (entropy & 0xFFFF)
-        | ((surprise & 0xFFFF) << 16)
-        | ((int(has_bias) & 0x1) << 32)
-    )
+    return (entropy & 0xFFFF) | ((surprise & 0xFFFF) << 16) | ((int(has_bias) & 0x1) << 32)
 
 
-def parse_synapse(synapse_bits: int) -> dict:
+def parse_synapse(synapse_bits: int) -> dict[str, int | bool]:
     """Parse a synapse_bits value into its component fields.
 
     Inverse of make_synapse().
@@ -126,6 +149,7 @@ def parse_synapse(synapse_bits: int) -> dict:
     Example:
         >>> parse_synapse(make_synapse(entropy=400, surprise=100, has_bias=True))
         {'entropy': 400, 'surprise': 100, 'has_bias': True}
+
     """
     return {
         "entropy": synapse_bits & 0xFFFF,

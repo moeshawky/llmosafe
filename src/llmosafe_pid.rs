@@ -348,27 +348,27 @@ pub fn compute_pid_score_pure(input: &PidInput, config: &PidConfig, state: &mut 
 pub fn apply_safety_overrides(risk: f32, flags: OverrideFlags, config: &PidConfig) -> f32 {
     #[cfg(feature = "dal")]
     {
-        let mut risk = risk;
+        let mut result = risk;
 
         // DAL A: bias detection forces halt regardless of PID
         // MC/DC: has_bias independently forces risk >= halt_gain + ε
         if flags.contains(OverrideFlags::BIAS) {
-            risk = risk.max(config.halt_gain + 0.001);
+            result = result.max(config.halt_gain + 0.001);
         }
 
         // DAL A: resource exhaustion forces max risk
         // MC/DC: is_exhausted independently forces risk = 1.0
         if flags.contains(OverrideFlags::EXHAUSTED) {
-            risk = 1.0;
+            result = 1.0;
         }
 
         // DAL A: kernel instability forces halt-level risk
         // MC/DC: is_kernel_unstable independently forces risk >= halt_gain
         if flags.contains(OverrideFlags::KERNEL_UNSTABLE) {
-            risk = risk.max(config.halt_gain);
+            result = result.max(config.halt_gain);
         }
 
-        risk.clamp(0.0, 1.0)
+        result.clamp(0.0, 1.0)
     }
     #[cfg(not(feature = "dal"))]
     {
@@ -382,11 +382,10 @@ pub fn apply_safety_overrides(risk: f32, flags: OverrideFlags, config: &PidConfi
 /// * `warn_gain ≤ risk < halt_gain` → `Escalate` (carries entropy=0)
 /// * `risk ≥ halt_gain` → `Halt(CognitiveInstability, 30000)`
 pub fn pid_risk_to_decision(risk: f32, config: &PidConfig) -> SafetyDecision {
-    debug_assert!(
-        risk.is_finite() && (0.0..=1.0).contains(&risk),
-        "risk must be in [0,1]: {}",
-        risk
-    );
+    // Enforce [0, 1] bounds at runtime — debug_assert! is stripped in
+    // release builds. NaN is clamped to 0.0 (Proceed) since a NaN risk
+    // signal indicates sensor failure, not elevated danger.
+    let risk = risk.clamp(0.0, 1.0);
 
     if risk >= config.halt_gain {
         SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)

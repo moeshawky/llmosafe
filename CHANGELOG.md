@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.1] — Unreleased
+## [0.7.1] — 2026-06-05
 
 ### Added
 
@@ -13,12 +13,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entropy/pressure values, enabling test coverage of blocking-loop success paths
   previously gated by live OS measurements
 
+- **`DesignAssuranceLevel` wired into `EscalationPolicy`** — DAL tiers (A–E) now gate
+  decision severity at runtime. Halt→Escalate→Warn→Proceed downgrading follows
+  DO-178C partitioning. Compile-time `dal` feature gates `apply_safety_overrides`
+  hard halts vs advisory passthrough.
+
+- **`PidInput` struct wired** — replaces 7-arg `compute_pid_score_pure` and
+  8-arg `compute_pid_score` signatures with a single typed aggregate. Removes
+  `#[allow(clippy::too_many_arguments)]` hack.
+
+- **`process_safe()` on `CognitivePipeline`** — pre-call `ResourceGuard` gate
+  with deadline fallback. If resources are safe, runs full pipeline; if deadline
+  expires, falls back to `process_with_pressure()`.
+
+- **`PipelineConfig.use_detection_gate` toggle** — alternative non-PID decision
+  path using `DetectionResult` + `EscalationPolicy.decide_from_detection()` with
+  first-match-wins severity ordering. Lighter-weight than full PID.
+
+- **Exposure layer** — internal state now queryable through accessors, C-ABI,
+  and Python bindings:
+  - `classifier_score` (raw logit before sigmoid)
+  - `pid_state` (acute/chronic entropy, pressure norm)
+  - `memory_stats()` (mean, variance, trend, drift)
+  - `kernel_output` + `body_pressure`
+  - `combined_risk_bits()` (OOV ratio × detection flags 2D risk space)
+
+- **Python `CognitivePipeline` pyclass** — wraps the C-ABI arena pipeline.
+  5-stage process (SIFT→MEMORY→KERNEL→detectors→PID), 6 detectors,
+  DAL gating, 13-field result dict. Constructor accepts `dal_level`,
+  `use_detection_gate`, `memory_depth` with `llmosafe_configure` C-ABI.
+
+### Changed
+
+- **`dal_a`/`dal_e` feature flags merged** → single `dal` feature. Without
+  `dal`, `apply_safety_overrides` is a no-op passthrough. With `dal`, hard
+  halts enforced (BIAS/EXHAUSTED/KERNEL_UNSTABLE).
+
+- **`sift_observation` fixed** — now includes keyword-bias backstop matching
+  `sift_text`'s dual-path (classifier + keyword) behavior.
+
+- **`sift_perceptions` deprecation message** corrected to point to `sift_text()`
+  instead of the obsolete `sift_observation()`.
+
+- **Python v0.7.0 threshold alignment** — tests updated to match kernel
+  constants: `PRESSURE_THRESHOLD=40000`, `STABILITY_THRESHOLD=50000`,
+  HallucinationDetected surprise threshold `58000`.
+
+### Removed
+
+- **`GainSchedule` struct** — strict subset of `PidConfig` with zero production
+  callers.
+- **`Setpoint` struct** — zero-field const-generic phantom type, never referenced.
+- **`sift_observation_inner`** — private single-caller wrapper, inlined into
+  `sift_observation`.
+
 ### Fixed
 
 - **Missing test coverage for `check_blocking()` and `check_with_deadline()`** —
   three new cross-module invariant tests cover Proceed path, retry exhaustion with
-  sustained pressure, and immediate deadline-expired error. Root cause: `ResourceGuard`
-  had no test injection constructor — `testing` feature was empty
+  sustained pressure, and immediate deadline-expired error.
+
+- **`dal` feature enabled in Python Cargo.toml** — safety overrides were silently
+  disabled in Python builds (feature was missing from dependency declaration).
+
+- **6 missing Python exports** added to `__init__.py` and `__all__`.
+
+- **7 standalone pyfunctions wired** — `get_decision`, `get_entropy`,
+  `get_surprise`, `get_detection_flags`, `get_oov_ratio`,
+  `get_stages_executed`, `get_step_count`.
+
+- **Python package standards** — `py.typed` marker, `LICENSE` file,
+  `.gitignore`, type hints on `__version__` and `parse_synapse`.
 
 ## [0.7.0] — 2026-06-04
 

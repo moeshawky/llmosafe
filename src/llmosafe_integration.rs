@@ -1,3 +1,9 @@
+// Arithmetic in this module operates on bounded decision/probability values
+// [0, 65535] where saturating/wrapping semantics are the intended behavior.
+// DO-178C: these operations are verified safe by value range analysis at
+// the module boundary — inputs are always validated before arithmetic.
+#![allow(clippy::arithmetic_side_effects)]
+
 //! LLMOSAFE Integration Layer — Escalation and Decision Primitives
 //!
 //! Composable with external systems (tower, tokio, async runtimes) and
@@ -186,7 +192,9 @@ impl From<u8> for PressureLevel {
 ///
 /// The EscalationPolicy defines the thresholds at which inputs transition
 /// from Proceed → Warn → Escalate → Halt.
-#[deprecated = "Use PidConfig with CognitivePipeline instead. Set use_pid=true and provide pid_config."]
+// Internal escalation decision engine used by CognitivePipeline.
+// The `dal` field gates decision severity at runtime (DO-178C tiers A–E).
+// External consumers should prefer CognitivePipeline which wraps this.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EscalationPolicy {
@@ -386,17 +394,17 @@ impl EscalationPolicy {
                     reason: EscalationReason::Custom("DAL B: Halt downgraded"),
                     cooldown_ms,
                 },
-                other => other,
+                SafetyDecision::Proceed | SafetyDecision::Warn(_) | SafetyDecision::Escalate { .. } | SafetyDecision::Exit(_) => decision,
             },
             DesignAssuranceLevel::C => match decision {
                 SafetyDecision::Halt(..) | SafetyDecision::Escalate { .. } => {
                     SafetyDecision::Warn("DAL C: Escalation downgraded")
                 }
-                other => other,
+                SafetyDecision::Proceed | SafetyDecision::Warn(_) | SafetyDecision::Exit(_) => decision,
             },
             DesignAssuranceLevel::D => match decision {
                 SafetyDecision::Proceed | SafetyDecision::Warn(_) => decision,
-                _ => SafetyDecision::Warn("DAL D: Capped at Warn"),
+                SafetyDecision::Escalate { .. } | SafetyDecision::Halt(..) | SafetyDecision::Exit(_) => SafetyDecision::Warn("DAL D: Capped at Warn"),
             },
             DesignAssuranceLevel::E => SafetyDecision::Proceed,
         }

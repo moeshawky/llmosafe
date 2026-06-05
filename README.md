@@ -51,7 +51,7 @@ The `CognitivePipeline` wires sifter, working memory, kernel, escalation policy,
 
 ```toml
 [dependencies]
-llmosafe = "0.7.0"
+llmosafe = "0.7.1"
 ```
 
 **Arch Linux (AUR):**
@@ -450,4 +450,4 @@ let mut adv = AdversarialDetector::new();
 
 ---
 
-*llmosafe v0.7.0 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*
+*llmosafe v0.7.1 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*

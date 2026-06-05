@@ -52,6 +52,7 @@
 /// feature gates safety overrides DURING PID computation. Both must pass
 /// for a Halt decision to reach the actuator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DesignAssuranceLevel {
     /// Catastrophic — halt failure → system compromise.
     A,

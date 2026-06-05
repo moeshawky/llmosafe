@@ -30,11 +30,13 @@ use ::llmosafe::llmosafe_body::llmosafe_get_environmental_entropy;
 use ::llmosafe::llmosafe_memory::cognitive_memory::{process_state_update, get_memory_stats};
 use ::llmosafe::c_abi::{
     llmosafe_create, llmosafe_sift_and_process,
-    llmosafe_get_classifier_score, llmosafe_get_pid_state, llmosafe_get_memory_stats as c_get_memory_stats,
+    llmosafe_get_classifier_score, llmosafe_get_decision, llmosafe_get_pid_state,
+    llmosafe_get_memory_stats as c_get_memory_stats,
     llmosafe_get_kernel_output, llmosafe_get_body_pressure, llmosafe_destroy,
     llmosafe_get_entropy, llmosafe_get_surprise, llmosafe_get_detection_flags,
     llmosafe_get_oov_ratio, llmosafe_get_stages_executed, llmosafe_get_step_count,
     llmosafe_process_with_pressure, llmosafe_reset_detectors, llmosafe_reset_full,
+    llmosafe_configure,
 };
 
 // ── Bias Detection ─────────────────────────────────────────────
@@ -428,6 +430,132 @@ fn get_body_pressure(instance_id: u32) -> u32 {
     ::llmosafe::c_abi::llmosafe_get_body_pressure(instance_id)
 }
 
+// ── Pipeline Result Queries ───────────────────────────────────
+
+/// Read the safety decision from the last pipeline invocation.
+///
+/// Returns a dict with the decision name as a string:
+/// "Proceed", "Warn", "Escalate", or "Halt".
+///
+/// Args:
+///     instance_id: Pipeline handle returned by `llmosafe_create()` (0–15).
+///
+/// Returns:
+///     dict with key ``decision`` mapping to a string.
+///
+/// Raises:
+///     LLMOSafeError: If `instance_id` is invalid or no result is available.
+#[pyfunction]
+fn get_decision(instance_id: u32) -> PyResult<PyObject> {
+    let code = llmosafe_get_decision(instance_id as usize);
+    match code {
+        -9 => Err(LLMOSafeError::new_err(format!(
+            "instance {} not found or no result available",
+            instance_id
+        ))),
+        _ => Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            let name: &str = match code {
+                0 => "Proceed",
+                1 => "Warn",
+                2 => "Escalate",
+                -8..=-1 => "Halt",
+                _ => "Unknown",
+            };
+            dict.set_item("decision", name)?;
+            Ok(dict.into())
+        }),
+    }
+}
+
+/// Read the entropy field from the last pipeline invocation.
+///
+/// Returns the raw entropy value [0, 65535] from the classified synapse.
+///
+/// Args:
+///     instance_id: Pipeline handle (0–15).
+///
+/// Returns:
+///     Entropy as u32 (0 if instance is invalid or no result available).
+#[pyfunction]
+fn get_entropy(instance_id: u32) -> u32 {
+    llmosafe_get_entropy(instance_id) as u32
+}
+
+/// Read the surprise field from the last pipeline invocation.
+///
+/// Returns the raw surprise value [0, 65535] from the classified synapse.
+///
+/// Args:
+///     instance_id: Pipeline handle (0–15).
+///
+/// Returns:
+///     Surprise as u32 (0 if instance is invalid or no result available).
+#[pyfunction]
+fn get_surprise(instance_id: u32) -> u32 {
+    llmosafe_get_surprise(instance_id) as u32
+}
+
+/// Read the detection flags from the last pipeline invocation.
+///
+/// Returns a bitmask of 5 detection flags (stuck, drifting, low-confidence,
+/// decaying, anomaly/adversarial). Bits 0-4 correspond to individual
+/// detector outputs.
+///
+/// Args:
+///     instance_id: Pipeline handle (0–15).
+///
+/// Returns:
+///     Detection flags bitmask as u32 (0 if instance is invalid or no result available).
+#[pyfunction]
+fn get_detection_flags(instance_id: u32) -> u32 {
+    llmosafe_get_detection_flags(instance_id) as u32
+}
+
+/// Read the OOV (out-of-vocabulary) ratio from the last pipeline invocation.
+///
+/// Returns the OOV ratio [0, 255] where 0 = 0% OOV, 255 = 100% OOV.
+/// High OOV combined with anomaly flags indicates distribution-shift.
+///
+/// Args:
+///     instance_id: Pipeline handle (0–15).
+///
+/// Returns:
+///     OOV ratio as u32 (0 if instance is invalid or no result available).
+#[pyfunction]
+fn get_oov_ratio(instance_id: u32) -> u32 {
+    llmosafe_get_oov_ratio(instance_id) as u32
+}
+
+/// Read the stages_executed bitmask from the last pipeline invocation.
+///
+/// Returns a bitmask indicating which pipeline stages ran:
+/// 0x01=SIFT, 0x02=MEMORY, 0x04=KERNEL, 0x08=DETECTION, 0x10=MONITOR.
+///
+/// Args:
+///     instance_id: Pipeline handle (0–15).
+///
+/// Returns:
+///     Stages executed bitmask as u32 (0 if instance is invalid or no result available).
+#[pyfunction]
+fn get_stages_executed(instance_id: u32) -> u32 {
+    llmosafe_get_stages_executed(instance_id) as u32
+}
+
+/// Read the reasoning step count from the last pipeline invocation.
+///
+/// Returns the current step count of the reasoning loop.
+///
+/// Args:
+///     instance_id: Pipeline handle (0–15).
+///
+/// Returns:
+///     Step count as u32 (0 if instance is invalid or no result available).
+#[pyfunction]
+fn get_step_count(instance_id: u32) -> u32 {
+    llmosafe_get_step_count(instance_id) as u32
+}
+
 /// Packs OOV ratio and detection flags from a synapse into a single u16.
 ///
 /// **Layout**: `[OOV:8 bits][FLAGS:6 bits]`.  The upper 8 bits carry the
@@ -460,12 +588,12 @@ fn combined_risk_bits(synapse_bits: u64) -> u16 {
 /// Drop (or Python `del`) releases the arena slot for reuse.
 ///
 /// Args:
-///     dal_level: DesignAssuranceLevel as u8 (0=A, 4=E). Reserved for
-///         future use — currently uses default (E).
-///     use_detection_gate: Whether to block on detection flags.
-///         Reserved for future use — currently always true.
-///     memory_depth: Maximum reasoning steps. Reserved for future
-///         use — currently fixed at 10.
+///     dal_level: DesignAssuranceLevel as u8 (0=A, 1=B, 2=C, 3=D, 4=E).
+///         Controls runtime escalation behavior. Default: 4 (E).
+///     use_detection_gate: Whether to route decisions through the
+///         detection-gate path instead of PID. Default: False.
+///     memory_depth: Reserved for future use. WorkingMemory is
+///         fixed at compile time (64 entries). Default: 10.
 ///
 /// Example:
 ///     >>> pipeline = CognitivePipeline()
@@ -480,9 +608,9 @@ struct CognitivePipeline {
 impl CognitivePipeline {
     #[new]
     fn new(
-        _dal_level: Option<u8>,
-        _use_detection_gate: Option<bool>,
-        _memory_depth: Option<usize>,
+        dal_level: Option<u8>,
+        use_detection_gate: Option<bool>,
+        memory_depth: Option<usize>,
     ) -> PyResult<Self> {
         let objective = b"safety";
         let handle = llmosafe_create(objective.as_ptr(), objective.len());
@@ -491,7 +619,12 @@ impl CognitivePipeline {
                 "Failed to create pipeline — arena full (max 16 instances)"
             ));
         }
-        Ok(Self { instance_id: handle as u32 })
+        let instance_id = handle as u32;
+        let dal = dal_level.unwrap_or(4);
+        let gate = if use_detection_gate.unwrap_or(false) { 1u32 } else { 0u32 };
+        let mem = memory_depth.unwrap_or(10) as u32;
+        llmosafe_configure(instance_id, dal, gate, mem);
+        Ok(Self { instance_id })
     }
 
     /// Process text through the full 5-stage pipeline.
@@ -526,6 +659,65 @@ impl CognitivePipeline {
             return Err(LLMOSafeError::new_err("Invalid pipeline instance"));
         }
         self.build_result_dict(code)
+    }
+
+    /// Process text with resource-gated safe path selection.
+    ///
+    /// Checks resource availability with a 5-second deadline before
+    /// choosing the processing path:
+    ///
+    /// - **Normal path**: If resources are available, calls `process()`.
+    /// - **Pressure path**: If the deadline is exceeded, calls
+    ///   `process_with_pressure()` using current environmental entropy
+    ///   and RSS memory pressure.
+    ///
+    /// Args:
+    ///     ceiling_mb: RSS memory ceiling in megabytes.
+    ///     text: Input text to analyze.
+    ///
+    /// Returns:
+    ///     Result dict (same format as `process()`).
+    ///
+    /// Raises:
+    ///     LLMOSafeError: If `ceiling_mb == 0`, resource exhaustion
+    ///     detected immediately, or pipeline instance is invalid.
+    fn process_safe(&mut self, _py: Python<'_>, text: &str, ceiling_mb: u64) -> PyResult<PyObject> {
+        let ceiling_bytes = (ceiling_mb as usize).saturating_mul(1024 * 1024);
+        let guard = ResourceGuard::new(ceiling_bytes);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+
+        match guard.check_with_deadline(deadline) {
+            Ok(_) => {
+                let code = llmosafe_sift_and_process(
+                    self.instance_id as usize,
+                    text.as_ptr(),
+                    text.len(),
+                );
+                if code == -9 {
+                    return Err(LLMOSafeError::new_err("Invalid pipeline instance"));
+                }
+                self.build_result_dict(code)
+            }
+            Err(KernelError::DeadlineExceeded | KernelError::ResourceExhaustion) => {
+                let entropy = guard.raw_entropy();
+                let pressure = guard.pressure();
+                let code = llmosafe_process_with_pressure(
+                    self.instance_id as usize,
+                    text.as_ptr(),
+                    text.len(),
+                    entropy,
+                    pressure,
+                );
+                if code == -9 {
+                    return Err(LLMOSafeError::new_err("Invalid pipeline instance"));
+                }
+                self.build_result_dict(code)
+            }
+            Err(e) => Err(LLMOSafeError::new_err(format!(
+                "Resource check error: {}",
+                e
+            ))),
+        }
     }
 
     /// Reset PID state and working memory (full reset).
@@ -711,6 +903,13 @@ fn _llmosafe(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_kernel_output, m)?)?;
     m.add_function(wrap_pyfunction!(get_body_pressure, m)?)?;
     m.add_function(wrap_pyfunction!(combined_risk_bits, m)?)?;
+    m.add_function(wrap_pyfunction!(get_decision, m)?)?;
+    m.add_function(wrap_pyfunction!(get_entropy, m)?)?;
+    m.add_function(wrap_pyfunction!(get_surprise, m)?)?;
+    m.add_function(wrap_pyfunction!(get_detection_flags, m)?)?;
+    m.add_function(wrap_pyfunction!(get_oov_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(get_stages_executed, m)?)?;
+    m.add_function(wrap_pyfunction!(get_step_count, m)?)?;
     m.add("LLMOSafeError", _py.get_type::<LLMOSafeError>())?;
     m.add("ResourceExhaustedError", _py.get_type::<ResourceExhaustedError>())?;
     m.add("CognitiveInstabilityError", _py.get_type::<CognitiveInstabilityError>())?;

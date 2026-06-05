@@ -1,4 +1,15 @@
+// Build-time vocabulary embedding. Reads the serialized TF-IDF model
+// (tools/vocab_model.bin) and generates a compile-time const VOCAB array.
+// This is code generation tooling, not runtime library code — DO-178C
+// runtime safety rules do not apply. Unwrap/panic here aborts the build
+// with a clear message, which is correct build-script behavior.
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(clippy::indexing_slicing)]
+#![allow(clippy::as_conversions)]
+#![allow(unused_results)]
 use std::env;
+use std::fmt::Write;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -9,20 +20,20 @@ fn main() {
 
     let model_path = Path::new("tools/vocab_model.bin");
 
-    let content = if model_path.exists() {
-        generate_from_model(model_path)
+    let rs = if model_path.exists() {
+        match generate_from_model(model_path) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("cargo:warning=Failed to read vocab_model.bin: {e} — using fail-closed fallback (all inputs flagged)");
+                generate_fallback()
+            }
+        }
     } else {
         println!("cargo:warning=No vocab_model.bin found — using fail-closed vocabulary (all inputs flagged)");
         generate_fallback()
     };
 
-    match &content {
-        Ok(rs) => fs::write(&dest_path, rs).unwrap(),
-        Err(e) => {
-            println!("cargo:warning=Failed to read vocab_model.bin: {e} — using fail-closed fallback (all inputs flagged)");
-            fs::write(&dest_path, generate_fallback().unwrap()).unwrap();
-        }
-    }
+    fs::write(&dest_path, rs).unwrap();
 
     println!("cargo:rerun-if-changed=tools/vocab_model.bin");
     println!("cargo:rerun-if-changed=build.rs");
@@ -73,12 +84,12 @@ fn generate_from_model(path: &Path) -> Result<String, String> {
                 "Non-finite value at entry {i}: idf={idf}, coef={coef}"
             ));
         }
-        if (hash as i128) <= prev {
+        if i128::from(hash) <= prev {
             return Err(format!(
                 "Vocabulary not strictly sorted at entry {i}: hash {hash:016x} <= prev {prev:016x}"
             ));
         }
-        prev = hash as i128;
+        prev = i128::from(hash);
         entries.push((hash, idf, coef));
     }
 
@@ -106,26 +117,22 @@ fn generate_from_model(path: &Path) -> Result<String, String> {
     rs.push_str(&header);
 
     for (hash, idf, coef) in &entries {
-        rs.push_str(&format!(
-            "    ({hash:#018x}u64, {idf:.5}f32, {coef:.5}f32),\n"
-        ));
+            let _ = writeln!(rs, "    ({hash:#018x}u64, {idf:.5}f32, {coef:.5}f32),");
     }
 
     rs.push_str("];\n");
-    rs.push_str("const _VOCAB_SIZE_CHECK: () = assert!(VOCAB.len() == VOCAB_SIZE);\n");
+    rs.push_str("const _VOCAB_SIZE_CHECK: () = assert!(VOCAB.len() == VOCAB_SIZE, \"vocab size mismatch\");\n");
 
     Ok(rs)
 }
 
-fn generate_fallback() -> Result<String, String> {
-    // Fail-closed: when vocab is missing, INTERCEPT pushes every empty input
-    // above THRESHOLD so all text is classified as manipulation.
-    Ok(r#"#[allow(dead_code)]
+fn generate_fallback() -> String {
+    "#[allow(dead_code)]
 const VOCAB_SIZE: usize = 0;
 const THRESHOLD: f32 = 0.5f32;
 const INTERCEPT: f32 = 1.0f32;
 const VOCAB: [(u64, f32, f32); 0] = [];
-const _VOCAB_SIZE_CHECK: () = assert!(VOCAB.len() == VOCAB_SIZE);
-"#
-    .to_string())
+const _VOCAB_SIZE_CHECK: () = assert!(VOCAB.len() == VOCAB_SIZE, \"vocab size mismatch\");
+"
+    .to_owned()
 }

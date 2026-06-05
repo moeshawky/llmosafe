@@ -1,3 +1,18 @@
+// Test code uses unwrap for assertions, raw indexing for fixed arrays,
+// float comparison for exact-match tests, and arithmetic on controlled
+// test inputs — all safe in test context per DO-178C.
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+#![cfg_attr(test, allow(clippy::float_cmp))]
+#![cfg_attr(test, allow(clippy::float_cmp_const))]
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
+#![cfg_attr(test, allow(clippy::as_conversions))]
+#![cfg_attr(test, allow(clippy::expect_used))]
+#![cfg_attr(test, allow(unused_results))]
+#![cfg_attr(test, allow(clippy::shadow_reuse))]
+#![cfg_attr(test, allow(clippy::shadow_same))]
+#![cfg_attr(test, allow(clippy::shadow_unrelated))]
+
 //! FFI Roundtrip Test (G6 Verification)
 //!
 //! Tests the C-ABI boundary for 128-bit Synapse functions.
@@ -10,14 +25,14 @@ use proptest::prelude::*;
 fn test_ffi_get_stability_valid() {
     let valid_bits = 400u64;
     let result = unsafe { llmosafe_get_stability(valid_bits) };
-    assert_eq!(result, 0, "Expected stable (0), got {}", result);
+    assert_eq!(result, 0, "Expected stable (0), got {result}");
 }
 
 #[test]
 fn test_ffi_get_stability_unstable() {
     let unstable_bits = 50001u64;
     let result = unsafe { llmosafe_get_stability(unstable_bits) };
-    assert_eq!(result, -2, "Expected unstable (-2), got {}", result);
+    assert_eq!(result, -2, "Expected unstable (-2), got {result}");
 }
 
 #[test]
@@ -37,7 +52,7 @@ fn test_ffi_get_stability_max_lower_64() {
 fn test_ffi_process_synapse_valid() {
     let valid_bits = 500u64;
     let result = unsafe { llmosafe_process_synapse(valid_bits) };
-    assert_eq!(result, 0, "Expected success (0), got {}", result);
+    assert_eq!(result, 0, "Expected success (0), got {result}");
 }
 
 #[test]
@@ -46,8 +61,7 @@ fn test_ffi_process_synapse_unstable() {
     let result = unsafe { llmosafe_process_synapse(unstable_bits) };
     assert_eq!(
         result, -2,
-        "Expected cognitive instability (-2), got {}",
-        result
+        "Expected cognitive instability (-2), got {result}"
     );
 }
 

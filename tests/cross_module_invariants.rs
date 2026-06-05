@@ -1,3 +1,18 @@
+// Test code uses unwrap for assertions, raw indexing for fixed arrays,
+// float comparison for exact-match tests, and arithmetic on controlled
+// test inputs — all safe in test context per DO-178C.
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+#![cfg_attr(test, allow(clippy::float_cmp))]
+#![cfg_attr(test, allow(clippy::float_cmp_const))]
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
+#![cfg_attr(test, allow(clippy::as_conversions))]
+#![cfg_attr(test, allow(clippy::expect_used))]
+#![cfg_attr(test, allow(unused_results))]
+#![cfg_attr(test, allow(clippy::shadow_reuse))]
+#![cfg_attr(test, allow(clippy::shadow_same))]
+#![cfg_attr(test, allow(clippy::shadow_unrelated))]
+
 //! Cross-Module Invariant Tracing (CMIT) — Property tests that detect compound bugs.
 //!
 //! These tests check invariants at module boundaries — not what individual
@@ -106,15 +121,12 @@ fn perception_chain_pipeline_integrity() {
     let (sifted, proof) = sift_text("hello world test documentation");
     let mut memory = WorkingMemory::<64>::new(500);
 
-    match memory.update(sifted, proof) {
-        Ok((validated, _vproof)) => {
-            let (sifted2, _proof2) = sift_text("hello world test documentation");
-            assert_eq!(validated.raw_entropy(), sifted2.raw_entropy());
-            assert_eq!(validated.has_bias(), sifted2.has_bias());
-        }
-        Err(_) => {
-            // Bias or entropy gate rejected — that's valid pipeline behavior
-        }
+    if let Ok((validated, _vproof)) = memory.update(sifted, proof) {
+        let (sifted2, _proof2) = sift_text("hello world test documentation");
+        assert_eq!(validated.raw_entropy(), sifted2.raw_entropy());
+        assert_eq!(validated.has_bias(), sifted2.has_bias());
+    } else {
+        // Bias or entropy gate rejected — that's valid pipeline behavior
     }
 }
 
@@ -140,15 +152,12 @@ fn full_chain_rejects_biased_input() {
     );
 
     let mut memory = WorkingMemory::<64>::new(500);
-    match memory.update(sifted, proof) {
-        Ok((validated, vproof)) => {
-            let mut loop_guard = ReasoningLoop::<10>::new();
-            let kernel_result = loop_guard.next_step(validated, vproof);
-            assert!(kernel_result.is_err(), "biased input must not reach kernel");
-        }
-        Err(_) => {
-            // memory rejected it — pipeline working correctly
-        }
+    if let Ok((validated, vproof)) = memory.update(sifted, proof) {
+        let mut loop_guard = ReasoningLoop::<10>::new();
+        let kernel_result = loop_guard.next_step(validated, vproof);
+        assert!(kernel_result.is_err(), "biased input must not reach kernel");
+    } else {
+        // memory rejected it — pipeline working correctly
     }
 }
 
@@ -259,15 +268,13 @@ fn fault_injection_entropy_interaction_ordering() {
     let decision = policy.decide(50001, 0, true);
     assert!(
         matches!(decision, SafetyDecision::Halt(..)),
-        "Halt must override Escalate: got {:?}",
-        decision,
+        "Halt must override Escalate: got {decision:?}",
     );
 
     let decision_pressure = policy.decide_with_pressure(50001, 0, false, PressureLevel::Critical);
     assert!(
         matches!(decision_pressure, SafetyDecision::Halt(..)),
-        "Halt must override pressure Escalate: got {:?}",
-        decision_pressure,
+        "Halt must override pressure Escalate: got {decision_pressure:?}",
     );
 }
 
@@ -320,8 +327,7 @@ fn template_fitting_phrases_detected() {
         let breakdown = get_bias_breakdown(phrase);
         assert!(
             breakdown.template_fitting > 0,
-            "TEMPLATE_FITTING phrase '{}' not detected",
-            phrase
+            "TEMPLATE_FITTING phrase '{phrase}' not detected"
         );
     }
 }
@@ -415,21 +421,19 @@ fn pid_sidechain_flags_effect_different_risk() {
     let mut state_clean = PidState::new();
     let mut state_anomaly = PidState::new();
     // Small inputs so both risks stay below 1.0 to see the differential effect
-    let risk_clean = llmosafe_pid::compute_pid_score(
+    let risk_clean = compute_pid_score(
         &PidInput::new(0.0, f32::from(10000u16) / 65535.0_f32, 0.0, 0.0, 5000.0, 0.9, false, 0, 10),
         &config,
         &mut state_clean,
     );
-    let risk_anomaly = llmosafe_pid::compute_pid_score(
+    let risk_anomaly = compute_pid_score(
         &PidInput::new(0.0, f32::from(10000u16) / 65535.0_f32, 0.0, 0.0, 5000.0, 0.9, false, FLAG_ANOMALY, 10),
         &config,
         &mut state_anomaly,
     );
     assert!(
         risk_anomaly > risk_clean,
-        "FLAG_ANOMALY should increase risk: clean={}, anomaly={}",
-        risk_clean,
-        risk_anomaly
+        "FLAG_ANOMALY should increase risk: clean={risk_clean}, anomaly={risk_anomaly}"
     );
 }
 
@@ -439,12 +443,12 @@ fn pid_dual_rate_integrator_time_scale_separation() {
     let mut state = PidState::new();
     // Build up integrators
     for _ in 0..100 {
-        llmosafe_pid::compute_pid_score(&PidInput::new(0.0, 1.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
+        compute_pid_score(&PidInput::new(0.0, 1.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
     }
     let acute_peak = state.acute_entropy;
     // Feed clean for many cycles
     for _ in 0..30 {
-        llmosafe_pid::compute_pid_score(&PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
+        compute_pid_score(&PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0), &config, &mut state);
     }
     // Acute (decay 0.9) should decay much faster than chronic (decay 0.99)
     assert!(
@@ -468,15 +472,15 @@ fn pid_anti_windup_integrator_frozen_during_halt() {
         ki_slow: 3.0,
         ..PidConfig::default()
     };
-    let risk = llmosafe_pid::compute_pid_score(
+    let risk = compute_pid_score(
         &PidInput::new(0.0, 1.0, 0.0, 0.0, 65535.0, 0.0, false, FLAG_STUCK | FLAG_ANOMALY, 100),
         &forced_config,
         &mut state,
     );
-    assert!(risk >= 1.0, "should be at halt level: {}", risk);
+    assert!(risk >= 1.0, "should be at halt level: {risk}");
     let acute_before = state.acute_entropy;
     // Next cycle with same max inputs — integrator should bleed, not grow
-    let _ = llmosafe_pid::compute_pid_score(
+    let _ = compute_pid_score(
         &PidInput::new(0.0, 1.0, 0.0, 0.0, 65535.0, 0.0, false, FLAG_STUCK, 100),
         &forced_config,
         &mut state,
@@ -604,11 +608,11 @@ proptest! {
     // SifterOutput invariants
     #[test]
     fn sifter_output_error_bounded(prob in 0.0f32..=1.0f32) {
-        let class = llmosafe::llmosafe_classifier::ClassificationResult {
+        let class = llmosafe_classifier::ClassificationResult {
             probability: prob,
-            ..llmosafe::llmosafe_classifier::ClassificationResult::default()
+            ..llmosafe_classifier::ClassificationResult::default()
         };
-        let so = llmosafe::llmosafe_sifter::SifterOutput::from_classification(&class);
+        let so = SifterOutput::from_classification(&class);
         prop_assert!((0.0..=1.0).contains(&so.error_sift));
         // raw_entropy bounded-by-type: u16 always ≤65535
     }

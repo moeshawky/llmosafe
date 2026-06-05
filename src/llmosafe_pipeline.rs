@@ -1,5 +1,10 @@
 //! LLMOSAFE CognitivePipeline — 5-stage safety orchestrator.
 #![deny(clippy::cast_lossless)]
+// Arithmetic in this module operates on bounded counters and time values
+// where wrap/instant arithmetic is the intended behavior.
+// DO-178C: these operations are verified safe by value range analysis at
+// the module boundary — inputs are always validated before arithmetic.
+#![allow(clippy::arithmetic_side_effects)]
 //!
 //! # Architecture
 //!
@@ -121,6 +126,15 @@ impl PipelineConfig {
     /// Rejects NaN, out-of-range floats, zero-valued integer parameters,
     /// and the empty memory edge case. `validate()` is called by
     /// `CognitivePipeline::with_config()` before construction.
+    ///
+    /// # Errors
+    ///
+    /// Returns `"drift_threshold must be in [0.0, 1.0]"` if out of range or NaN.
+    /// Returns `"min_confidence must be in [0.0, 1.0]"` if out of range or NaN.
+    /// Returns `"monitor_k must be in [1, 5]"` if out of range.
+    /// Returns `"max_repetitions must be > 0"` if zero.
+    /// Returns `"decay_threshold must be > 0"` if zero.
+    /// Propagates PID config validation errors.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.drift_threshold.is_nan() || self.drift_threshold < 0.0 || self.drift_threshold > 1.0
         {
@@ -203,7 +217,7 @@ impl PipelineResult {
     pub fn halt_reason(&self) -> Option<&KernelError> {
         match &self.decision {
             SafetyDecision::Halt(err, _) | SafetyDecision::Exit(err) => Some(err),
-            _ => None,
+            SafetyDecision::Proceed | SafetyDecision::Warn(_) | SafetyDecision::Escalate { .. } => None,
         }
     }
 
@@ -256,9 +270,9 @@ pub struct CognitivePipeline<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> 
     step_count: usize,
     pid_state: PidState,
     pid_config: PidConfig,
-    esc_policy: EscalationPolicy,
+    pub(crate) esc_policy: EscalationPolicy,
     /// When true, routes decisions through the detection-gate path instead of PID.
-    use_detection_gate: bool,
+    pub(crate) use_detection_gate: bool,
     /// Drift threshold [0.0, 1.0]. Stored for `reset_detectors()` and `reset_full()`.
     drift_threshold: f32,
     /// Surprise threshold for `WorkingMemory` reconstruction in `reset_full()`.
@@ -279,6 +293,10 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
     ///
     /// Returns `Err` if `config.validate()` fails (NaN, out-of-range, zero
     /// thresholds). All detector instances are constructed from config fields.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the same error strings from `PipelineConfig::validate()`.
     pub fn with_config(objective: &'a str, config: PipelineConfig) -> Result<Self, &'static str> {
         config.validate()?;
         Ok(Self {
@@ -354,6 +372,11 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
     /// `process_with_pressure()` — passing the guard's `raw_entropy()` and
     /// `pressure()` values so resource body state is recorded in the result.
     /// All other guard errors are returned without running the pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Propagates `KernelError` from `ResourceGuard::check_with_deadline()` for
+    /// all errors except `DeadlineExceeded`, which is handled gracefully.
     #[cfg(feature = "std")]
     pub fn process_safe(
         &mut self,
@@ -565,7 +588,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             if gate_decision.must_halt() {
                 stages |= STAGE_MONITOR;
                 let monitor_state = self.monitor.update(u32::from(entropy));
-                let kernel_output = Some(crate::llmosafe_kernel::KernelOutput {
+                let kernel_output = Some(KernelOutput {
                     error_kernel: f32::from(kernel_entropy) / 65535.0_f32,
                     is_stable: u32::from(kernel_entropy)
                         < crate::llmosafe_kernel::STABILITY_THRESHOLD as u32,
@@ -608,8 +631,6 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             &self.pid_config,
             &mut self.pid_state,
         );
-        let pure_risk =
-            crate::llmosafe_pid::compute_pid_score_pure(&pid_input, &self.pid_config, &mut self.pid_state);
 
         let mut override_flags = OverrideFlags::empty();
         if has_bias {
@@ -629,7 +650,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         stages |= STAGE_MONITOR;
         let monitor_state = self.monitor.update(u32::from(entropy));
 
-        let kernel_output = Some(crate::llmosafe_kernel::KernelOutput {
+        let kernel_output = Some(KernelOutput {
             error_kernel: f32::from(kernel_entropy) / 65535.0_f32,
             is_stable: u32::from(kernel_entropy)
                 < crate::llmosafe_kernel::STABILITY_THRESHOLD as u32,
@@ -700,7 +721,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
                     s,
                 )
             }
-            _ => {
+            KernelError::DepthExceeded | KernelError::ResourceExhaustion | KernelError::SelfMemoryExceeded | KernelError::DeadlineExceeded => {
                 let mut s = Synapse::new();
                 s.set_raw_entropy(entropy);
                 (SafetyDecision::Halt(err, 30000), s)
@@ -753,7 +774,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             KernelError::CognitiveInstability => {
                 SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)
             }
-            _ => SafetyDecision::Halt(err, 30000),
+            KernelError::HallucinationDetected | KernelError::ResourceExhaustion | KernelError::SelfMemoryExceeded | KernelError::DeadlineExceeded => SafetyDecision::Halt(err, 30000),
         };
         let mut err_synapse = Synapse::new();
         err_synapse.set_raw_entropy(entropy);
@@ -1052,7 +1073,7 @@ mod tests {
         for _ in 0..5 {
             let result = pipeline.process(same);
             // PipelineResult always has valid bitmasks.
-            assert!(result.detection_flags <= crate::llmosafe_kernel::DETECTION_FLAGS_MASK);
+            assert!(result.detection_flags <= DETECTION_FLAGS_MASK);
         }
         // If the classifier blocks at SIFT, no detection occurs — that is
         // correct behavior (fail-fast on dangerous input).

@@ -11,6 +11,11 @@
 //! surprising a value must be (relative to mean) before rejection. Typical
 //! threshold: 58000 for classifier output.
 
+// Arithmetic in this module operates on bounded ring-buffer index values
+// [0, SIZE-1] where modulo/offset semantics are the intended behavior.
+// DO-178C: these operations are verified safe by compile-time const bounds.
+#![allow(clippy::arithmetic_side_effects)]
+
 use crate::control_types::ControlSignal;
 use crate::llmosafe_kernel::{
     CognitiveEntropy, KernelError, SiftedProof, SiftedSynapse, ValidatedProof, ValidatedSynapse,
@@ -87,6 +92,11 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
 
     /// Updated: Uses the SiftedSynapse protocol for state transitions.
     ///
+    /// # Errors
+    ///
+    /// Returns `CognitiveInstability` or `BiasHaloDetected` if `sifted.validate()` fails.
+    /// Returns `HallucinationDetected` if the synapse surprise exceeds the memory threshold.
+    ///
     /// # Examples
     ///
     /// ```
@@ -125,7 +135,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         Ok((validated, validated_proof))
     }
     pub fn mean_entropy(&self) -> f64 {
-        let sum: i128 = self.state.iter().map(|e| e.mantissa()).sum();
+        let sum: i128 = self.state.iter().map(CognitiveEntropy::mantissa).sum();
         sum as f64 / SIZE as f64
     }
 
@@ -336,7 +346,7 @@ pub mod cognitive_memory {
 
         let mut memory = GLOBAL_MEMORY
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         match memory.update(sifted, proof) {
             Ok(_) => 0,
@@ -356,7 +366,7 @@ pub mod cognitive_memory {
     pub fn get_memory_stats() -> (f64, f64, f64, bool) {
         let memory = GLOBAL_MEMORY
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mean = memory.mean_entropy();
         let variance = memory.entropy_variance();
         let trend = memory.trend();

@@ -10,5 +10,5 @@ name = "_llmosafe"
 crate-type = ["cdylib"]
 
 [dependencies]
-llmosafe = { path = "..", features = ["std"] }
+llmosafe = { path = "..", features = ["std", "dal"] }
 pyo3 = { version = "0.20", features = ["extension-module"] }

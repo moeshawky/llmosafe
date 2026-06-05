@@ -43,9 +43,116 @@ keywords = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "mypy>=1.0"]
+dev = ["pytest>=7.0", "mypy>=1.0", "ruff>=0.1"]
 
 [tool.maturin]
 python-source = "."
 module-name = "llmosafe._llmosafe"
 features = ["pyo3/extension-module"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "C4",     # flake8-comprehensions
+    "RET",    # flake8-return
+    "ARG",    # flake8-unused-arguments
+    "PTH",    # flake8-use-pathlib
+    "RUF",    # Ruff-specific
+    "S",      # flake8-bandit (security)
+    "T10",    # flake8-debugger
+    "T20",    # flake8-print
+    "ERA",    # eradicate (commented-out code)
+    "PL",     # pylint
+    "RSE",    # flake8-raise
+    "PERF",   # perflint
+    "FURB",   # refurb
+    "D",      # pydocstyle
+    "ANN",    # flake8-annotations
+    "ASYNC",  # flake8-async
+    "EM",     # flake8-errmsg
+    "TRY",    # tryceratops
+    "SLF",    # flake8-self
+    "NPY",    # numpy-specific
+    "PD",     # pandas-vet
+    "PT",     # flake8-pytest-style
+    "Q",      # flake8-quotes
+    "C90",    # mccabe (complexity)
+    "TID",    # flake8-tidy-imports
+    "ICN",    # flake8-import-conventions
+    "G",      # flake8-logging-format
+    "INP",    # flake8-no-pep420
+    "PIE",    # flake8-pie
+    "PYI",    # flake8-pyi
+    "TCH",    # flake8-type-checking
+    "YTT",    # flake8-2020
+]
+
+ignore = [
+    "E501",     # line-too-long (handled by formatter)
+    "D100",     # missing module docstring (we have it)
+    "D104",     # missing package docstring
+    "D107",     # missing __init__ docstring
+    "D203",     # one-blank-line-before-class (conflicts with D211)
+    "D205",     # blank-line-after-summary (conflicts with formatter)
+    "D212",     # multi-line-summary-first-line (conflicts with D213)
+    "D213",     # multi-line-summary-second-line
+    "D401",     # first-line-capitalized (too strict for test methods)
+    "D415",     # first-line-punctuation
+    "ANN401",   # any-type (too strict for our pyo3 bindings)
+    "PLR0911",  # too-many-return-statements
+    "PLR0912",  # too-many-branches
+    "PLR0913",  # too-many-arguments
+    "PLR0915",  # too-many-statements
+    "PLR2004",  # magic-value-comparison
+    "S101",     # assert (we use pytest)
+    "TRY003",   # raise-vanilla-args
+    "C901",     # complex-structure (mccabe)
+    "ARG001",   # unused-function-argument
+    "ARG002",   # unused-method-argument
+    "ARG005",   # unused-lambda-argument
+    "B904",     # raise-without-from-inside-except
+    "PLC0415",  # import-outside-top-level (valid for test-specific imports)
+    "SIM108",   # if-else-block-instead-of-if-exp
+    "SIM102",   # collapsible-if
+    "SIM103",   # needless-bool
+    "SIM105",   # suppressible-exception
+    "RET504",   # unnecessary-assign
+    "RET505",   # superfluous-else-return
+    "RET506",   # superfluous-else-raise
+    "PTH123",   # builtin-open
+    "PERF401",  # manual-list-comprehension
+    "PERF402",  # manual-dict-comprehension
+    "FURB113",  # repeated-append
+    "DOC201",   # returns-section
+    "DOC501",   # raise-missing-from
+    "DOC502",   # raise-without-from-inside-except-body
+    "T201",     # print
+    "UP009",    # utf8-encoding-declaration
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.mypy]
+strict = true
+python_version = "3.8"
+packages = ["llmosafe"]
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+show_error_codes = true

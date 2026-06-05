@@ -1,3 +1,18 @@
+// Test code uses unwrap for assertions, raw indexing for fixed arrays,
+// float comparison for exact-match tests, and arithmetic on controlled
+// test inputs — all safe in test context per DO-178C.
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+#![cfg_attr(test, allow(clippy::float_cmp))]
+#![cfg_attr(test, allow(clippy::float_cmp_const))]
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
+#![cfg_attr(test, allow(clippy::as_conversions))]
+#![cfg_attr(test, allow(clippy::expect_used))]
+#![cfg_attr(test, allow(unused_results))]
+#![cfg_attr(test, allow(clippy::shadow_reuse))]
+#![cfg_attr(test, allow(clippy::shadow_same))]
+#![cfg_attr(test, allow(clippy::shadow_unrelated))]
+
 #![allow(deprecated)]
 
 use llmosafe::sift_text;

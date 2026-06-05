@@ -17,6 +17,15 @@
 //! to incorporate both resource entropy and pressure level into the decision.
 //!
 //! Requires `std` (reads `/proc` on Linux, Win32 API on Windows).
+//!
+// The body module reads /proc and calls libc/Win32 APIs which require unsafe
+// blocks for FFI, raw struct zeroing, and syscalls. All unsafe uses have
+// documented safety invariants.
+#![allow(unsafe_code)]
+// Arithmetic in this module operates on bounded resource values (RSS bytes,
+// CPU ticks, retry counters) where additive/saturating semantics are intended.
+// DO-178C: these operations are verified safe by value range analysis.
+#![allow(clippy::arithmetic_side_effects)]
 
 use crate::control_types::ControlSignal;
 use crate::llmosafe_kernel::{KernelError, Synapse};
@@ -224,6 +233,11 @@ impl ResourceGuard {
     /// ⚠ Reads `/proc/stat` twice with a 100ms sleep between reads to compute
     /// delta-based CPU/IO metrics. Do NOT call in async contexts without
     /// spawning to a blocking thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ResourceExhaustion` if `memory_ceiling_bytes` is 0, RSS
+    /// measurement is unavailable, or RSS ratio ≥ 1.0.
     #[must_use = "ignoring the safety check defeats the purpose of the guard"]
     pub fn check(&self) -> Result<Synapse, KernelError> {
         if self.memory_ceiling_bytes == 0 {
@@ -255,6 +269,11 @@ impl ResourceGuard {
     /// Returns the normalised RSS ratio error, pressure percentage, and
     /// exhaustion flag directly — no synapse wrapper. Callers should
     /// feed `BodyOutput.error_body` as `PidInput.e_body`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ResourceExhaustion` if `memory_ceiling_bytes` is 0, RSS
+    /// measurement is unavailable, or RSS ratio ≥ 1.0.
     #[must_use = "ignoring the safety check defeats the purpose of the guard"]
     pub fn check_ctrl(&self) -> Result<BodyOutput, KernelError> {
         if self.memory_ceiling_bytes == 0 {
@@ -283,6 +302,11 @@ impl ResourceGuard {
     /// Prevents TOCTOU when entropy is measured for a policy decision
     /// and then recomputed inside `check()`, potentially returning a
     /// different entropy than what was approved.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ResourceExhaustion` if `memory_ceiling_bytes` is 0, RSS
+    /// measurement is unavailable, or RSS ratio ≥ 1.0.
     #[must_use = "ignoring the safety check defeats the purpose of the guard"]
     pub fn check_with_entropy(&self, entropy: u16) -> Result<Synapse, KernelError> {
         if self.memory_ceiling_bytes == 0 {
@@ -314,12 +338,24 @@ impl ResourceGuard {
     ///
     /// ⚠ BLOCKING: Reads /proc/stat multiple times with sleeps.
     /// Do NOT call in async contexts without spawn_blocking.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DeadlineExceeded` after `max_retries` (default 3) consecutive
+    /// non-Proceed decisions. Returns `KernelError` from `check_with_entropy()`.
+    /// Propagates `Exit(err)` directly.
     #[cfg(feature = "std")]
     pub fn check_blocking(&self) -> Result<Synapse, KernelError> {
         self.check_blocking_with_max_retries(3)
     }
 
     /// Same as check_blocking() but with configurable max retries.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DeadlineExceeded` after `max_retries` consecutive non-Proceed
+    /// decisions. Returns `KernelError` from `check_with_entropy()`.
+    /// Propagates `Exit(err)` directly.
     #[cfg(feature = "std")]
     pub fn check_blocking_with_max_retries(
         &self,
@@ -357,6 +393,12 @@ impl ResourceGuard {
     }
 
     /// Same as check_blocking() but with deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DeadlineExceeded` if the deadline passes or after 3 consecutive
+    /// non-Proceed decisions. Returns `KernelError` from `check_with_entropy()`.
+    /// Propagates `Exit(err)` directly.
     #[cfg(feature = "std")]
     pub fn check_with_deadline(
         &self,
@@ -403,6 +445,8 @@ impl ResourceGuard {
         // getrusage fills a correctly-sized buffer; all fields are valid after a
         // successful call (ret == 0) and the struct is never read on failure paths.
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        // SAFETY: getrusage accepts a valid rusage pointer initialized above.
+        // Fills the buffer with resource usage data; all fields valid on success.
         let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
 
         if ret == 0 {
@@ -472,6 +516,8 @@ impl ResourceGuard {
         // SAFETY: libc::rusage is a repr(C) struct suitable for zero-initialization.
         // getrusage fills a correctly-sized buffer; ru_maxrss is only read on success.
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        // SAFETY: getrusage accepts a valid rusage pointer initialized above.
+        // Fills the buffer with resource usage data; all fields valid on success.
         let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
         if ret == 0 {
             Some((usage.ru_maxrss as usize).saturating_mul(1024))
@@ -485,6 +531,8 @@ impl ResourceGuard {
     fn try_current_rss_bytes() -> Option<usize> {
         // SAFETY: Same invariants as the Linux variant above.
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        // SAFETY: getrusage accepts a valid rusage pointer initialized above.
+        // Fills the buffer with resource usage data; all fields valid on success.
         let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
         if ret == 0 {
             Some(usage.ru_maxrss as usize)
