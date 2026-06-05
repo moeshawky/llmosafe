@@ -153,6 +153,7 @@ pub use llmosafe_sifter::{
 // certification occurs at the Rust↔C contract, not at the unsafe keyword.
 #[allow(unsafe_code)]
 #[allow(clippy::missing_safety_doc)]
+#[allow(clippy::as_conversions, clippy::indexing_slicing)]
 pub mod c_abi {
     use std::sync::Mutex;
 

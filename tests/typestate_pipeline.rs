@@ -13,7 +13,7 @@
 #![cfg_attr(test, allow(clippy::shadow_same))]
 #![cfg_attr(test, allow(clippy::shadow_unrelated))]
 
-use llmosafe::{Synapse, WorkingMemory};
+use llmosafe::{ReasoningLoop, SiftedProof, Synapse, WorkingMemory};
 
 #[cfg(feature = "testing")]
 #[test]

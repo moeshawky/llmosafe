@@ -101,3 +101,23 @@ cachegrind*
 *.bak
 TODO
 .moeinclude
+
+# --- Pre-publish / audit artifacts (never published) ---
+.audit/
+
+# --- AI IDE configs (never published) ---
+.cursor/
+.claude/
+copilot-instructions.md
+.github/copilot-instructions.md
+.github/copilot/
+.github/agents/
+references/
+*.agent/
+.agents/
+
+# --- Secrets (never committed) ---
+.env
+.env.*
+*.pem
+*.key
