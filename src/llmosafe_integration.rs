@@ -4,20 +4,27 @@
 // the module boundary — inputs are always validated before arithmetic.
 #![allow(clippy::arithmetic_side_effects)]
 
-//! LLMOSAFE Integration Layer — Escalation and Decision Primitives
+//! Escalation policy and decision primitives.
 //!
-//! Composable with external systems (tower, tokio, async runtimes) and
-//! cross-language FFI consumers.
+//! Maps entropy/surprise/bias/detection signals to typed `SafetyDecision`
+//! outcomes. The `EscalationPolicy` is the central threshold engine used by
+//! `CognitivePipeline` at every stage gate.
 //!
-//! # Components
+//! # Key Types
 //!
-//! - `SafetyDecision` — typed decision outcome with cooldown
-//! - `PressureLevel` — resource pressure semantics
-//! - `EscalationPolicy` — configurable threshold-based decision engine.
-//!   Default thresholds calibrated for classifier `` `[0, 65535]` `` range.
-//! - `SafetyContext` — thread-local decision tracking (`std` only)
+//! - `SafetyDecision` — enum: `Proceed`, `Warn`, `Escalate`, `Halt`, `Exit`.
+//!   Each variant carries a severity (0–4) and cooldown (0, 5000, or 30000ms).
+//! - `EscalationPolicy` — configurable thresholds for entropy, surprise, bias,
+//!   and pressure. Builder pattern. Default thresholds calibrated for the
+//!   classifier range [0, 65535].
+//! - `PressureLevel` — `Nominal`/`Elevated`/`Critical`/`Emergency` from
+//!   percentage (0–100). `Critical` (51–75%) triggers escalation.
+//! - `EscalationReason` — reason code for `Escalate` variant (entropy, surprise,
+//!   bias, resource pressure, stuck agent, drift, adversarial, etc.).
+//! - `SafetyContext` — thread-local accumulator for multi-observation decisions
+//!   (`std` only). Tracks max entropy, max surprise, any bias across observations.
 //!
-//! # EscalationPolicy Defaults
+//! # Default Thresholds
 //!
 //! | Gauge | Warn | Escalate | Halt |
 //! |-------|------|----------|------|
@@ -25,16 +32,11 @@
 //! | Surprise | 42600 | 55700 | — |
 //! | Bias | — | Escalate | — |
 //!
-//! # Example
+//! # DAL Gating
 //!
-//! ```rust
-//! use llmosafe::{SafetyDecision, EscalationPolicy};
-//!
-//! let policy = EscalationPolicy::default();
-//! // Safe text: entropy=10000, surprise=800, no bias
-//! let decision = policy.decide(10000, 800, false);
-//! assert!(matches!(decision, SafetyDecision::Proceed));
-//! ```
+//! `EscalationPolicy::apply_dal_to_decision()` downgrades decisions at runtime
+//! based on Design Assurance Level (A–E). DAL A passes all decisions through;
+//! DAL E converts everything to Proceed.
 
 use crate::control_types::DesignAssuranceLevel;
 use crate::llmosafe_kernel::{CognitiveStability, KernelError};
@@ -80,7 +82,7 @@ impl SafetyDecision {
         matches!(self, Self::Halt(..))
     }
 
-    /// Returns the severity level (0=Proceed, 1=Warn, 2=Escalate, 3=Halt).
+    /// Returns the severity level (0=Proceed, 1=Warn, 2=Escalate, 3=Halt, 4=Exit).
     pub fn severity(&self) -> u8 {
         match self {
             Self::Proceed => 0,
@@ -475,6 +477,13 @@ impl EscalationPolicy {
 ///
 /// Use this to accumulate safety signals during request processing
 /// and make a final decision at the end.
+///
+/// Fields:
+/// - `max_entropy: u16` — maximum observed entropy.
+/// - `max_surprise: u16` — maximum observed surprise.
+/// - `any_bias: bool` — true if any observation had bias detected.
+/// - `decision_count: usize` — number of observations recorded.
+/// - `policy: EscalationPolicy` — escalation policy for final decision.
 #[cfg(feature = "std")]
 pub struct SafetyContext {
     max_entropy: u16,

@@ -18,17 +18,23 @@
 
 use llmosafe::{CognitivePipeline, SafetyDecision};
 
+/// Wraps a `CognitivePipeline` to gate incoming request strings.
+/// Each call to `check()` feeds the input through the pipeline and
+/// maps the `SafetyDecision` to `Ok`/`Err` for Tower service integration.
 struct SafetyMiddleware {
     pipeline: CognitivePipeline<'static, 64, 10>,
 }
 
 impl SafetyMiddleware {
+    /// Creates a new middleware with the given pipeline objective string.
     fn new(objective: &'static str) -> Self {
         Self {
             pipeline: CognitivePipeline::new(objective),
         }
     }
 
+    /// Processes `input` through the cognitive pipeline.
+    /// Returns `Ok(())` for `Proceed`/`Warn`, or `Err` for `Escalate`/`Halt`/`Exit`.
     fn check(&mut self, input: &str) -> Result<(), String> {
         let result = self.pipeline.process(input);
         match result.decision {

@@ -1,23 +1,43 @@
-//! llmosafe_body — Resource Guard (Tier 0)
+//! Tier 0: Resource body — physical resource monitoring for the safety pipeline.
 //!
-//! Monitors RSS memory, CPU load, and I/O wait on Linux and Windows.
-//! Maps resource pressure to escalation decisions via `EscalationPolicy`.
+//! Reads RSS memory, CPU load, and IO wait from the host system. Maps these
+//! to a weighted metabolic entropy score [0, 1000] and a pressure percentage
+//! [0, 100] for the escalation policy.
 //!
-//! Resource entropy is in [0, 1000] range (weighted combination of RSS ratio,
-//! I/O wait, and system load). Pressure percentage is in [0, 100].
+//! # Resource Entropy
 //!
-//! Body entropy \[0, 1000\] never reaches EscalationPolicy entropy thresholds
-//! (warn=30000, escalate=40000, halt=50000) — this is by design. The resource
-//! body gates on pressure_level (Critical=51-75%, Emergency=76-100%) via
-//! decide_with_pressure(). Entropy-based policy checks are dead code for body
-//! callers; pressure is the sole mechanism. The pressure percentage amplifies
-//! the raw RSS ratio into a signal the policy can act on.
+//! `raw_entropy()` returns a weighted combination:
+//! - RSS ratio (50%): `current_rss / memory_ceiling_bytes`
+//! - IO wait (25%): delta-based measurement over 100ms window (Linux only)
+//! - Load average (25%): `/proc/loadavg` / 10.0
 //!
-//! `check_blocking()` and `check_with_deadline()` use `decide_with_pressure()`
-//! to incorporate both resource entropy and pressure level into the decision.
+//! Returns 0–1000. Never reaches `EscalationPolicy` entropy thresholds
+//! (warn=30000) — the body gates on `PressureLevel` instead.
 //!
-//! Requires `std` (reads `/proc` on Linux, Win32 API on Windows).
+//! # Pressure Levels
 //!
+//! | Pressure % | Level | Action |
+//! |------------|-------|--------|
+//! | 0–25 | Nominal | Proceed |
+//! | 26–50 | Elevated | Monitor |
+//! | 51–75 | Critical | Escalate |
+//! | 76–100 | Emergency | Halt |
+//!
+//! # Key Types
+//!
+//! - `ResourceGuard` — monitors RSS against a ceiling; `check()` returns
+//!   `Result<Synapse, KernelError>`. `check_ctrl()` returns `BodyOutput`.
+//! - `BodyOutput` — control-signal struct: `error_body` (f32 [0,1]),
+//!   `pressure` (u8 [0,100]), `is_exhausted` (bool).
+//! - `EnvironmentalVitals` — captures iowait and load_avg from `/proc`.
+//!
+//! # Platform Support
+//!
+//! - Linux: reads `/proc/self/status` (VmRSS), `/proc/stat` (CPU/IO), `/proc/loadavg`
+//! - Windows: `GetProcessMemoryInfo` for RSS, no IO wait
+//! - Other: returns 0 (fail-closed: `raw_entropy()` defaults to 1.0 ratio)
+//!
+//! Requires `std`. Uses `libc::getrusage` for RSS on Unix.
 // The body module reads /proc and calls libc/Win32 APIs which require unsafe
 // blocks for FFI, raw struct zeroing, and syscalls. All unsafe uses have
 // documented safety invariants.
@@ -35,6 +55,11 @@ use std::thread;
 use std::time::Duration;
 
 /// EnvironmentalVitals tracks system-level metabolic signals.
+///
+/// Fields:
+/// - `iowait: u64` — IO wait ticks from /proc/stat.
+/// - `load_avg: f64` — 1-minute load average from /proc/loadavg.
+/// - `vitals_available: bool` — true if /proc was readable.
 #[derive(Debug, Clone, Default)]
 pub struct EnvironmentalVitals {
     pub iowait: u64,
@@ -43,7 +68,7 @@ pub struct EnvironmentalVitals {
 }
 
 impl EnvironmentalVitals {
-    /// Captures current system vitals.
+    /// Captures current system vitals from /proc.
     pub fn capture() -> Self {
         let iowait = Self::read_iowait();
         let load_avg = Self::read_loadavg();
@@ -132,6 +157,11 @@ impl ControlSignal for BodyOutput {
 
 /// ResourceGuard monitors physical resource consumption and triggers safety halts.
 /// Maps physical metrics (RAM, CPU) to the CognitiveEntropy/Synapse system.
+///
+/// Fields:
+/// - `memory_ceiling_bytes: usize` — maximum allowed RSS memory in bytes.
+/// - `raw_entropy_override: Option<u16>` — test-only override for raw_entropy() return value.
+/// - `pressure_override: Option<u8>` — test-only override for pressure() return value.
 #[derive(Debug, Clone)]
 pub struct ResourceGuard {
     memory_ceiling_bytes: usize,

@@ -1,38 +1,52 @@
-//! LLMOSAFE CognitivePipeline — 5-stage safety orchestrator.
+//! `CognitivePipeline` — 5-stage sequential safety pipeline.
+//!
+//! Wires the sifter, working memory, kernel, 5 detectors, dynamic stability
+//! monitor, PID controller, and escalation policy into a single cascade that
+//! can short-circuit at any stage.
+//!
+//! # Stage Flow
+//!
+//! ```text
+//! process(text) → SIFT → MEMORY → KERNEL → DETECTION → PID → MONITOR → PipelineResult
+//!                    │       │        │         │        │        │
+//!                    ▼       ▼        ▼         ▼        ▼        ▼
+//!             Halt?   Halt?    Halt?    Gate?    Risk    Advisory
+//! ```
+//!
+//! 1. **SIFT** (Tier 3) — `sift_text_with_score()` classifies text, builds
+//!    `SiftedSynapse`. Gate: `EscalationPolicy::decide()`.
+//! 2. **MEMORY** (Tier 2) — `WorkingMemory::update()` pushes synapse into ring
+//!    buffer. Gate: surprise threshold.
+//! 3. **KERNEL** (Tier 1) — `ReasoningLoop::next_step()` advances reasoning.
+//!    Gate: depth, bias, entropy stability.
+//! 4. **DETECTION** — 5 detectors observe the observation. Flags packed into
+//!    synapse reserved bits. Optional detection-gate path bypasses PID.
+//! 5. **PID** — `compute_pid_score_pure()` + `apply_safety_overrides()` produce
+//!    a risk score mapped to `SafetyDecision` via thresholds.
+//! 6. **MONITOR** — `DynamicStabilityMonitor::update()` records entropy envelope.
+//!    Advisory only.
+//!
+//! # Key Types
+//!
+//! - `CognitivePipeline<'a, MEM_SIZE, MAX_STEPS>` — owns all safety components
+//! - `PipelineConfig` — threshold configuration with `validate()` bounds checking
+//! - `PipelineResult` — final decision, classified synapse, stage bitmask, diagnostics
+//! - `MemoryStats` — snapshot of working-memory mean, variance, trend
+//!
+//! # Processing Modes
+//!
+//! - `process(observation)` — standard 5-stage pipeline
+//! - `process_with_pressure(observation, body_entropy, pressure)` — adds resource
+//!   body pre-gate before SIFT
+//! - `process_ctrl(observation, e_body, pressure)` — control-theory composition
+//!   path with PID mandatory
+//! - `process_safe(text, guard)` — pre-flight resource gate with deadline
 #![deny(clippy::cast_lossless)]
 // Arithmetic in this module operates on bounded counters and time values
 // where wrap/instant arithmetic is the intended behavior.
 // DO-178C: these operations are verified safe by value range analysis at
 // the module boundary — inputs are always validated before arithmetic.
 #![allow(clippy::arithmetic_side_effects)]
-//!
-//! # Architecture
-//!
-//! The CognitivePipeline wires the existing sifter, working memory, kernel,
-//! escalation policy, 5 detectors, and dynamic stability monitor into a
-//! single sequential pipeline that can short-circuit at any stage:
-//!
-//! ```text
-//! process(text) → SIFT → MEMORY → KERNEL → DETECTION → MONITOR → PipelineResult
-//!                    │       │        │         │           │
-//!                    ▼       ▼        ▼         ▼           ▼
-//!             Halt?   Halt?    Halt?    Halt?       (advisory only)
-//! ```
-//!
-//! Each stage transforms data and can halt the pipeline with a `SafetyDecision`.
-//! `EscalationPolicy` is invoked at every gate.
-//!
-//! # Usage
-//!
-//! ```ignore
-//! use llmosafe::CognitivePipeline;
-//!
-//! let mut pipeline = CognitivePipeline::<64, 10>::new("analyze safety");
-//! let result = pipeline.process("user input text");
-//! if result.decision.must_halt() {
-//!     // handle halt
-//! }
-//! ```
 
 use crate::control_types::OverrideFlags;
 use crate::llmosafe_detection::{
@@ -77,6 +91,17 @@ pub const STAGE_BODY: u8 = 0x20;
 /// Every threshold has a safe default via `Default::default()`.
 /// Fields with `f32` values must be in `[0.0, 1.0]` and finite.
 /// Use `validate()` to check bounds before constructing a pipeline.
+///
+/// Fields:
+/// - `policy: EscalationPolicy` — escalation policy thresholds (entropy warn/escalate/halt, surprise, bias).
+/// - `pid_config: PidConfig` — PID controller configuration. Must be valid.
+/// - `surprise_threshold: i128` — surprise threshold for `WorkingMemory`. Values above this are rejected as `HallucinationDetected`.
+/// - `max_repetitions: usize` — maximum repetitions before stuck detection fires.
+/// - `drift_threshold: f32` — drift threshold (0.0–1.0). Drift above this triggers `GoalDriftDetected`.
+/// - `min_confidence: f32` — minimum confidence threshold (0.0–1.0). Confidence below this is flagged.
+/// - `decay_threshold: usize` — decay threshold: consecutive confidence drops before decay warning.
+/// - `monitor_k: u8` — `DynamicStabilityMonitor` safety margin k (1–5). Controls envelope sensitivity.
+/// - `use_detection_gate: bool` — when true, routes decisions through `decide_from_detection()` instead of the PID weighted summation path.
 pub struct PipelineConfig {
     /// Escalation policy thresholds (entropy warn/escalate/halt, surprise, bias).
     pub policy: EscalationPolicy,
@@ -161,6 +186,12 @@ impl PipelineConfig {
 ///
 /// All fields are computed from the ring-buffer state at call time.
 /// `is_drifting` compares `trend` against a fixed threshold of 10.0.
+///
+/// Fields:
+/// - `mean: f64` — running mean entropy of the ring buffer [0, 65535].
+/// - `variance: f64` — running variance of ring-buffer entropy.
+/// - `trend: f64` — linear regression slope over the buffer window.
+/// - `is_drifting: bool` — true when `|trend| > 10.0`.
 pub struct MemoryStats {
     /// Running mean entropy of the ring buffer `[0, 65535]`.
     pub mean: f64,
@@ -177,6 +208,20 @@ pub struct MemoryStats {
 /// Carries the final `SafetyDecision`, the classified `Synapse` (with packed
 /// detection flags and OOV ratio), a stages-executed bitmask, and diagnostic
 /// fields for the C-ABI query functions.
+///
+/// Fields:
+/// - `decision: SafetyDecision` — final safety decision from the pipeline.
+/// - `synapse: Synapse` — classified synapse with entropy, surprise, bias, detection flags, OOV ratio.
+/// - `stages_executed: u8` — bitmask of stages that executed. `STAGE_SIFT` (0x01) through `STAGE_MONITOR` (0x10).
+/// - `detection_flags: u8` — five detection flags packed into 5 bits.
+/// - `oov_ratio: u8` — OOV (out-of-vocabulary) ratio. 0=0%, 255=100%.
+/// - `entropy: u16` — convenience copy of `synapse.raw_entropy()`. Required by C-ABI query functions.
+/// - `surprise: u16` — convenience copy of `synapse.raw_surprise()`. Required by C-ABI query functions.
+/// - `monitor_state: StabilityResult` — stability state from the `DynamicStabilityMonitor` after this invocation.
+/// - `body_pressure: Option<u8>` — resource body pressure percentage [0, 100] when `process_with_pressure()` was used.
+/// - `step_count: usize` — current reasoning step count after this invocation.
+/// - `kernel_output: Option<KernelOutput>` — kernel output from the reasoning loop (diagnostic).
+/// - `classifier_score: f32` — raw classifier logit (`ClassificationResult.score`) before sigmoid.
 pub struct PipelineResult {
     /// Final safety decision from the pipeline.
     pub decision: SafetyDecision,
@@ -257,6 +302,24 @@ impl PipelineResult {
 /// # Lifetime
 ///
 /// * `'a` — the objective string is borrowed; the caller must keep it alive.
+///
+/// Fields:
+/// - `memory: WorkingMemory<MEM_SIZE>` — surprise-gated ring buffer for entropy history.
+/// - `reasoning: ReasoningLoop<MAX_STEPS>` — deterministic reasoning step counter.
+/// - `monitor: DynamicStabilityMonitor` — self-calibrating envelope tracker.
+/// - `repetition: RepetitionDetector` — loop detection (stuck agent).
+/// - `drift: DriftDetector` — goal drift detection.
+/// - `confidence: ConfidenceTracker` — confidence decay tracking.
+/// - `cusum: CusumDetector` — CUSUM anomaly detection.
+/// - `adversarial: AdversarialDetector` — adversarial pattern recognition.
+/// - `objective: &'a str` — original objective string for drift detection.
+/// - `step_count: usize` — current reasoning step count.
+/// - `pid_state: PidState` — PID controller state (dual-rate integrators).
+/// - `pid_config: PidConfig` — PID controller configuration.
+/// - `esc_policy: EscalationPolicy` — escalation policy thresholds.
+/// - `use_detection_gate: bool` — when true, routes through detection-gate path.
+/// - `drift_threshold: f32` — drift threshold [0.0, 1.0].
+/// - `surprise_threshold: i128` — surprise threshold for WorkingMemory.
 pub struct CognitivePipeline<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> {
     memory: WorkingMemory<MEM_SIZE>,
     reasoning: ReasoningLoop<MAX_STEPS>,

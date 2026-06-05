@@ -1,26 +1,36 @@
-//! LLMOSAFE Detection Layer — pattern recognition for cognitive anomalies.
+//! Detection layer — 5 detectors for cognitive anomaly pattern recognition.
 //!
-//! Provides detection primitives beyond simple threshold checks:
-//! - `RepetitionDetector` — loop detection (stuck agent)
-//! - `DriftDetector` — goal drift detection (objective changing mid-execution)
-//! - `ConfidenceTracker` — confidence decay tracking
-//! - `AdversarialDetector` — adversarial pattern recognition (substring matching)
-//! - `CusumDetector` — statistical process control anomaly detection
+//! All detectors are `no_std` compatible (stack-allocated `ArrayVec` buffers).
+//! They are wired into `CognitivePipeline` and their results are packed into
+//! `Synapse::detection_flags` (6 bits in the reserved field).
 //!
-//! All five detectors are fully implemented, tested, and wired into
-//! `CognitivePipeline` via `DetectionResult` + `decide_from_detection()`.
+//! # Detectors
 //!
-//! # Example
+//! | Detector | Signal | Method |
+//! |----------|--------|--------|
+//! | `RepetitionDetector` | Stuck agent | FNV-1a rolling hash, count ≥ max_repetitions |
+//! | `DriftDetector` | Goal drift | Keyword hash overlap with objective, 1 - overlap |
+//! | `ConfidenceTracker` | Confidence decay | Consecutive drops ≥ decay_threshold |
+//! | `AdversarialDetector` | Adversarial patterns | Case-insensitive FNV-1a hash matching |
+//! | `CusumDetector` | Distribution shift | Two-sided CUSUM (Montgomery), s_high/s_low > h |
 //!
-//! ```ignore
-//! use llmosafe::{RepetitionDetector, DriftDetector};
+//! # Detection Flags (packed into Synapse reserved bits 0–5)
 //!
-//! let mut rep = RepetitionDetector::new(3);
-//! rep.observe("same response");
-//! rep.observe("same response");
-//! rep.observe("same response");
-//! assert!(rep.is_stuck());
+//! ```text
+//! FLAG_STUCK         = 0x01  (bit 0)
+//! FLAG_DRIFTING      = 0x02  (bit 1)
+//! FLAG_LOW_CONFIDENCE = 0x04  (bit 2)
+//! FLAG_DECAYING      = 0x08  (bit 3)
+//! FLAG_ANOMALY       = 0x10  (bit 4)
+//! FLAG_ADVERSARIAL   = 0x20  (bit 5)
 //! ```
+//!
+//! # Integration
+//!
+//! The pipeline stage calls each detector's `observe()` method, then reads
+//! boolean results (`is_stuck()`, `is_drifting()`, `is_low()`, `is_decaying()`,
+//! `detected()`, `is_adversarial()`). `DetectionResult` aggregates all signals
+//! for `EscalationPolicy::decide_from_detection()`.
 #![allow(clippy::arithmetic_side_effects)]
 
 /// Maximum context length for hash-based pattern matching.

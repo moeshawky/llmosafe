@@ -24,26 +24,44 @@
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 #![cfg_attr(test, allow(unused_results))]
 
-//! LLMOSAFE: Runtime Safety Guardrails
+//! LLMOSAFE — Runtime safety guardrails for systems processing untrusted inputs.
 //!
-//! A 4-tier safety architecture for systems processing untrusted inputs.
-//! Provides three gauges — bias, surprise, entropy — that answer "should I stop?"
+//! Four tiers, three gauges (entropy, surprise, bias), one question: "should I stop?"
 //!
-//! # Architecture
+//! # Tier Architecture
 //!
-//! - **Tier 3: Perceptual Sifter** — TF-IDF classifier trained on 42K real samples
-//!   detects manipulation patterns through dual-path composition: classifier
-//!   (adaptive layer) + keyword-bias (innate backstop). Streaming FNV-1a tokenizer,
-//!   binary search in sorted vocab, zero-alloc, `no_std` compatible.
-//! - **Tier 2: Working Memory** — Surprise-gated ring buffer with mean, variance,
-//!   and trend statistics. Fixed size, no heap.
-//! - **Tier 1: Cognitive Kernel** — Binary entropy-based stability check.
-//!   Bounded `ReasoningLoop<MAX_STEPS>`. Self-calibrating `DynamicStabilityMonitor`.
-//! - **Tier 0: Resource Body** (requires `std`) — RSS memory monitoring,
-//!   CPU load tracking, pressure-based escalation.
-//! - **Detection Layer** — 5 detectors (repetition, drift, confidence, adversarial,
-//!   CUSUM anomaly) wired into `CognitivePipeline` and packed into synapse
-//!   detection flags.
+//! ```text
+//! Input → Tier 3 (Sifter) → Tier 2 (Memory) → Tier 1 (Kernel) → Decision
+//!              ↓                  ↓                 ↓
+//!         TF-IDF + keyword    Ring buffer       ReasoningLoop
+//!         bias detection      mean/var/trend    depth + stability
+//! ```
+//!
+//! - **Tier 3: Perceptual Sifter** (`llmosafe_sifter`) — FNV-1a tokenizer feeds
+//!   a TF-IDF classifier (42K real samples). Dual-path: classifier (adaptive) +
+//!   keyword-bias (innate backstop). `no_std` compatible, zero-alloc.
+//! - **Tier 2: Working Memory** (`llmosafe_memory`) — Fixed-size ring buffer
+//!   (`WorkingMemory<MEM_SIZE>`) with mean, variance, and trend statistics.
+//!   Surprise-gated: rejects inputs exceeding the hallucination threshold.
+//! - **Tier 1: Cognitive Kernel** (`llmosafe_kernel`) — Bounded
+//!   `ReasoningLoop<MAX_STEPS>` with entropy stability gate. Self-calibrating
+//!   `DynamicStabilityMonitor` using MSB-index envelope tracking.
+//! - **Tier 0: Resource Body** (`llmosafe_body`, `std` only) — RSS memory
+//!   monitoring via `/proc/self/status`, CPU load via delta-based `/proc/stat`
+//!   reads, IO wait ratio. Maps to `BodyOutput` (error, pressure, exhausted).
+//!
+//! # Modules
+//!
+//! - `llmosafe_sifter` — Tier 3 classifier + keyword bias, `sift_text()` entry point
+//! - `llmosafe_memory` — Tier 2 ring buffer with trend analysis
+//! - `llmosafe_kernel` — Tier 1 `Synapse` (128-bit bitfield), `ReasoningLoop`, stability monitor
+//! - `llmosafe_detection` — 5 detectors: repetition, drift, confidence, adversarial, CUSUM
+//! - `llmosafe_integration` — `EscalationPolicy` threshold engine, `SafetyDecision` enum
+//! - `llmosafe_pipeline` — `CognitivePipeline` wiring all tiers into a sequential cascade
+//! - `llmosafe_pid` — PID controller with safety overrides (infusion pump pattern)
+//! - `llmosafe_body` — Tier 0 resource monitoring (`std` only)
+//! - `control_types` — `ControlSignal` trait, `PidInput`, `OverrideFlags`
+//! - `c_abi` — FFI entry points: `llmosafe_create()`, `llmosafe_sift_and_process()`, etc.
 //!
 //! # Primary API
 //!
@@ -57,7 +75,7 @@
 //! }
 //! ```
 //!
-//! For manual control, `sift_text()` is the canonical single-entry sifter:
+//! For manual tier-by-tier control:
 //!
 //! ```ignore
 //! use llmosafe::{sift_text, WorkingMemory, ReasoningLoop};

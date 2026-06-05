@@ -62,6 +62,7 @@ pub struct StreamingTokenizer<'a> {
 }
 
 impl<'a> StreamingTokenizer<'a> {
+    /// Creates a new tokenizer that borrows the input string.
     pub fn new(text: &'a str) -> Self {
         Self {
             text: text.as_bytes(),

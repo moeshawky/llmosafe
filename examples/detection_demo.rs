@@ -18,6 +18,7 @@
 
 use llmosafe::{AdversarialDetector, ConfidenceTracker, DriftDetector, RepetitionDetector};
 
+/// Entry point: runs all four detection demos sequentially.
 fn main() {
     println!("=== llmosafe Detection Layer Demo ===\n");
 
@@ -38,6 +39,9 @@ fn main() {
     demo_adversarial();
 }
 
+/// Demonstrates `RepetitionDetector`: observes repeated strings,
+/// checks `is_stuck()` after N identical inputs, then resets and
+/// observes unique strings to show the detector recovers.
 fn demo_repetition() {
     let mut detector = RepetitionDetector::new(3);
     println!("Observing: 'same response' 4 times...");
@@ -63,6 +67,9 @@ fn demo_repetition() {
     );
 }
 
+/// Demonstrates `DriftDetector`: feeds observations ranked by
+/// semantic distance from a goal string ("build a rust safety library").
+/// Shows aligned, partially drifted, and fully drifted scores.
 fn demo_drift() {
     let mut detector = DriftDetector::new("build a rust safety library", 0.5);
     println!("Goal: 'build a rust safety library'");
@@ -93,6 +100,9 @@ fn demo_drift() {
     );
 }
 
+/// Demonstrates `ConfidenceTracker`: tracks a confidence metric over
+/// time, showing stable, decaying, and improving confidence trajectories
+/// with trend calculation.
 fn demo_confidence() {
     let mut tracker = ConfidenceTracker::new(0.5, 2);
     println!("Min confidence: 0.5, Decay threshold: 2 consecutive drops\n");
@@ -130,6 +140,9 @@ fn demo_confidence() {
     );
 }
 
+/// Demonstrates `AdversarialDetector`: tests a set of inputs against
+/// a registered adversarial pattern ("ignore previous instructions"),
+/// printing whether each input is safe or flagged with a score.
 fn demo_adversarial() {
     let mut detector = AdversarialDetector::new();
     detector.add_pattern("ignore previous instructions");

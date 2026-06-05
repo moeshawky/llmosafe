@@ -41,6 +41,11 @@ use crate::llmosafe_kernel::{
 /// - `0.0 ≤ error_mem ≤ 1.0`
 /// - Ring buffer size = SIZE (const generic, compile-time bound)
 /// - Surprise gate: `error_mem > surprise_threshold/65535` → HallucinationDetected
+///
+/// Fields:
+/// - `error_mem: f32` — normalised surprise error [0.0, 1.0].
+/// - `trend: f64` — linear regression slope over buffer window.
+/// - `mean_entropy: f64` — running mean entropy of ring buffer.
 #[derive(Debug, Clone, Copy)]
 pub struct MemoryOutput {
     /// Normalised surprise error `[0.0, 1.0]`.
@@ -134,11 +139,13 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
 
         Ok((validated, validated_proof))
     }
+    /// Returns the running mean entropy of the ring buffer.
     pub fn mean_entropy(&self) -> f64 {
         let sum: i128 = self.state.iter().map(CognitiveEntropy::mantissa).sum();
         sum as f64 / SIZE as f64
     }
 
+    /// Returns the variance of entropy values in the ring buffer.
     pub fn entropy_variance(&self) -> f64 {
         let mean = self.mean_entropy();
         let variance_sum: f64 = self
@@ -152,6 +159,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         variance_sum / SIZE as f64
     }
 
+    /// Returns the linear regression slope over the buffer window.
     pub fn trend(&self) -> f64 {
         let n = SIZE as f64;
         let mut sum_y = 0.0;
@@ -178,6 +186,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         (n * sum_x_times_y - sum_x * sum_y) / denominator
     }
 
+    /// Returns true if the absolute trend exceeds the given threshold.
     pub fn is_drifting(&self, threshold: f64) -> bool {
         self.trend().abs() > threshold
     }

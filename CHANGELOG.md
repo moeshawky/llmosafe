@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Stale detector count in lib.rs doc and README** — module docs and README said "6 detectors" but there are 5 detector structs (`RepetitionDetector`, `DriftDetector`, `ConfidenceTracker`, `AdversarialDetector`, `CusumDetector`). `ConfidenceTracker` produces two flags (low confidence + decay), yielding 6 flags from 5 detectors. Updated lib.rs doc, README detection layer section, and pipeline doc comments to say "5 detectors".
+
+- **Stale "not yet wired" claim in detection.rs** — removed outdated claim that detectors were not yet wired into the pipeline.
+
+### Added
+
+- **Re-exports for `CognitiveStability`, `BiasBreakdown`, `MemoryStats`** — these types are now re-exported from `llmosafe` root for direct import without reaching into submodules.
+
 ## [0.7.1] — 2026-06-05
 
 ### Added

@@ -1,4 +1,39 @@
-//! LLMOSAFE Tier 1 Cognitive Kernel
+//! Tier 1: Cognitive kernel — entropy stability gate and reasoning loop.
+//!
+//! Validates sifted data through binary entropy checks before execution.
+//! Provides the core data structures (`Synapse`, `CognitiveEntropy`) and the
+//! bounded `ReasoningLoop` that enforces depth limits.
+//!
+//! # Thresholds
+//!
+//! - `STABILITY_THRESHOLD = 50000` — above this, `stability()` returns `Unstable`
+//! - `PRESSURE_THRESHOLD = 40000` — above this, `validate()` and `next_step()`
+//!   return `CognitiveInstability`
+//!
+//! Entropy range [0, 65535]. Binary entropy `H(p) = 4p(1-p)` peaks at p=0.5
+//! (maximum classifier uncertainty). Both "confidently safe" (p≈0) and
+//! "confidently dangerous" (p≈1) are stable states.
+//!
+//! # Key Types
+//!
+//! - `Synapse` — 128-bit bitfield carrying entropy (16), surprise (16), bias (1),
+//!   position (12), timestamp (16), cascade depth (8), anchor hash (31),
+//!   reserved (28). Detection flags and OOV ratio packed into reserved bits.
+//! - `CognitiveEntropy<P, S>` — fixed-point entropy with precision P, scale S.
+//!   `is_stable(threshold)` comparison.
+//! - `ReasoningLoop<MAX_STEPS>` — bounded step counter. `next_step()` checks
+//!   depth, bias, and entropy stability. Returns `DepthExceeded` at limit.
+//! - `DynamicStabilityMonitor` — self-calibrating envelope tracker using
+//!   MSB-index bits (fast inverse sqrt technique). Reports `StabilityResult`:
+//!   `Stable`, `High`, `Low`, or `Both`.
+//! - `KernelOutput` — control-signal struct: `error_kernel` (f32), `is_stable`,
+//!   `depth`.
+//!
+//! # Typed Boundaries
+//!
+//! - `SiftedSynapse` — only constructible by `sift_perceptions()` via `SiftedProof`
+//! - `ValidatedSynapse` — only constructible by `WorkingMemory::update()` via `ValidatedProof`
+//! - `SiftedProof` / `ValidatedProof` — zero-cost unforgeable proof tokens
 #![deny(clippy::cast_lossless)]
 // The modular_bitfield proc-macro generates field-boundary validation
 // arithmetic, unsafe from_raw_parts for byte-level access, trivial
@@ -14,25 +49,6 @@
     trivial_casts,
     unsafe_code
 )]
-//! 
-//! Formal stability layer using cognitive entropy tracking. Validates sifted
-//! data through the entropy stability gate before execution.
-//!
-//! # Thresholds
-//!
-//! - `STABILITY_THRESHOLD = 50000` — stability() classifies entropy above this as `Unstable`
-//! - `PRESSURE_THRESHOLD = 40000` — validate() and next_step() gate on this; entropy
-//!   above this returns `CognitiveInstability` (Pressure zone is gated at the boundary).
-//!
-//! Entropy range is [0, 65535]. Binary entropy `H(p) = 4p(1-p)` peaks at
-//! p=0.5 (maximum classifier uncertainty) and drops to 0 at both extremes.
-//! Both "confidently safe" and "confidently dangerous" are stable states.
-//!
-//! # Components
-//!
-//! - `CognitiveEntropy<P,S>` — fixed-point entropy with precision P, scale S
-//! - `Synapse` — 128-bit input signal from the sifter (entropy, surprise, bias, hash)
-//! - `DynamicStabilityMonitor` — self-calibrating envelope tracker using MSB-index bits
 
 use crate::control_types::ControlSignal;
 
@@ -80,6 +96,9 @@ impl ControlSignal for KernelOutput {
 /// Cognitive entropy tracker using fixed-point arithmetic.
 /// Precision 28, scale 2 ensures deterministic arithmetic
 /// for agent surprise metrics.
+///
+/// Fields:
+/// - `mantissa: i128` — raw fixed-point entropy value in range [0, 65535].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CognitiveEntropy<const P: u32, const S: u32> {
@@ -258,6 +277,7 @@ impl<const P: u32, const S: u32> CognitiveEntropy<P, S> {
         Self { mantissa }
     }
 
+    /// Returns the raw mantissa value of this entropy.
     pub const fn mantissa(&self) -> i128 {
         self.mantissa
     }
@@ -278,6 +298,9 @@ impl<const P: u32, const S: u32> CognitiveEntropy<P, S> {
 
 /// The "Reasoning Step" container.
 /// Implements the LLMSAFE Axiom of Determinism.
+///
+/// Fields:
+/// - `current_step: usize` — current step index, incremented on each validated reasoning step.
 pub struct ReasoningLoop<const MAX_STEPS: usize> {
     current_step: usize,
 }
@@ -416,14 +439,17 @@ impl Synapse {
         Self::from_bytes(bytes)
     }
 
+    /// Returns the synapse entropy as a `CognitiveEntropy<28, 2>`.
     pub fn entropy(&self) -> CognitiveEntropy<28, 2> {
         CognitiveEntropy::new(i128::from(self.raw_entropy()))
     }
 
+    /// Returns the synapse surprise value as i128.
     pub fn surprise(&self) -> i128 {
         i128::from(self.raw_surprise())
     }
 
+    /// Returns the stability classification based on current entropy thresholds.
     pub fn stability(&self) -> CognitiveStability {
         let ent = i128::from(self.raw_entropy());
         if ent > STABILITY_THRESHOLD {
@@ -1014,38 +1040,47 @@ impl SiftedSynapse {
         Self { synapse }
     }
 
+    /// Returns the synapse entropy as a `CognitiveEntropy<28, 2>`.
     pub fn entropy(&self) -> CognitiveEntropy<28, 2> {
         self.synapse.entropy()
     }
 
+    /// Returns the synapse surprise value as i128.
     pub fn surprise(&self) -> i128 {
         self.synapse.surprise()
     }
 
+    /// Returns true if the synapse has bias detected.
     pub fn has_bias(&self) -> bool {
         self.synapse.has_bias()
     }
 
+    /// Returns the anchor hash value.
     pub fn anchor_hash(&self) -> u32 {
         self.synapse.anchor_hash()
     }
 
+    /// Returns the raw entropy value as u16.
     pub fn raw_entropy(&self) -> u16 {
         self.synapse.raw_entropy()
     }
 
+    /// Returns the raw surprise value as u16.
     pub fn raw_surprise(&self) -> u16 {
         self.synapse.raw_surprise()
     }
 
+    /// Returns the OOV ratio from the reserved field.
     pub fn oov_ratio(&self) -> u8 {
         self.synapse.oov_ratio()
     }
 
+    /// Returns the detection flags from the reserved field.
     pub fn detection_flags(&self) -> u8 {
         self.synapse.detection_flags()
     }
 
+    /// Returns the stability classification based on current entropy.
     pub fn stability(&self) -> CognitiveStability {
         self.synapse.stability()
     }
@@ -1059,6 +1094,7 @@ impl SiftedSynapse {
         self.synapse.validate()
     }
 
+    /// Consumes the wrapper and returns the inner `Synapse`.
     pub fn into_inner(self) -> Synapse {
         self.synapse
     }
@@ -1076,34 +1112,42 @@ impl ValidatedSynapse {
         Self { synapse }
     }
 
+    /// Returns the synapse entropy as a `CognitiveEntropy<28, 2>`.
     pub fn entropy(&self) -> CognitiveEntropy<28, 2> {
         self.synapse.entropy()
     }
 
+    /// Returns the synapse surprise value as i128.
     pub fn surprise(&self) -> i128 {
         self.synapse.surprise()
     }
 
+    /// Returns true if the synapse has bias detected.
     pub fn has_bias(&self) -> bool {
         self.synapse.has_bias()
     }
 
+    /// Returns the anchor hash value.
     pub fn anchor_hash(&self) -> u32 {
         self.synapse.anchor_hash()
     }
 
+    /// Returns the raw entropy value as u16.
     pub fn raw_entropy(&self) -> u16 {
         self.synapse.raw_entropy()
     }
 
+    /// Returns the raw surprise value as u16.
     pub fn raw_surprise(&self) -> u16 {
         self.synapse.raw_surprise()
     }
 
+    /// Returns the stability classification based on current entropy.
     pub fn stability(&self) -> CognitiveStability {
         self.synapse.stability()
     }
 
+    /// Consumes the wrapper and returns the inner `Synapse`.
     pub fn into_inner(self) -> Synapse {
         self.synapse
     }
