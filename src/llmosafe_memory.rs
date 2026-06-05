@@ -162,16 +162,19 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
     /// Returns the linear regression slope over the buffer window.
     pub fn trend(&self) -> f64 {
         let n = SIZE as f64;
-        let mut sum_y = 0.0;
-        let mut sum_x_times_y = 0.0;
+        // BOLT PERFORMANCE OPTIMIZATION:
+        // Accumulating sums natively in i128 instead of casting to f64 per loop iteration
+        // removes redundant floating point conversions from this tight loop.
+        let mut sum_y: i128 = 0;
+        let mut sum_x_times_y: i128 = 0;
 
         // Walk the ring buffer in temporal order: oldest first, newest last.
         // After wraparound, buffer order is [current_index, ..., SIZE-1, 0, ..., current_index-1].
         // Assign x=0 to oldest, x=SIZE-1 to newest.
         for offset in 0..SIZE {
             let idx = (self.current_index + offset) % SIZE;
-            let x = offset as f64;
-            let y = self.state[idx].mantissa() as f64;
+            let x = offset as i128;
+            let y = self.state[idx].mantissa(); // mantissa() already returns i128 natively
             sum_y += y;
             sum_x_times_y += x * y;
         }
@@ -183,7 +186,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         if denominator == 0.0 {
             return 0.0;
         }
-        (n * sum_x_times_y - sum_x * sum_y) / denominator
+        (n * (sum_x_times_y as f64) - sum_x * (sum_y as f64)) / denominator
     }
 
     /// Returns true if the absolute trend exceeds the given threshold.
