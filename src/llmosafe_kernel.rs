@@ -1175,7 +1175,6 @@ impl SiftedProof {
         SiftedProof(())
     }
 
-    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     pub fn for_testing() -> Self {
         SiftedProof(())
@@ -1198,7 +1197,6 @@ impl SiftedProof {
 pub struct ValidatedProof(pub(crate) ());
 
 impl ValidatedProof {
-    #[cfg(any(feature = "testing", test))]
     #[doc(hidden)]
     pub fn for_testing() -> Self {
         ValidatedProof(())
