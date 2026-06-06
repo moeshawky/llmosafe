@@ -396,17 +396,24 @@ impl EscalationPolicy {
                     reason: EscalationReason::Custom("DAL B: Halt downgraded"),
                     cooldown_ms,
                 },
-                SafetyDecision::Proceed | SafetyDecision::Warn(_) | SafetyDecision::Escalate { .. } | SafetyDecision::Exit(_) => decision,
+                SafetyDecision::Proceed
+                | SafetyDecision::Warn(_)
+                | SafetyDecision::Escalate { .. }
+                | SafetyDecision::Exit(_) => decision,
             },
             DesignAssuranceLevel::C => match decision {
                 SafetyDecision::Halt(..) | SafetyDecision::Escalate { .. } => {
                     SafetyDecision::Warn("DAL C: Escalation downgraded")
                 }
-                SafetyDecision::Proceed | SafetyDecision::Warn(_) | SafetyDecision::Exit(_) => decision,
+                SafetyDecision::Proceed | SafetyDecision::Warn(_) | SafetyDecision::Exit(_) => {
+                    decision
+                }
             },
             DesignAssuranceLevel::D => match decision {
                 SafetyDecision::Proceed | SafetyDecision::Warn(_) => decision,
-                SafetyDecision::Escalate { .. } | SafetyDecision::Halt(..) | SafetyDecision::Exit(_) => SafetyDecision::Warn("DAL D: Capped at Warn"),
+                SafetyDecision::Escalate { .. }
+                | SafetyDecision::Halt(..)
+                | SafetyDecision::Exit(_) => SafetyDecision::Warn("DAL D: Capped at Warn"),
             },
             DesignAssuranceLevel::E => SafetyDecision::Proceed,
         }
@@ -432,10 +439,8 @@ impl EscalationPolicy {
     ) -> SafetyDecision {
         // Halt conditions: adversarial attack or high composite risk
         if !detection.adversarial_patterns.is_empty() {
-            return self.apply_dal_to_decision(SafetyDecision::Halt(
-                KernelError::BiasHaloDetected,
-                30000,
-            ));
+            return self
+                .apply_dal_to_decision(SafetyDecision::Halt(KernelError::BiasHaloDetected, 30000));
         }
         if detection.risk_score > 0.85 {
             return self.apply_dal_to_decision(SafetyDecision::Halt(

@@ -17,8 +17,8 @@
 use llmosafe::llmosafe_classifier::classify_text;
 #[cfg(feature = "testing")]
 use llmosafe::{
-    KernelError, ReasoningLoop, SiftedProof, SiftedSynapse, SifterOutput, Synapse, ValidatedProof,
-    WorkingMemory, sift_text,
+    sift_text, KernelError, ReasoningLoop, SiftedProof, SiftedSynapse, SifterOutput, Synapse,
+    ValidatedProof, WorkingMemory,
 };
 
 #[cfg(feature = "testing")]

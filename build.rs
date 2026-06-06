@@ -117,7 +117,7 @@ fn generate_from_model(path: &Path) -> Result<String, String> {
     rs.push_str(&header);
 
     for (hash, idf, coef) in &entries {
-            let _ = writeln!(rs, "    ({hash:#018x}u64, {idf:.5}f32, {coef:.5}f32),");
+        let _ = writeln!(rs, "    ({hash:#018x}u64, {idf:.5}f32, {coef:.5}f32),");
     }
 
     rs.push_str("];\n");

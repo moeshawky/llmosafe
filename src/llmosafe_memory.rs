@@ -233,7 +233,9 @@ mod tests {
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::new(synapse);
         assert_eq!(
-            memory.update(sifted, SiftedProof::for_testing()).unwrap_err(),
+            memory
+                .update(sifted, SiftedProof::for_testing())
+                .unwrap_err(),
             KernelError::HallucinationDetected
         );
 
@@ -244,7 +246,9 @@ mod tests {
         synapse.set_has_bias(true);
         let sifted = SiftedSynapse::new(synapse);
         assert_eq!(
-            memory.update(sifted, SiftedProof::for_testing()).unwrap_err(),
+            memory
+                .update(sifted, SiftedProof::for_testing())
+                .unwrap_err(),
             KernelError::BiasHaloDetected
         );
 
@@ -255,7 +259,9 @@ mod tests {
         synapse.set_has_bias(false);
         let sifted = SiftedSynapse::new(synapse);
         assert_eq!(
-            memory.update(sifted, SiftedProof::for_testing()).unwrap_err(),
+            memory
+                .update(sifted, SiftedProof::for_testing())
+                .unwrap_err(),
             KernelError::CognitiveInstability
         );
     }
@@ -293,7 +299,9 @@ mod tests {
         let sifted = SiftedSynapse::new(synapse);
         // Any surprise > 0 should fail
         assert_eq!(
-            memory.update(sifted, SiftedProof::for_testing()).unwrap_err(),
+            memory
+                .update(sifted, SiftedProof::for_testing())
+                .unwrap_err(),
             KernelError::HallucinationDetected
         );
     }
@@ -305,7 +313,9 @@ mod tests {
         let sifted = SiftedSynapse::new(synapse);
         // Even surprise 0 > -1, so it should fail
         assert_eq!(
-            memory.update(sifted, SiftedProof::for_testing()).unwrap_err(),
+            memory
+                .update(sifted, SiftedProof::for_testing())
+                .unwrap_err(),
             KernelError::HallucinationDetected
         );
     }

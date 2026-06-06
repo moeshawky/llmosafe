@@ -44,11 +44,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::missing_errors_doc)]
 // These allows apply only within this module's generated code region.
-#![allow(
-    clippy::arithmetic_side_effects,
-    trivial_casts,
-    unsafe_code
-)]
+#![allow(clippy::arithmetic_side_effects, trivial_casts, unsafe_code)]
 
 use crate::control_types::ControlSignal;
 
@@ -411,11 +407,7 @@ impl Default for Synapse {
 // The bitfield-generated methods (new, from_bytes, into_bytes, field
 // getters/setters) contain field-boundary validation arithmetic that
 // is known-safe by construction.
-#[allow(
-    clippy::arithmetic_side_effects,
-    unsafe_code,
-    clippy::trivial_casts
-)]
+#[allow(clippy::arithmetic_side_effects, unsafe_code, clippy::trivial_casts)]
 impl Synapse {
     /// Creates a Synapse from a raw u128.
     ///

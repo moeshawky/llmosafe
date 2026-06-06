@@ -74,7 +74,6 @@ pub trait ControlSignal {
     fn setpoint(&self) -> f32;
 }
 
-
 /// Safety override flags applied AFTER PID computation.
 ///
 /// Infusion pump pattern: PID computes pure risk from sensor fusion,

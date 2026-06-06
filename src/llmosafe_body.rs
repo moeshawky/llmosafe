@@ -193,11 +193,7 @@ impl ResourceGuard {
     /// * `raw_entropy_val` - Overrides the `raw_entropy()` return value
     /// * `pressure_val` - Overrides the `pressure()` return value
     #[cfg(any(test, feature = "testing"))]
-    pub fn for_testing(
-        ceiling_bytes: usize,
-        raw_entropy_val: u16,
-        pressure_val: u8,
-    ) -> Self {
+    pub fn for_testing(ceiling_bytes: usize, raw_entropy_val: u16, pressure_val: u8) -> Self {
         Self {
             memory_ceiling_bytes: ceiling_bytes,
             raw_entropy_override: Some(raw_entropy_val),

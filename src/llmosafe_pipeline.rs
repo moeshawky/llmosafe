@@ -49,11 +49,11 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 use crate::control_types::OverrideFlags;
+#[cfg(feature = "std")]
+use crate::llmosafe_detection::DetectionResult;
 use crate::llmosafe_detection::{
     AdversarialDetector, ConfidenceTracker, CusumDetector, DriftDetector, RepetitionDetector,
 };
-#[cfg(feature = "std")]
-use crate::llmosafe_detection::DetectionResult;
 use crate::llmosafe_integration::EscalationPolicy;
 #[cfg(feature = "std")]
 use crate::llmosafe_integration::SafetyDecision;
@@ -262,7 +262,9 @@ impl PipelineResult {
     pub fn halt_reason(&self) -> Option<&KernelError> {
         match &self.decision {
             SafetyDecision::Halt(err, _) | SafetyDecision::Exit(err) => Some(err),
-            SafetyDecision::Proceed | SafetyDecision::Warn(_) | SafetyDecision::Escalate { .. } => None,
+            SafetyDecision::Proceed | SafetyDecision::Warn(_) | SafetyDecision::Escalate { .. } => {
+                None
+            }
         }
     }
 
@@ -286,7 +288,6 @@ impl PipelineResult {
         self.body_pressure.unwrap_or(0)
     }
 }
-
 
 /// Five-stage cognitive safety pipeline.
 ///
@@ -449,11 +450,9 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         match guard.check_with_deadline(deadline) {
             Ok(_synapse) => Ok(self.process(text)),
-            Err(KernelError::DeadlineExceeded) => Ok(self.process_with_pressure(
-                text,
-                guard.raw_entropy(),
-                guard.pressure(),
-            )),
+            Err(KernelError::DeadlineExceeded) => {
+                Ok(self.process_with_pressure(text, guard.raw_entropy(), guard.pressure()))
+            }
             Err(e) => Err(e),
         }
     }
@@ -643,11 +642,9 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
                 },
                 risk_score: if anomaly_detected { 0.9 } else { 0.0 },
             };
-            let gate_decision = self.esc_policy.decide_from_detection(
-                &detection_result,
-                entropy,
-                surprise_val,
-            );
+            let gate_decision =
+                self.esc_policy
+                    .decide_from_detection(&detection_result, entropy, surprise_val);
             if gate_decision.must_halt() {
                 stages |= STAGE_MONITOR;
                 let monitor_state = self.monitor.update(u32::from(entropy));
@@ -784,7 +781,10 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
                     s,
                 )
             }
-            KernelError::DepthExceeded | KernelError::ResourceExhaustion | KernelError::SelfMemoryExceeded | KernelError::DeadlineExceeded => {
+            KernelError::DepthExceeded
+            | KernelError::ResourceExhaustion
+            | KernelError::SelfMemoryExceeded
+            | KernelError::DeadlineExceeded => {
                 let mut s = Synapse::new();
                 s.set_raw_entropy(entropy);
                 (SafetyDecision::Halt(err, 30000), s)
@@ -837,7 +837,10 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             KernelError::CognitiveInstability => {
                 SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)
             }
-            KernelError::HallucinationDetected | KernelError::ResourceExhaustion | KernelError::SelfMemoryExceeded | KernelError::DeadlineExceeded => SafetyDecision::Halt(err, 30000),
+            KernelError::HallucinationDetected
+            | KernelError::ResourceExhaustion
+            | KernelError::SelfMemoryExceeded
+            | KernelError::DeadlineExceeded => SafetyDecision::Halt(err, 30000),
         };
         let mut err_synapse = Synapse::new();
         err_synapse.set_raw_entropy(entropy);

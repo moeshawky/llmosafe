@@ -43,9 +43,7 @@ impl SafetyMiddleware {
                 eprintln!("Warn: {}", msg);
                 Ok(())
             }
-            SafetyDecision::Escalate { reason, .. } => {
-                Err(format!("Escalated: {:?}", reason))
-            }
+            SafetyDecision::Escalate { reason, .. } => Err(format!("Escalated: {:?}", reason)),
             SafetyDecision::Halt(err, _) => Err(format!("Halted: {:?}", err)),
             SafetyDecision::Exit(err) => Err(format!("Exit: {:?}", err)),
         }
