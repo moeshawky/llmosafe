@@ -21,11 +21,206 @@ create_exception!(_llmosafe, BiasHaloDetectedError, LLMOSafeError,
     "Bias manipulation patterns detected in input text.\n\nThis is an enforcement-grade signal — the input may be attempting\nto manipulate the system into ignoring safety limits."
 );
 
+// ── Enums and core types (mirror of Rust public API) ───────────
+
+/// Safety decision outcome from the cognitive safety pipeline.
+///
+/// This is the Python mirror of the Rust `SafetyDecision` enum.
+/// Severity order: Proceed (0) < Warn (1) < Escalate (2) < Halt (3) < Exit (4).
+#[pyclass]
+#[derive(Clone, PartialEq, Eq)]
+struct SafetyDecision {
+    #[pyo3(get)]
+    code: i32,
+    #[pyo3(get)]
+    name: String,
+}
+
+#[pymethods]
+impl SafetyDecision {
+    /// Construct from a raw decision code (as returned by pipeline functions).
+    #[staticmethod]
+    fn from_code(code: i32) -> Self {
+        let name = match code {
+            0 => "Proceed",
+            1 => "Warn",
+            2 => "Escalate",
+            -8..=-1 => "Halt",
+            -9 => "Invalid",
+            _ => "Unknown",
+        }
+        .to_string();
+        Self { code, name }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("SafetyDecision({}: {})", self.code, self.name)
+    }
+
+    fn __int__(&self) -> i32 {
+        self.code
+    }
+
+    fn __str__(&self) -> String {
+        self.name.clone()
+    }
+
+    /// Returns true if processing can continue (Proceed or Warn).
+    fn can_proceed(&self) -> bool {
+        matches!(self.code, 0 | 1)
+    }
+
+    /// Returns true if this is a hard halt (negative code).
+    fn must_halt(&self) -> bool {
+        self.code < 0
+    }
+
+    /// Severity 0-4.
+    fn severity(&self) -> u8 {
+        match self.code {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            n if n < 0 && n >= -7 => 3,
+            -8 => 3,
+            _ => 4,
+        }
+    }
+}
+
+/// Resource pressure level (maps 0-100% to semantic buckets).
+#[pyclass]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PressureLevel {
+    #[pyo3(get)]
+    value: u8, // 0=Nominal, 1=Elevated, 2=Critical, 3=Emergency
+    #[pyo3(get)]
+    name: String,
+}
+
+#[pymethods]
+impl PressureLevel {
+    #[staticmethod]
+    fn from_percentage(pct: u8) -> Self {
+        match pct {
+            0..=25 => Self { value: 0, name: "Nominal".to_string() },
+            26..=50 => Self { value: 1, name: "Elevated".to_string() },
+            51..=75 => Self { value: 2, name: "Critical".to_string() },
+            _ => Self { value: 3, name: "Emergency".to_string() },
+        }
+    }
+
+    fn requires_action(&self) -> bool {
+        self.value >= 2
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PressureLevel({}: {})", self.value, self.name)
+    }
+}
+
+/// Design Assurance Level (DO-178C style). Higher letter = weaker enforcement.
+#[pyclass]
+#[derive(Clone, Copy)]
+struct DesignAssuranceLevel {
+    #[pyo3(get)]
+    value: u8, // 0=A ... 4=E
+}
+
+#[pymethods]
+impl DesignAssuranceLevel {
+    #[staticmethod]
+    fn from_u8(v: u8) -> Self {
+        Self { value: v.min(4) }
+    }
+
+    fn __str__(&self) -> &'static str {
+        match self.value {
+            0 => "A",
+            1 => "B",
+            2 => "C",
+            3 => "D",
+            _ => "E",
+        }
+    }
+}
+
+/// The 128-bit Synapse (Binary Cognitive Protocol).
+///
+/// Full mirror of the Rust `Synapse` bitfield.
+/// Use `from_raw_u128`, `validate()`, accessors for entropy/surprise/flags, etc.
+#[pyclass]
+#[derive(Clone, Copy)]
+struct PySynapse {
+    inner: Synapse,
+}
+
+#[pymethods]
+impl PySynapse {
+    #[staticmethod]
+    fn from_raw_u128(bits: u128) -> Self {
+        Self { inner: Synapse::from_raw_u128(bits) }
+    }
+
+    #[staticmethod]
+    fn from_raw_u64(bits: u64) -> Self {
+        // Convenience: zero-extends upper 64 bits (as the Rust from_raw_u64 does).
+        Self { inner: Synapse::from_raw_u64(bits) }
+    }
+
+    fn to_u128(&self) -> u128 {
+        // Reconstruct from bytes for a true 128-bit roundtrip value.
+        u128::from_le_bytes(self.inner.into_bytes())
+    }
+
+    fn validate(&self) -> PyResult<()> {
+        self.inner.validate().map_err(|e| match e {
+            KernelError::CognitiveInstability => CognitiveInstabilityError::new_err("entropy exceeds pressure threshold"),
+            KernelError::BiasHaloDetected => BiasHaloDetectedError::new_err("bias detected"),
+            KernelError::DepthExceeded => LLMOSafeError::new_err("depth exceeded"),
+            KernelError::HallucinationDetected => LLMOSafeError::new_err("hallucination (surprise)"),
+            KernelError::ResourceExhaustion => ResourceExhaustedError::new_err("resource exhaustion"),
+            _ => LLMOSafeError::new_err(e.to_string()),
+        })
+    }
+
+    fn raw_entropy(&self) -> u16 { self.inner.raw_entropy() }
+    fn raw_surprise(&self) -> u16 { self.inner.raw_surprise() }
+    fn has_bias(&self) -> bool { self.inner.has_bias() }
+    fn cascade_depth(&self) -> u8 { self.inner.cascade_depth() }
+    fn anchor_hash(&self) -> u32 { self.inner.anchor_hash() }
+
+    fn detection_flags(&self) -> u8 { self.inner.detection_flags() }
+    fn oov_ratio(&self) -> u8 { self.inner.oov_ratio() }
+
+    fn set_detection_flags(&mut self, flags: u8) {
+        self.inner.set_detection_flags(flags);
+    }
+    fn set_oov_ratio(&mut self, ratio: u8) {
+        self.inner.set_oov_ratio(ratio);
+    }
+
+    fn combined_risk_bits(&self) -> u16 {
+        self.inner.combined_risk_bits()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Synapse(entropy={}, surprise={}, bias={}, flags=0x{:02x}, oov={})",
+            self.inner.raw_entropy(),
+            self.inner.raw_surprise(),
+            self.inner.has_bias(),
+            self.inner.detection_flags(),
+            self.inner.oov_ratio()
+        )
+    }
+}
+
 // ── Imports ────────────────────────────────────────────────────
 
 use ::llmosafe::llmosafe_body::ResourceGuard;
 use ::llmosafe::llmosafe_kernel::{KernelError, Synapse};
-use ::llmosafe::llmosafe_sifter::sift_text;
+use ::llmosafe::llmosafe_sifter::{sift_text, get_bias_breakdown as rust_get_bias_breakdown, calculate_halo_signal, BiasBreakdown};
 use ::llmosafe::llmosafe_body::llmosafe_get_environmental_entropy;
 use ::llmosafe::llmosafe_memory::cognitive_memory::{process_state_update, get_memory_stats};
 use ::llmosafe::c_abi::{
@@ -39,7 +234,7 @@ use ::llmosafe::c_abi::{
     llmosafe_configure,
 };
 
-// ── Bias Detection ─────────────────────────────────────────────
+// ── Bias Detection (dual-path + helpers) ───────────────────────
 
 /// Calculate the bias entropy score for text via dual-path analysis.
 ///
@@ -48,33 +243,62 @@ use ::llmosafe::c_abi::{
 /// Returns the combined entropy in `[0, 65535]` — the greater of the
 /// two layers' scores.
 ///
-/// **Dual-path architecture:**
-/// - **Classifier layer** (adaptive): TF-IDF logistic regression with
-///   93.4% accuracy. Detects learned manipulation patterns.
-/// - **Keyword layer** (innate): 8 bias categories (authority, social
-///   proof, scarcity, urgency, emotional appeal, expertise signaling,
-///   semantic traps, template fitting). Negation-aware.
+/// This is equivalent to the Rust `sift_text()` entry point (not the
+/// legacy keyword-only `calculate_halo_signal`).
 ///
-/// Either layer can elevate the score. The output is `max(classifier_score,
-/// keyword_score)` — no double-counting.
+/// **Dual-path architecture:**
+/// - **Classifier layer** (adaptive): TF-IDF logistic regression.
+/// - **Keyword layer** (innate): 8 bias categories + negation handling.
 ///
 /// Args:
 ///     text: Input text to scan for manipulation patterns.
 ///
 /// Returns:
-///     Combined entropy score `[0, 65535]`. 0 = safe, higher = manipulation
-///     probability. The classifier sigmoid maps to probability — 32768 ≈ p=0.5
-///     (maximum uncertainty).
-///
-/// Example:
-///     >>> calculate_halo("The expert provides an official recommendation")
-///     200
-///     >>> calculate_halo("A normal sentence with no manipulation")
-///     0
+///     Combined entropy score `[0, 65535]`.
 #[pyfunction]
 fn calculate_halo(text: &str) -> u16 {
     let (sifted, _proof) = sift_text(text);
     sifted.raw_entropy()
+}
+
+/// Legacy keyword-only halo signal (no classifier).
+///
+/// This is the old `calculate_halo_signal` path — pure keyword bias,
+/// no TF-IDF. Most users should prefer `calculate_halo` (dual-path).
+#[pyfunction]
+fn calculate_halo_signal_legacy(text: &str) -> u16 {
+    calculate_halo_signal(text)
+}
+
+/// Compute CPMI-style utility between an observation and an objective.
+///
+/// Returns a u16 score representing how much the observation serves the
+/// stated objective (higher = more useful for the goal).
+#[pyfunction]
+fn calculate_utility(obs: &str, objective: &str) -> u16 {
+    ::llmosafe::llmosafe_sifter::calculate_utility(obs, objective)
+}
+
+/// Detailed per-category bias breakdown for text.
+///
+/// Returns a dict with keys for the 8 bias categories plus `total` and
+/// `has_bias`.
+#[pyfunction]
+fn get_bias_breakdown(text: &str, py: Python<'_>) -> PyResult<PyObject> {
+    let breakdown: BiasBreakdown = rust_get_bias_breakdown(text);
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("authority", breakdown.authority)?;
+    dict.set_item("social_proof", breakdown.social_proof)?;
+    dict.set_item("scarcity", breakdown.scarcity)?;
+    dict.set_item("urgency", breakdown.urgency)?;
+    dict.set_item("emotional_appeal", breakdown.emotional_appeal)?;
+    dict.set_item("expertise_signaling", breakdown.expertise_signaling)?;
+    dict.set_item("semantic_traps", breakdown.semantic_traps)?;
+    dict.set_item("template_fitting", breakdown.template_fitting)?;
+    dict.set_item("emphasis", breakdown.emphasis)?;
+    dict.set_item("total", breakdown.total())?;
+    dict.set_item("has_bias", breakdown.total() > 0)?;
+    Ok(dict.into())
 }
 
 // ── Resource Management ────────────────────────────────────────
@@ -147,24 +371,16 @@ fn get_resource_pressure(ceiling_mb: u32) -> u8 {
 
 /// Check if a cognitive state (synapse) is stable.
 ///
-/// The synapse_bits parameter encodes cognitive state in a 64-bit integer.
-/// For most usage, only the low 16 bits (raw_entropy, 0–1000) matter.
-/// Use make_synapse() to construct values.
-///
-/// **Bit layout** (lower 64 bits):
-///
-///     Bits [0:15]  → raw_entropy   (u16, operational range 0–1000)
-///     Bits [16:31] → raw_surprise  (u16, 0–65535)
-///     Bit  [32]    → has_bias      (0 or 1)
-///     Bits [33:44] → position      (u12)
-///     Bits [45:60] → timestamp     (u16)
-///     Bits [61:68] → cascade_depth (u8)
+/// The synapse_bits parameter encodes the full 128-bit Synapse.
+/// Pass the complete value (use make_synapse with full layout or construct
+/// directly). Upper 64 bits carry cascade_depth, anchor_hash, and reserved
+/// (including detection flags and OOV ratio).
 ///
 /// **Return codes**:
 ///
 ///     0  = stable
 ///     -1 = DepthExceeded (runaway recursion)
-///     -2 = CognitiveInstability (entropy > 1000)
+///     -2 = CognitiveInstability (entropy > PRESSURE_THRESHOLD=40000)
 ///     -3 = BiasHaloDetected (has_bias bit set)
 ///     -4 = HallucinationDetected (surprise > threshold)
 ///     -5 = ResourceExhaustion
@@ -172,7 +388,7 @@ fn get_resource_pressure(ceiling_mb: u32) -> u8 {
 ///     -7 = DeadlineExceeded
 ///
 /// Args:
-///     synapse_bits: 64-bit encoded cognitive state.
+///     synapse_bits: 128-bit encoded cognitive state (u128 / Python int).
 ///
 /// Returns:
 ///     0 if stable, negative error code otherwise.
@@ -180,11 +396,11 @@ fn get_resource_pressure(ceiling_mb: u32) -> u8 {
 /// Example:
 ///     >>> get_stability(400)    # entropy=400, stable
 ///     0
-///     >>> get_stability(1100)   # entropy=1100, unstable
+///     >>> get_stability(41000)  # entropy > PRESSURE_THRESHOLD, unstable
 ///     -2
 #[pyfunction]
-fn get_stability(synapse_bits: u64) -> i32 {
-    let synapse = Synapse::from_raw_u64(synapse_bits);
+fn get_stability(synapse_bits: u128) -> i32 {
+    let synapse = Synapse::from_raw_u128(synapse_bits);
     match synapse.validate() {
         Ok(()) => 0,
         Err(KernelError::CognitiveInstability) => -2,
@@ -275,35 +491,32 @@ fn memory_stats(py: Python<'_>) -> PyResult<PyObject> {
 /// Process a cognitive state update through the safety pipeline.
 ///
 /// Pipeline: surprise gating → entropy check (via the global WorkingMemory,
-/// 64-entry ring buffer, surprise threshold 500). Does NOT run the Rust-side
+/// 64-entry ring buffer, surprise threshold 58000). Does NOT run the Rust-side
 /// sifter — call `calculate_halo()` to detect manipulation patterns
 /// before constructing the synapse.
 ///
-/// **Bit layout** for synapse_bits — same as get_stability():
-///
-///     Bits [0:15]  → raw_entropy   (u16, 0–1000)
-///     Bits [16:31] → raw_surprise  (u16, 0–65535)
-///     Bit  [32]    → has_bias      (0 or 1)
+/// Accepts the full 128-bit Synapse (upper bits carry cascade depth, anchor
+/// hash, detection flags, OOV ratio, etc.).
 ///
 /// **Return codes** — same as get_stability():
 ///
 ///     0  = success
 ///     -1 = DepthExceeded
-///     -2 = CognitiveInstability (entropy > 1000)
+///     -2 = CognitiveInstability (entropy > PRESSURE_THRESHOLD=40000)
 ///     -3 = BiasHaloDetected
-///     -4 = HallucinationDetected (surprise > 500)
+///     -4 = HallucinationDetected
 ///     -5 = ResourceExhaustion
 ///     -6 = SelfMemoryExceeded
 ///     -7 = DeadlineExceeded
 ///
 /// Args:
-///     synapse_bits: 64-bit encoded cognitive state.
+///     synapse_bits: 128-bit encoded cognitive state (u128 / Python int).
 ///
 /// Returns:
 ///     0 on success, negative error code on failure.
 #[pyfunction]
-fn process_synapse(synapse_bits: u64) -> i32 {
-    process_state_update(synapse_bits.into())
+fn process_synapse(synapse_bits: u128) -> i32 {
+    process_state_update(synapse_bits)
 }
 
 // ── PID State Introspection ─────────────────────────────────────
@@ -434,38 +647,30 @@ fn get_body_pressure(instance_id: u32) -> u32 {
 
 /// Read the safety decision from the last pipeline invocation.
 ///
-/// Returns a dict with the decision name as a string:
-/// "Proceed", "Warn", "Escalate", or "Halt".
+/// Returns a `SafetyDecision` instance (with `.code` and `.name`).
+/// Also includes the raw code for convenience.
 ///
 /// Args:
 ///     instance_id: Pipeline handle returned by `llmosafe_create()` (0–15).
 ///
 /// Returns:
-///     dict with key ``decision`` mapping to a string.
+///     SafetyDecision object.
 ///
 /// Raises:
 ///     LLMOSafeError: If `instance_id` is invalid or no result is available.
 #[pyfunction]
 fn get_decision(instance_id: u32) -> PyResult<PyObject> {
     let code = llmosafe_get_decision(instance_id as usize);
-    match code {
-        -9 => Err(LLMOSafeError::new_err(format!(
+    if code == -9 {
+        return Err(LLMOSafeError::new_err(format!(
             "instance {} not found or no result available",
             instance_id
-        ))),
-        _ => Python::with_gil(|py| {
-            let dict = pyo3::types::PyDict::new(py);
-            let name: &str = match code {
-                0 => "Proceed",
-                1 => "Warn",
-                2 => "Escalate",
-                -8..=-1 => "Halt",
-                _ => "Unknown",
-            };
-            dict.set_item("decision", name)?;
-            Ok(dict.into())
-        }),
+        )));
     }
+    Python::with_gil(|py| {
+        let sd = SafetyDecision::from_code(code);
+        Ok(sd.into_py(py))
+    })
 }
 
 /// Read the entropy field from the last pipeline invocation.
@@ -565,15 +770,18 @@ fn get_step_count(instance_id: u32) -> u32 {
 /// anomaly flag = distribution-shift attack, high OOV + adversarial
 /// flag = confirmed adversarial input.
 ///
+/// Accepts the full 128-bit Synapse (upper bits are preserved internally
+/// by Synapse but do not affect the returned u16 risk encoding).
+///
 /// Args:
-///     synapse_bits: 64-bit encoded synapse.
+///     synapse_bits: 128-bit encoded synapse (u128 / Python int).
 ///
 /// Returns:
 ///     Combined risk bits (u16). Mask with `0b111111_11111111` for OOV,
 ///     mask with `0b111111` for detection flags.
 #[pyfunction]
-fn combined_risk_bits(synapse_bits: u64) -> u16 {
-    let synapse = Synapse::from_raw_u64(synapse_bits);
+fn combined_risk_bits(synapse_bits: u128) -> u16 {
+    let synapse = Synapse::from_raw_u128(synapse_bits);
     synapse.combined_risk_bits()
 }
 
@@ -607,13 +815,18 @@ struct CognitivePipeline {
 #[pymethods]
 impl CognitivePipeline {
     #[new]
+    #[pyo3(signature = (objective=None, dal_level=None, use_detection_gate=None, memory_depth=None))]
     fn new(
+        objective: Option<String>,
         dal_level: Option<u8>,
         use_detection_gate: Option<bool>,
         memory_depth: Option<usize>,
     ) -> PyResult<Self> {
-        let objective = b"safety";
-        let handle = llmosafe_create(objective.as_ptr(), objective.len());
+        // Mirror Rust CognitivePipeline::new(objective) — objective is now accepted.
+        // Default "safety" preserves backward compatibility for old callers.
+        let objective = objective.unwrap_or_else(|| "safety".to_string());
+        let obj_bytes = objective.as_bytes();
+        let handle = llmosafe_create(obj_bytes.as_ptr(), obj_bytes.len());
         if handle == usize::MAX {
             return Err(LLMOSafeError::new_err(
                 "Failed to create pipeline — arena full (max 16 instances)"
@@ -891,6 +1104,9 @@ impl Drop for CognitivePipeline {
 #[pymodule]
 fn _llmosafe(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calculate_halo, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_halo_signal_legacy, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_utility, m)?)?;
+    m.add_function(wrap_pyfunction!(get_bias_breakdown, m)?)?;
     m.add_function(wrap_pyfunction!(check_resources, m)?)?;
     m.add_function(wrap_pyfunction!(get_resource_pressure, m)?)?;
     m.add_function(wrap_pyfunction!(get_stability, m)?)?;
@@ -910,10 +1126,38 @@ fn _llmosafe(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_oov_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(get_stages_executed, m)?)?;
     m.add_function(wrap_pyfunction!(get_step_count, m)?)?;
+
+    // Exceptions
     m.add("LLMOSafeError", _py.get_type::<LLMOSafeError>())?;
     m.add("ResourceExhaustedError", _py.get_type::<ResourceExhaustedError>())?;
     m.add("CognitiveInstabilityError", _py.get_type::<CognitiveInstabilityError>())?;
     m.add("BiasHaloDetectedError", _py.get_type::<BiasHaloDetectedError>())?;
+
+    // Core class
     m.add_class::<CognitivePipeline>()?;
+
+    // Mirror enums and core types
+    m.add_class::<SafetyDecision>()?;
+    m.add_class::<PressureLevel>()?;
+    m.add_class::<DesignAssuranceLevel>()?;
+    m.add_class::<PySynapse>()?;
+
+    // Public constants (mirror of Rust)
+    m.add("STABILITY_THRESHOLD", 50000u32)?;
+    m.add("PRESSURE_THRESHOLD", 40000u32)?;
+    m.add("STAGE_SIFT", 0x01u8)?;
+    m.add("STAGE_MEMORY", 0x02u8)?;
+    m.add("STAGE_KERNEL", 0x04u8)?;
+    m.add("STAGE_DETECTION", 0x08u8)?;
+    m.add("STAGE_MONITOR", 0x10u8)?;
+    m.add("STAGE_BODY", 0x20u8)?;
+    m.add("FLAG_STUCK", 0x01u8)?;
+    m.add("FLAG_DRIFTING", 0x02u8)?;
+    m.add("FLAG_LOW_CONFIDENCE", 0x04u8)?;
+    m.add("FLAG_DECAYING", 0x08u8)?;
+    m.add("FLAG_ANOMALY", 0x10u8)?;
+    m.add("FLAG_ADVERSARIAL", 0x20u8)?;
+    m.add("DETECTION_FLAGS_MASK", 0x3Fu8)?;
+
     Ok(())
 }

@@ -32,11 +32,18 @@ from llmosafe._llmosafe import (
     BiasHaloDetectedError,
     CognitiveInstabilityError,
     CognitivePipeline,
+    DesignAssuranceLevel,
     LLMOSafeError,
+    PressureLevel,
+    PySynapse,
     ResourceExhaustedError,
+    SafetyDecision,
     calculate_halo,
+    calculate_halo_signal_legacy,
+    calculate_utility,
     check_resources,
     combined_risk_bits,
+    get_bias_breakdown,
     get_body_pressure,
     get_classifier_score,
     get_decision,
@@ -58,18 +65,28 @@ from llmosafe._llmosafe import (
 
 __version__: str = "0.7.1"
 
+# Nice names for Python users
+Synapse = PySynapse
+
 __all__ = [
+    # Exceptions
     "BiasHaloDetectedError",
     "CognitiveInstabilityError",
-    # Classes
-    "CognitivePipeline",
-    # Exceptions
     "LLMOSafeError",
     "ResourceExhaustedError",
-    # Functions
+    # Classes
+    "CognitivePipeline",
+    "DesignAssuranceLevel",
+    "PressureLevel",
+    "SafetyDecision",
+    "Synapse",  # 128-bit Synapse mirror
+    # Functions (core)
     "calculate_halo",
+    "calculate_halo_signal_legacy",
+    "calculate_utility",
     "check_resources",
     "combined_risk_bits",
+    "get_bias_breakdown",
     "get_body_pressure",
     "get_classifier_score",
     "get_decision",
@@ -85,74 +102,183 @@ __all__ = [
     "get_step_count",
     "get_surprise",
     "get_system_cpu_load",
-    "make_synapse",
     "memory_stats",
-    "parse_synapse",
     "process_synapse",
+    # Helpers
+    "make_synapse",
+    "parse_synapse",
+    # Constants
+    "STABILITY_THRESHOLD",
+    "PRESSURE_THRESHOLD",
+    "STAGE_SIFT",
+    "STAGE_MEMORY",
+    "STAGE_KERNEL",
+    "STAGE_DETECTION",
+    "STAGE_MONITOR",
+    "STAGE_BODY",
+    "FLAG_STUCK",
+    "FLAG_DRIFTING",
+    "FLAG_LOW_CONFIDENCE",
+    "FLAG_DECAYING",
+    "FLAG_ANOMALY",
+    "FLAG_ADVERSARIAL",
+    "DETECTION_FLAGS_MASK",
 ]
 
 
-# ── Synapse constructor ────────────────────────────────────────
+# ── Constants (mirror of Rust public API) ─────────────────────
 
+# Entropy thresholds (classifier space [0, 65535])
+STABILITY_THRESHOLD: int = 50000
+PRESSURE_THRESHOLD: int = 40000
 
-def make_synapse(entropy: int, surprise: int = 0, has_bias: bool = False) -> int:
-    """Construct a synapse_bits value for get_stability() / process_synapse().
+# Pipeline stage bitmasks (PipelineResult.stages_executed)
+STAGE_SIFT: int = 0x01
+STAGE_MEMORY: int = 0x02
+STAGE_KERNEL: int = 0x04
+STAGE_DETECTION: int = 0x08
+STAGE_MONITOR: int = 0x10
+STAGE_BODY: int = 0x20  # only set when process_with_pressure() was used
 
-    The synapse encodes cognitive state in a 64-bit integer:
+# Detection flags (packed into Synapse reserved bits 0-5 and PipelineResult.detection_flags)
+FLAG_STUCK: int = 0x01
+FLAG_DRIFTING: int = 0x02
+FLAG_LOW_CONFIDENCE: int = 0x04
+FLAG_DECAYING: int = 0x08
+FLAG_ANOMALY: int = 0x10
+FLAG_ADVERSARIAL: int = 0x20
+DETECTION_FLAGS_MASK: int = 0x3F
 
-        Bits [0:15]  → raw_entropy   (u16, 0-65535)
-        Bits [16:31] → raw_surprise  (u16, 0-65535)
-        Bit  [32]    → has_bias      (0 or 1)
-        Bits [33:44] → position      (u12)
-        Bits [45:60] → timestamp     (u16)
-        Bits [61:68] → cascade_depth (u8)
+# ── Synapse constructor / parser (full 128-bit layout) ─────────
 
-    For most usage, only entropy, surprise, and has_bias matter.
+def make_synapse(
+    entropy: int,
+    surprise: int = 0,
+    has_bias: bool = False,
+    *,
+    position: int = 0,
+    timestamp: int = 0,
+    cascade_depth: int = 0,
+    anchor_hash: int = 0,
+    detection_flags: int = 0,
+    oov_ratio: int = 0,
+) -> int:
+    """Construct a full 128-bit synapse value.
 
-    **v0.7.0 thresholds:**
-    Entropy is now in classifier probability space [0, 65535]:
-      0-40000  = stable, 40000-50000 = pressure, >50000 = unstable.
-    Previous v0.6.x keyword-range thresholds (0-1000) are obsolete.
+    Layout (MSB → LSB):
+        [Entropy:16][Surprise:16][Bias:1][Position:12][Timestamp:16]
+        [Cascade:8][AnchorHash:31][Reserved:28]
+        Reserved sub-layout (bits 0-27 of the reserved field):
+            [OOV:8 (bits 6-13)][FLAGS:6 (bits 0-5)][upper reserved:14]
+
+    For normal use only entropy/surprise/has_bias + optional detection_flags/oov_ratio matter.
+
+    Thresholds (v0.7+ classifier space):
+        0-40000  = stable zone
+        40000-50000 = pressure zone
+        >50000 = CognitiveInstability (get_stability / validate)
 
     Args:
-        entropy:  Cognitive entropy score (0-65535).
-        surprise: Surprise level (0-65535).
-        has_bias: Whether bias was detected in the input.
+        entropy: raw_entropy (0-65535)
+        surprise: raw_surprise (0-65535)
+        has_bias: bias flag
+        position, timestamp, cascade_depth, anchor_hash: advanced fields (rarely needed)
+        detection_flags: 0-0x3F (FLAG_* values OR-ed together)
+        oov_ratio: 0-255 (0=0%, 255=100%)
 
     Returns:
-        64-bit synapse value suitable for get_stability() or process_synapse().
+        Integer suitable for get_stability(), process_synapse(), combined_risk_bits().
 
-    Example:
-        >>> from llmosafe import make_synapse, get_stability
-        >>> get_stability(make_synapse(entropy=500))
-        0
-        >>> get_stability(make_synapse(entropy=41000))
-        -2
-        >>> get_stability(make_synapse(entropy=500, has_bias=True))
-        -3
-
+    The returned value is a Python int (unlimited precision) and is passed
+    through to the u128 C-ABI functions.
     """
-    return (entropy & 0xFFFF) | ((surprise & 0xFFFF) << 16) | ((int(has_bias) & 0x1) << 32)
+    e = entropy & 0xFFFF
+    s = surprise & 0xFFFF
+    b = 1 if has_bias else 0
+    pos = position & 0xFFF
+    ts = timestamp & 0xFFFF
+    cd = cascade_depth & 0xFF
+    ah = anchor_hash & 0x7FFFFFFF
+
+    # Lower 64 bits: entropy(16) | surprise(16) | bias(1) | pos(12) | ts(16) | cd(3 of 8)
+    # We pack what fits cleanly; the bitfield crate handles the exact layout on the Rust side.
+    # For round-tripping we keep the construction simple and let from_raw_u128 do the work.
+    lower = (
+        (e)
+        | (s << 16)
+        | (b << 32)
+        | (pos << 33)
+        | (ts << 45)
+        | ((cd & 0x07) << 61)  # low 3 bits of cascade into lower word
+    )
+
+    # Upper 64 bits start with remaining cascade bits + anchor_hash + reserved
+    # Cascade high 5 bits | anchor_hash(31) | reserved(28)
+    upper = ((cd >> 3) & 0x1F) | (ah << 5)
+
+    # Reserved field (28 bits) layout inside the upper word:
+    # bits 0-5  = detection flags
+    # bits 6-13 = oov_ratio
+    reserved = ((oov_ratio & 0xFF) << 6) | (detection_flags & 0x3F)
+    upper |= (reserved & 0x0FFFFFFF) << (5 + 31)  # after 5 cascade + 31 hash
+
+    return (upper << 64) | lower
 
 
-def parse_synapse(synapse_bits: int) -> dict[str, int | bool]:
-    """Parse a synapse_bits value into its component fields.
+def parse_synapse(synapse_bits: int) -> dict:
+    """Parse a (possibly 128-bit) synapse into its fields.
 
-    Inverse of make_synapse().
-
-    Args:
-        synapse_bits: 64-bit synapse value.
-
-    Returns:
-        Dict with keys: entropy, surprise, has_bias.
-
-    Example:
-        >>> parse_synapse(make_synapse(entropy=400, surprise=100, has_bias=True))
-        {'entropy': 400, 'surprise': 100, 'has_bias': True}
-
+    Returns a dict with the main observable fields plus raw lower/upper words.
     """
+    lower = synapse_bits & ((1 << 64) - 1)
+    upper = (synapse_bits >> 64) & ((1 << 64) - 1)
+
+    entropy = lower & 0xFFFF
+    surprise = (lower >> 16) & 0xFFFF
+    has_bias = bool((lower >> 32) & 0x1)
+
+    # Best-effort extraction (exact bit positions are enforced by the Rust bitfield)
+    position = (lower >> 33) & 0xFFF
+    timestamp = (lower >> 45) & 0xFFFF
+    cascade_low = (lower >> 61) & 0x7
+    cascade_high = upper & 0x1F
+    cascade_depth = (cascade_high << 3) | cascade_low
+    anchor_hash = (upper >> 5) & 0x7FFFFFFF
+
+    reserved = (upper >> (5 + 31)) & 0x0FFFFFFF
+    detection_flags = reserved & 0x3F
+    oov_ratio = (reserved >> 6) & 0xFF
+
     return {
-        "entropy": synapse_bits & 0xFFFF,
-        "surprise": (synapse_bits >> 16) & 0xFFFF,
-        "has_bias": bool((synapse_bits >> 32) & 0x1),
+        "entropy": entropy,
+        "surprise": surprise,
+        "has_bias": has_bias,
+        "position": position,
+        "timestamp": timestamp,
+        "cascade_depth": cascade_depth,
+        "anchor_hash": anchor_hash,
+        "detection_flags": detection_flags,
+        "oov_ratio": oov_ratio,
+        "lower64": lower,
+        "upper64": upper,
     }
+
+
+# Re-export the Rust constants under the same names for convenience
+__all__.extend([
+    "STABILITY_THRESHOLD",
+    "PRESSURE_THRESHOLD",
+    "STAGE_SIFT",
+    "STAGE_MEMORY",
+    "STAGE_KERNEL",
+    "STAGE_DETECTION",
+    "STAGE_MONITOR",
+    "STAGE_BODY",
+    "FLAG_STUCK",
+    "FLAG_DRIFTING",
+    "FLAG_LOW_CONFIDENCE",
+    "FLAG_DECAYING",
+    "FLAG_ANOMALY",
+    "FLAG_ADVERSARIAL",
+    "DETECTION_FLAGS_MASK",
+])

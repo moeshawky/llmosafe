@@ -166,20 +166,27 @@ pub mod c_abi {
 
     const ARENA_SIZE: usize = 16;
     const MAX_OBJECTIVE_LEN: usize = 1024;
+    const ARENA_INDEX_MASK: usize = 0xF;
+    const GEN_SHIFT: usize = 4;
 
     #[allow(dead_code)]
     struct PipelineSlot {
-        /// Pipeline that borrows `objective` from `objective_buf` below.
-        /// The `'static` lifetime is safe because `objective_buf` is declared
-        /// after `pipeline` in field order — Rust drops fields in declaration
-        /// order, so the buffer outlives the pipeline borrow.
         pipeline: CognitivePipeline<'static, 64, 10>,
-        /// Fixed-size buffer for objective string. Declared after `pipeline`
-        /// so it drops after the pipeline (field-declaration order drop).
-        /// This ensures the `&'static str` reference in pipeline remains
-        /// valid for the pipeline's lifetime.
         objective_buf: Box<[u8; MAX_OBJECTIVE_LEN]>,
         last_result: Option<PipelineResult>,
+        generation: u64,
+    }
+
+    static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn pack_handle(index: usize, generation: u64) -> usize {
+        index | ((generation as usize) << GEN_SHIFT)
+    }
+
+    fn unpack_handle(handle: usize) -> (usize, u64) {
+        let index = handle & ARENA_INDEX_MASK;
+        let generation = (handle >> GEN_SHIFT) as u64;
+        (index, generation)
     }
 
     static PIPELINE_ARENA: Mutex<[Option<PipelineSlot>; ARENA_SIZE]> = Mutex::new([
@@ -224,9 +231,11 @@ pub mod c_abi {
 
     /// Creates a `CognitivePipeline` with the given objective string.
     ///
-    /// Returns an opaque handle (0–15) on success, or `usize::MAX` on
-    /// invalid input.  The handle indexes into a fixed-size arena of 16
-    /// concurrent pipeline slots protected by a `std::sync::Mutex`.
+    /// Returns an opaque handle on success, or `usize::MAX` on invalid
+    /// input. The handle encodes arena index (lower 4 bits) and a
+    /// generation counter (upper bits) for stale-handle detection.
+    /// The arena holds 16 concurrent pipeline slots protected by a
+    /// `std::sync::Mutex`.
     ///
     /// The objective is stored in a fixed-size buffer per slot
     /// (MAX_OBJECTIVE_LEN = 1024 bytes), avoiding heap leaks.
@@ -254,6 +263,7 @@ pub mod c_abi {
             Ok(p) => p,
             Err(_) => return usize::MAX,
         };
+        let gen = NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -263,11 +273,29 @@ pub mod c_abi {
                     pipeline,
                     objective_buf,
                     last_result: None,
+                    generation: gen,
                 });
-                return i;
+                return pack_handle(i, gen);
             }
         }
         usize::MAX
+    }
+
+    /// Validates a packed handle against the arena. Returns the slot if the
+    /// generation matches, otherwise `None`. Also returns `None` if the index
+    /// is out of bounds.
+    fn get_validated_slot(
+        arena: &mut [Option<PipelineSlot>; ARENA_SIZE],
+        handle: usize,
+    ) -> Option<&mut PipelineSlot> {
+        let (index, generation) = unpack_handle(handle);
+        if index >= ARENA_SIZE {
+            return None;
+        }
+        match &mut arena[index] {
+            Some(slot) if slot.generation == generation => Some(slot),
+            _ => None,
+        }
     }
 
     /// Runs a raw text observation through the `CognitivePipeline`.
@@ -297,10 +325,7 @@ pub mod c_abi {
         let mut arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if handle >= ARENA_SIZE {
-            return -9;
-        }
-        let slot = match arena[handle].as_mut() {
+        let slot = match get_validated_slot(&mut arena, handle) {
             Some(s) => s,
             None => return -9,
         };
@@ -320,14 +345,18 @@ pub mod c_abi {
         let arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if handle >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(handle);
+        if index >= ARENA_SIZE {
             return -9;
         }
-        arena[handle].as_ref().map_or(-9, |slot| {
-            slot.last_result
-                .as_ref()
-                .map_or(-9, |r| decision_to_code(&r.decision))
-        })
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or(-9, |slot| {
+                slot.last_result
+                    .as_ref()
+                    .map_or(-9, |r| decision_to_code(&r.decision))
+            })
     }
 
     /// Returns the classifier score from the last `sift_and_process` call
@@ -384,30 +413,48 @@ pub mod c_abi {
         };
         let state = slot.pipeline.pid_state();
         // SAFETY: acute, chronic, pressure are all non-null (validated above).
-        // Writing f64 values into correctly-sized, aligned pointers.
+        // Writes are via write_unaligned for pointer alignment safety.
         unsafe {
-            *acute = state.acute_entropy as f64;
-            *chronic = state.chronic_entropy as f64;
-            *pressure = state.prev_pressure_norm as f64;
+            std::ptr::write_unaligned(acute, state.acute_entropy as f64);
+            std::ptr::write_unaligned(chronic, state.chronic_entropy as f64);
+            std::ptr::write_unaligned(pressure, state.prev_pressure_norm as f64);
         }
         0
     }
 
     /// Destroys the pipeline associated with `handle`, freeing the arena
-    /// slot for reuse.  No-op if handle is invalid or already destroyed.
+    /// slot for reuse. The generation counter prevents stale-handle reuse —
+    /// a subsequent `llmosafe_create()` returns a different handle with a
+    /// fresh generation. No-op if handle is invalid, already destroyed,
+    /// or generation does not match.
     #[no_mangle]
     pub extern "C" fn llmosafe_destroy(handle: usize) {
+        let (index, generation) = unpack_handle(handle);
+        if index >= ARENA_SIZE {
+            return;
+        }
         let mut arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if handle < ARENA_SIZE {
-            arena[handle] = None;
+        match &arena[index] {
+            Some(slot) if slot.generation == generation => {
+                arena[index] = None;
+            }
+            _ => {}
         }
     }
 
+    /// Processes a full 128-bit synapse through the cognitive memory state
+    /// updater.
+    ///
+    /// # Inputs
+    /// * `synapse_bits`: full 128-bit synapse value (no truncation).
+    ///
+    /// # Outputs
+    /// * `i32` status code. `0` on success.
     #[no_mangle]
-    pub extern "C" fn llmosafe_process_synapse(synapse_bits: u64) -> i32 {
-        llmosafe_memory::cognitive_memory::process_state_update(synapse_bits as u128)
+    pub extern "C" fn llmosafe_process_synapse(synapse_bits: u128) -> i32 {
+        llmosafe_memory::cognitive_memory::process_state_update(synapse_bits)
     }
 
     #[no_mangle]
@@ -460,9 +507,19 @@ pub mod c_abi {
         guard.pressure()
     }
 
+    /// Returns stability result for a full 128-bit synapse.
+    ///
+    /// # Inputs
+    /// * `synapse_bits`: full 128-bit `Synapse` value (no truncation).
+    ///
+    /// # Outputs
+    /// * `0` on success. Negative `i32` error codes map to `KernelError`:
+    ///   `-1`=DepthExceeded, `-2`=CognitiveInstability, `-3`=BiasHaloDetected,
+    ///   `-4`=HallucinationDetected, `-5`=ResourceExhaustion,
+    ///   `-6`=SelfMemoryExceeded, `-7`=DeadlineExceeded.
     #[no_mangle]
-    pub extern "C" fn llmosafe_get_stability(synapse_bits: u64) -> i32 {
-        let synapse = Synapse::from_raw_u64(synapse_bits);
+    pub extern "C" fn llmosafe_get_stability(synapse_bits: u128) -> i32 {
+        let synapse = Synapse::from_raw_u128(synapse_bits);
         match synapse.validate() {
             Ok(()) => 0,
             Err(KernelError::CognitiveInstability) => -2,
@@ -500,12 +557,12 @@ pub mod c_abi {
         };
         let stats = slot.pipeline.memory_stats();
         // SAFETY: mean, variance, trend, drifting are all non-null (validated above).
-        // Writing into correctly-sized, aligned pointers.
+        // Writes are via write_unaligned for pointer alignment safety.
         unsafe {
-            *mean = stats.mean;
-            *variance = stats.variance;
-            *trend = stats.trend;
-            *drifting = stats.is_drifting as u32;
+            std::ptr::write_unaligned(mean, stats.mean);
+            std::ptr::write_unaligned(variance, stats.variance);
+            std::ptr::write_unaligned(trend, stats.trend);
+            std::ptr::write_unaligned(drifting, stats.is_drifting as u32);
         }
         0
     }
@@ -546,11 +603,11 @@ pub mod c_abi {
             .and_then(|r| r.kernel_output())
             .map_or(-9, |ko| {
                 // SAFETY: error_out, is_stable_out, depth_out are all non-null (validated above).
-                // Writing into correctly-sized, aligned pointers.
+                // Writes are via write_unaligned for pointer alignment safety.
                 unsafe {
-                    *error_out = ko.error_kernel;
-                    *is_stable_out = if ko.is_stable { 1 } else { 0 };
-                    *depth_out = ko.depth as u32;
+                    std::ptr::write_unaligned(error_out, ko.error_kernel);
+                    std::ptr::write_unaligned(is_stable_out, if ko.is_stable { 1 } else { 0 });
+                    std::ptr::write_unaligned(depth_out, ko.depth as u32);
                 }
                 0
             })
@@ -578,13 +635,17 @@ pub mod c_abi {
             })
     }
 
-    /// Returns combined risk bits from a synapse.
+    /// Returns combined risk bits from a full 128-bit synapse.
     ///
+    /// # Inputs
+    /// * `synapse_bits`: full 128-bit synapse value (no truncation).
+    ///
+    /// # Outputs
     /// Packs OOV ratio (bits 6-13) and detection flags (bits 0-5) into u16.
     /// See `Synapse::combined_risk_bits()` for the 2D risk-space encoding.
     #[no_mangle]
-    pub extern "C" fn llmosafe_combined_risk_bits(synapse_bits: u64) -> u16 {
-        let synapse = Synapse::from_raw_u64(synapse_bits);
+    pub extern "C" fn llmosafe_combined_risk_bits(synapse_bits: u128) -> u16 {
+        let synapse = Synapse::from_raw_u128(synapse_bits);
         synapse.combined_risk_bits()
     }
 
@@ -697,10 +758,7 @@ pub mod c_abi {
         let mut arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if handle >= ARENA_SIZE {
-            return -9;
-        }
-        let slot = match arena[handle].as_mut() {
+        let slot = match get_validated_slot(&mut arena, handle) {
             Some(s) => s,
             None => return -9,
         };
@@ -718,10 +776,7 @@ pub mod c_abi {
         let mut arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if handle >= ARENA_SIZE {
-            return 1;
-        }
-        match arena[handle].as_mut() {
+        match get_validated_slot(&mut arena, handle) {
             Some(s) => {
                 s.pipeline.reset_detectors();
                 0
@@ -736,10 +791,7 @@ pub mod c_abi {
         let mut arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if handle >= ARENA_SIZE {
-            return 1;
-        }
-        match arena[handle].as_mut() {
+        match get_validated_slot(&mut arena, handle) {
             Some(s) => {
                 s.pipeline.reset_full();
                 0
@@ -795,7 +847,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn test_c_abi_process_synapse_valid_bits() {
-        let bits = 400u64;
+        let bits = 400u128;
         let result = crate::c_abi::llmosafe_process_synapse(bits);
         assert_eq!(result, 0);
     }
@@ -850,7 +902,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn test_c_abi_get_stability_valid() {
-        let valid_bits = 400u64;
+        let valid_bits = 400u128;
         let result = crate::c_abi::llmosafe_get_stability(valid_bits);
         assert_eq!(result, 0);
     }
@@ -858,7 +910,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn test_c_abi_get_stability_unstable() {
-        let unstable_bits = 50001u64;
+        let unstable_bits = 50001u128;
         let result = crate::c_abi::llmosafe_get_stability(unstable_bits);
         assert_eq!(result, -2);
     }
@@ -885,7 +937,6 @@ mod tests {
         let objective = b"test objective";
         let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
         assert!(handle != usize::MAX);
-        assert!(handle < 16);
         crate::c_abi::llmosafe_destroy(handle);
     }
 
@@ -1042,7 +1093,10 @@ mod tests {
         crate::c_abi::llmosafe_destroy(h1);
         let h2 = crate::c_abi::llmosafe_create(obj.as_ptr(), obj.len());
         assert!(h2 != usize::MAX);
-        // Slot should be reused (same index or different, both valid)
+        // Stale handle h1 must be rejected after slot reuse
+        let text = b"test observation for stale handle check";
+        let code = crate::c_abi::llmosafe_sift_and_process(h1, text.as_ptr(), text.len());
+        assert_eq!(code, -9);
         crate::c_abi::llmosafe_destroy(h2);
     }
 

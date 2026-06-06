@@ -80,9 +80,9 @@ pub const STAGE_KERNEL: u8 = 0x04;
 pub const STAGE_DETECTION: u8 = 0x08;
 /// Bitmask constant 0x10 for the MONITOR stage. Set in `process_ctrl()`.
 pub const STAGE_MONITOR: u8 = 0x10;
-/// Bitmask constant 0x20 gated behind cfg(feature="std"). Defined but never
-/// set in `process_ctrl()` — the BODY stage was moved into
-/// `process_with_pressure()` as a pre-SIFT gate.
+/// Bitmask constant 0x20 gated behind cfg(feature="std"). Set in
+/// `process_with_pressure()` after the body pressure pre-gate executes
+/// and `process_ctrl()` returns.
 #[cfg(feature = "std")]
 pub const STAGE_BODY: u8 = 0x20;
 
@@ -415,6 +415,8 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
     ///
     /// When PID mode is active, the legacy pressure gate is advisory only —
     /// the pressure value is fed directly into `compute_pid_score()` as the P-term.
+    ///
+    /// Sets `STAGE_BODY` (0x20) in the result's `stages_executed` bitmask.
     #[cfg(feature = "std")]
     pub fn process_with_pressure(
         &mut self,
@@ -424,7 +426,9 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
     ) -> PipelineResult {
         // Route body pressure through BodyOutput → PidInput.e_body
         let e_body = (f32::from(body_entropy) / 1000.0_f32).clamp(0.0, 1.0);
-        self.process_ctrl(observation, e_body, pressure)
+        let mut result = self.process_ctrl(observation, e_body, pressure);
+        result.stages_executed |= STAGE_BODY;
+        result
     }
 
     /// Pre-flight resource gate on the cognitive pipeline.

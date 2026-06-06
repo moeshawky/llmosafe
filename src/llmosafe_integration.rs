@@ -73,16 +73,34 @@ pub enum SafetyDecision {
 
 impl SafetyDecision {
     /// Returns true if processing can continue.
+    ///
+    /// # Inputs
+    /// * `self`: safety decision variant.
+    ///
+    /// # Outputs
+    /// Returns `true` if decision is `Proceed` or `Warn`. Returns `false` otherwise.
     pub fn can_proceed(&self) -> bool {
         matches!(self, Self::Proceed | Self::Warn(_))
     }
 
     /// Returns true if processing must stop.
+    ///
+    /// # Inputs
+    /// * `self`: safety decision variant.
+    ///
+    /// # Outputs
+    /// Returns `true` if decision is `Halt`. Returns `false` otherwise.
     pub fn must_halt(&self) -> bool {
         matches!(self, Self::Halt(..))
     }
 
     /// Returns the severity level (0=Proceed, 1=Warn, 2=Escalate, 3=Halt, 4=Exit).
+    ///
+    /// # Inputs
+    /// * `self`: safety decision variant.
+    ///
+    /// # Outputs
+    /// Returns a `u8` severity indicator in the range `[0, 4]`.
     pub fn severity(&self) -> u8 {
         match self {
             Self::Proceed => 0,
@@ -94,16 +112,34 @@ impl SafetyDecision {
     }
 
     /// Returns true if this decision requires blocking/throttling.
+    ///
+    /// # Inputs
+    /// * `self`: safety decision variant.
+    ///
+    /// # Outputs
+    /// Returns `true` if decision is `Escalate`, `Halt`, or `Exit`. Returns `false` otherwise.
     pub fn is_blocking(&self) -> bool {
         matches!(self, Self::Escalate { .. } | Self::Halt(..) | Self::Exit(_))
     }
 
     /// Returns true if process must terminate immediately.
+    ///
+    /// # Inputs
+    /// * `self`: safety decision variant.
+    ///
+    /// # Outputs
+    /// Returns `true` if decision is `Exit`. Returns `false` otherwise.
     pub fn should_exit(&self) -> bool {
         matches!(self, Self::Exit(_))
     }
 
     /// Returns recommended cooldown in milliseconds.
+    ///
+    /// # Inputs
+    /// * `self`: safety decision variant.
+    ///
+    /// # Outputs
+    /// Returns cooldown in milliseconds (`u32`). Defaults to 0 for non-blocking decisions.
     pub fn recommended_cooldown_ms(&self) -> u32 {
         match self {
             Self::Proceed | Self::Warn(_) | Self::Exit(_) => 0,
@@ -113,6 +149,12 @@ impl SafetyDecision {
     }
 
     /// Returns machine-readable status label.
+    ///
+    /// # Inputs
+    /// * `self`: safety decision variant.
+    ///
+    /// # Outputs
+    /// Returns static string slice: `"safe"`, `"warning"`, `"escalate"`, `"halt"`, or `"exit"`.
     pub fn status_label(&self) -> &'static str {
         match self {
             Self::Proceed => "safe",
@@ -168,6 +210,15 @@ pub enum PressureLevel {
 
 impl PressureLevel {
     /// Convert a percentage (0-100) to a PressureLevel.
+    ///
+    /// # Inputs
+    /// * `pct`: raw percentage value.
+    ///
+    /// # Outputs
+    /// Returns mapped `PressureLevel`.
+    ///
+    /// # Invariants
+    /// * Clamps any values greater than 100 to `Emergency`.
     pub fn from_percentage(pct: u8) -> Self {
         match pct {
             0..=25 => Self::Nominal,
@@ -179,6 +230,12 @@ impl PressureLevel {
     }
 
     /// Returns true if pressure requires immediate attention.
+    ///
+    /// # Inputs
+    /// * `self`: pressure level.
+    ///
+    /// # Outputs
+    /// Returns `true` if level is `Critical` or `Emergency`. Returns `false` otherwise.
     pub fn requires_action(&self) -> bool {
         matches!(self, Self::Critical | Self::Emergency)
     }
@@ -230,7 +287,7 @@ pub struct EscalationPolicy {
     /// | D   | Halt/Escalate → Warn; Warn/Proceed pass through |
     /// | E   | All decisions → Proceed (no enforcement) |
     ///
-    /// Default: E (no runtime gating). Both the compile-time `dal` feature AND
+    /// Default: A (no runtime gating). Both the compile-time `dal` feature AND
     /// a runtime DAL of A must be active for Halt decisions to reach the actuator.
     pub dal: DesignAssuranceLevel,
 }
@@ -245,7 +302,7 @@ impl Default for EscalationPolicy {
             escalate_surprise: 55700,
             bias_escalates: true,
             escalate_pressure: PressureLevel::Critical,
-            dal: DesignAssuranceLevel::E,
+            dal: DesignAssuranceLevel::A,
         }
     }
 }
@@ -739,5 +796,27 @@ mod tests {
         } else {
             panic!("Expected Halt decision");
         }
+    }
+
+    #[test]
+    fn test_safety_decision_should_exit() {
+        assert!(!SafetyDecision::Proceed.should_exit());
+        assert!(!SafetyDecision::Warn("test").should_exit());
+        assert!(!SafetyDecision::Escalate {
+            entropy: 500,
+            reason: EscalationReason::BiasDetected,
+            cooldown_ms: 5000,
+        }
+        .should_exit());
+        assert!(!SafetyDecision::Halt(KernelError::CognitiveInstability, 30000).should_exit());
+        assert!(SafetyDecision::Exit(KernelError::ResourceExhaustion).should_exit());
+    }
+
+    #[test]
+    fn test_pressure_level_requires_action() {
+        assert!(!PressureLevel::Nominal.requires_action());
+        assert!(!PressureLevel::Elevated.requires_action());
+        assert!(PressureLevel::Critical.requires_action());
+        assert!(PressureLevel::Emergency.requires_action());
     }
 }

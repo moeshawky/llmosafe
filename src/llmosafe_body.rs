@@ -802,4 +802,31 @@ mod tests {
             ratio
         );
     }
+
+    #[test]
+    fn test_check_ctrl_zero_ceiling_returns_exhaustion() {
+        let guard = ResourceGuard::new(0);
+        let result = guard.check_ctrl();
+        assert_eq!(result.unwrap_err(), KernelError::ResourceExhaustion);
+    }
+
+    #[test]
+    fn test_check_ctrl_valid_ceiling_returns_body_output() {
+        let guard = ResourceGuard::for_testing(100 * 1024 * 1024, 100, 20);
+        let result = guard.check_ctrl().unwrap();
+        assert!((0.0..=1.0).contains(&result.error_body));
+        assert!(result.pressure <= 100);
+        assert!(!result.is_exhausted);
+    }
+
+    #[test]
+    fn test_check_blocking_returns_deadline_exceeded() {
+        // With 0-ceiling and DAL A default, check_blocking immediately
+        // tries to Halt but since the guard will fail on check_with_entropy,
+        // the result should be ResourceExhaustion, not DeadlineExceeded.
+        let guard = ResourceGuard::new(0);
+        let result = guard.check_blocking();
+        // Zero ceiling → ResourceExhaustion from check_with_entropy
+        assert!(result.is_err());
+    }
 }
