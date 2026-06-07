@@ -855,4 +855,55 @@ mod tests {
         // Zero ceiling → ResourceExhaustion from check_with_entropy
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_capture_vitals_returns_bounded_values() {
+        let vitals = EnvironmentalVitals::capture();
+        assert!(vitals.load_avg >= 0.0, "load_avg should be >= 0.0");
+    }
+
+    #[test]
+    fn test_current_rss_bytes_returns_positive() {
+        let rss = ResourceGuard::current_rss_bytes();
+        // Even an empty test runner consumes some memory
+        assert!(rss > 0, "current_rss_bytes should be positive");
+    }
+
+    #[test]
+    fn test_check_blocking_succeeds_under_no_pressure() {
+        let guard = ResourceGuard::for_testing(1024 * 1024 * 1024, 0, 0); // High ceiling, no pressure
+        let result = guard.check_blocking();
+        assert!(
+            result.is_ok(),
+            "check_blocking should succeed under no pressure"
+        );
+        let synapse = result.unwrap();
+        assert_eq!(synapse.raw_entropy(), 0);
+    }
+
+    #[test]
+    fn test_check_with_deadline_succeeds_before_expiration() {
+        let guard = ResourceGuard::for_testing(1024 * 1024 * 1024, 0, 0); // High ceiling, no pressure
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let result = guard.check_with_deadline(deadline);
+        assert!(
+            result.is_ok(),
+            "check_with_deadline should succeed before deadline"
+        );
+        let synapse = result.unwrap();
+        assert_eq!(synapse.raw_entropy(), 0);
+    }
+
+    #[test]
+    fn test_check_with_deadline_fails_after_expiration() {
+        let guard = ResourceGuard::for_testing(1024 * 1024 * 1024, 0, 0); // High ceiling, no pressure
+        let deadline = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(1))
+            .unwrap();
+        let result = guard.check_with_deadline(deadline);
+        assert!(
+            matches!(result.unwrap_err(), KernelError::DeadlineExceeded),
+            "check_with_deadline should return DeadlineExceeded after deadline"
+        );
+    }
 }
