@@ -351,7 +351,7 @@ impl EscalationPolicy {
     /// bias Escalate).
     pub fn decide(&self, entropy: u16, surprise: u16, has_bias: bool) -> SafetyDecision {
         // Halt checks first (highest severity — must not be overridden)
-        if entropy > self.halt_entropy {
+        if entropy >= self.halt_entropy {
             return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
         }
 
@@ -401,7 +401,7 @@ impl EscalationPolicy {
         pressure: PressureLevel,
     ) -> SafetyDecision {
         // Halt takes priority over everything
-        if entropy > self.halt_entropy {
+        if entropy >= self.halt_entropy {
             return self.apply_dal_to_decision(SafetyDecision::Halt(
                 KernelError::CognitiveInstability,
                 30000,
