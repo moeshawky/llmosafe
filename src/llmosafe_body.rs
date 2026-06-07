@@ -676,8 +676,9 @@ impl ResourceGuard {
     /// active = user + nice + system, total = active + idle + iowait.
     #[cfg(target_os = "linux")]
     fn parse_proc_stat() -> Option<(u64, u64)> {
-        let file = fs::File::open("/proc/stat").ok()?;
-        let line = BufReader::new(file).lines().next()?.ok()?;
+        // PERF: fs::read_to_string avoids BufReader allocation overhead for reading the first line
+        let content = fs::read_to_string("/proc/stat").ok()?;
+        let line = content.lines().next()?;
         let mut parts = line.split_whitespace().skip(1);
         let user: u64 = parts.next()?.parse().unwrap_or(0);
         let nice: u64 = parts.next()?.parse().unwrap_or(0);
@@ -692,8 +693,9 @@ impl ResourceGuard {
     /// Parses the iowait field from /proc/stat and returns (iowait, total).
     #[cfg(target_os = "linux")]
     fn parse_proc_stat_iowait() -> Option<(u64, u64)> {
-        let file = fs::File::open("/proc/stat").ok()?;
-        let line = BufReader::new(file).lines().next()?.ok()?;
+        // PERF: fs::read_to_string avoids BufReader allocation overhead for reading the first line
+        let content = fs::read_to_string("/proc/stat").ok()?;
+        let line = content.lines().next()?;
         let mut parts = line.split_whitespace().skip(1);
         let user: u64 = parts.next()?.parse().unwrap_or(0);
         let nice: u64 = parts.next()?.parse().unwrap_or(0);
