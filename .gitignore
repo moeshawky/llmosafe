@@ -101,7 +101,7 @@ cachegrind*
 *.tmp
 *.bak
 TODO
-.moeinclude
+
 
 # --- Pre-publish / audit artifacts (never published) ---
 .audit/
