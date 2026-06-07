@@ -33,6 +33,7 @@ libtest_mod.rlib
 
 # --- Training infrastructure (operator-only, never published) ---
 data/
+!data/relabel_chunks/
 scripts/
 TRAINING.md
 tools/__init__.py
@@ -131,3 +132,4 @@ training_metrics.jsonl
 
 # --- IDE/tool state ---
 .antigravitycli/
+.moeinclude

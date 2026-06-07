@@ -27,8 +27,8 @@
 //!
 //! - `ResourceGuard` — monitors RSS against a ceiling; `check()` returns
 //!   `Result<Synapse, KernelError>`. `check_ctrl()` returns `BodyOutput`.
-//! - `BodyOutput` — control-signal struct: `error_body` (f32 [0,1]),
-//!   `pressure` (u8 [0,100]), `is_exhausted` (bool).
+//! - `BodyOutput` — control-signal struct: `error_body` (f32 `[0,1]`),
+//!   `pressure` (u8 `[0,100]`), `is_exhausted` (bool).
 //! - `EnvironmentalVitals` — captures iowait and load_avg from `/proc`.
 //!
 //! # Platform Support

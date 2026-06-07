@@ -7,15 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-06-07
+
 ### Fixed
 
-- **Stale detector count in lib.rs doc and README** — module docs and README said "6 detectors" but there are 5 detector structs (`RepetitionDetector`, `DriftDetector`, `ConfidenceTracker`, `AdversarialDetector`, `CusumDetector`). `ConfidenceTracker` produces two flags (low confidence + decay), yielding 6 flags from 5 detectors. Updated lib.rs doc, README detection layer section, and pipeline doc comments to say "5 detectors".
+- **PID cascade: wire full 4-tier control** — Memory and kernel error channels
+  were hardcoded to 0.0 in `PidInput::new()`, making the PID effectively 2-tier
+  (body + sift) instead of the documented 4-tier cascade. `e_mem` and `e_kernel`
+  are now computed from WorkingMemory statistics and kernel entropy respectively.
+  The PID formula in `compute_pid_score_inner()` now reads `e_body`, `e_mem`,
+  and `e_kernel` as additional I-term channels via multi-channel blend.
 
-- **Stale "not yet wired" claim in detection.rs** — removed outdated claim that detectors were not yet wired into the pipeline.
+- **Pressure pre-gate implemented** — `process_with_pressure()` documentation
+  claimed a pre-SIFT pressure gate that didn't exist in code. Critical and
+  Emergency pressure levels now gate through `EscalationPolicy` before the
+  SIFT stage runs, returning early on blocking decisions.
+
+- **KERNEL_UNSTABLE override activated** — The `OverrideFlags::KERNEL_UNSTABLE`
+  flag was defined and tested but never set by any production code path. Now
+  wired from `DynamicStabilityMonitor` state to `apply_safety_overrides()`.
+
+- **rustdoc: fix bracket-escaping warnings** — `[0,1]` and `[0,100]` ranges in
+  module docs were parsed as intra-doc links. Escaped with backticks.
+
+### Changed
+
+- **Python package hygiene** — Version synced across all manifests, `__all__`
+  sorted and deduplicated, missing docstring args added, type annotations
+  improved, mypy Python version bumped to 3.10, stale wheel removed.
+
+- **WD-40 repo cleanup** — `.gitignore` hardened with missing patterns
+  (`output/`, `training_metrics.jsonl`, `.antigravitycli/`, `llmosafe-py/dist/`).
+  Removed stale tracked documents (`RECOMMENDATIONS.md`, `DESIGN_DECISION_v0.5.0.md`).
+  Fixed AGENTS.md paradox (it is human-authored DNA, now correctly tracked).
+  Removed dead reference from kernel.rs doc comment.
+
+- **dal feature documented** — `Cargo.toml` `[features]` now explains that
+  `dal` gates DO-178C Design Assurance Level safety overrides.
+
+- **C-ABI blocking documented** — `llmosafe_get_environmental_entropy()` now
+  warns about ~100ms blocking from `/proc/stat` reads in its doc comment.
 
 ### Added
 
-- **Re-exports for `CognitiveStability`, `BiasBreakdown`, `MemoryStats`** — these types are now re-exported from `llmosafe` root for direct import without reaching into submodules.
+- **Lint justification comments** — 22 test-scoped lint allows in `lib.rs`
+  and 1 module-level allow in `detection.rs` now carry DO-178C justification
+  comments matching sibling modules.
+
+- **Prepublish recon** — Repo maintenance workflow audit (CAM + CBP + AD + AP
+  phases) completed. 10 findings across 4 failure categories resolved.
+  Audit workpapers preserved in `.audit/workpapers/`.
 
 ## [0.7.1] — 2026-06-05
 

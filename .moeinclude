@@ -1,4 +1,0 @@
-# llmosafe source whitelist for moegraph scanner
-src/
-llmosafe-py/src/
-examples/
