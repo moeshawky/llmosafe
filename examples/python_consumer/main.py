@@ -43,9 +43,9 @@ llmosafe.llmosafe_get_environmental_entropy.argtypes = []
 llmosafe.llmosafe_get_environmental_entropy.restype = ctypes.c_uint16
 
 def calculate_halo(text: str) -> int:
-"""Calculate halo signal for text."""
-encoded_text = text.encode('utf-8')
-return llmosafe.llmosafe_calculate_halo(encoded_text, len(encoded_text))
+    """Calculate halo signal for text."""
+    encoded_text = text.encode('utf-8')
+    return llmosafe.llmosafe_calculate_halo(encoded_text, len(encoded_text))
 
 def check_resources(ceiling_mb: int) -> int:
     """Check resources against ceiling."""

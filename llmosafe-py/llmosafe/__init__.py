@@ -63,24 +63,36 @@ from llmosafe._llmosafe import (
     process_synapse,
 )
 
-__version__: str = "0.7.1"
+__version__: str = "0.7.2"
 
 # Nice names for Python users
 Synapse = PySynapse
 
 __all__ = [
-    # Exceptions
+    "DETECTION_FLAGS_MASK",
+    "FLAG_ADVERSARIAL",
+    "FLAG_ANOMALY",
+    "FLAG_DECAYING",
+    "FLAG_DRIFTING",
+    "FLAG_LOW_CONFIDENCE",
+    "FLAG_STUCK",
+    "PRESSURE_THRESHOLD",
+    "STABILITY_THRESHOLD",
+    "STAGE_BODY",
+    "STAGE_DETECTION",
+    "STAGE_KERNEL",
+    "STAGE_MEMORY",
+    "STAGE_MONITOR",
+    "STAGE_SIFT",
     "BiasHaloDetectedError",
     "CognitiveInstabilityError",
-    "LLMOSafeError",
-    "ResourceExhaustedError",
-    # Classes
     "CognitivePipeline",
     "DesignAssuranceLevel",
+    "LLMOSafeError",
     "PressureLevel",
+    "ResourceExhaustedError",
     "SafetyDecision",
-    "Synapse",  # 128-bit Synapse mirror
-    # Functions (core)
+    "Synapse",
     "calculate_halo",
     "calculate_halo_signal_legacy",
     "calculate_utility",
@@ -102,27 +114,10 @@ __all__ = [
     "get_step_count",
     "get_surprise",
     "get_system_cpu_load",
-    "memory_stats",
-    "process_synapse",
-    # Helpers
     "make_synapse",
+    "memory_stats",
     "parse_synapse",
-    # Constants
-    "STABILITY_THRESHOLD",
-    "PRESSURE_THRESHOLD",
-    "STAGE_SIFT",
-    "STAGE_MEMORY",
-    "STAGE_KERNEL",
-    "STAGE_DETECTION",
-    "STAGE_MONITOR",
-    "STAGE_BODY",
-    "FLAG_STUCK",
-    "FLAG_DRIFTING",
-    "FLAG_LOW_CONFIDENCE",
-    "FLAG_DECAYING",
-    "FLAG_ANOMALY",
-    "FLAG_ADVERSARIAL",
-    "DETECTION_FLAGS_MASK",
+    "process_synapse",
 ]
 
 
@@ -150,6 +145,7 @@ FLAG_ADVERSARIAL: int = 0x20
 DETECTION_FLAGS_MASK: int = 0x3F
 
 # ── Synapse constructor / parser (full 128-bit layout) ─────────
+
 
 def make_synapse(
     entropy: int,
@@ -182,7 +178,10 @@ def make_synapse(
         entropy: raw_entropy (0-65535)
         surprise: raw_surprise (0-65535)
         has_bias: bias flag
-        position, timestamp, cascade_depth, anchor_hash: advanced fields (rarely needed)
+        position: position field (0-4095, advanced, rarely needed)
+        timestamp: timestamp field (0-65535, advanced, rarely needed)
+        cascade_depth: cascade depth (0-255, advanced, rarely needed)
+        anchor_hash: anchor hash (0-2^31-1, advanced, rarely needed)
         detection_flags: 0-0x3F (FLAG_* values OR-ed together)
         oov_ratio: 0-255 (0=0%, 255=100%)
 
@@ -191,6 +190,7 @@ def make_synapse(
 
     The returned value is a Python int (unlimited precision) and is passed
     through to the u128 C-ABI functions.
+
     """
     e = entropy & 0xFFFF
     s = surprise & 0xFFFF
@@ -225,7 +225,7 @@ def make_synapse(
     return (upper << 64) | lower
 
 
-def parse_synapse(synapse_bits: int) -> dict:
+def parse_synapse(synapse_bits: int) -> dict[str, int | bool]:
     """Parse a (possibly 128-bit) synapse into its fields.
 
     Returns a dict with the main observable fields plus raw lower/upper words.
@@ -262,23 +262,3 @@ def parse_synapse(synapse_bits: int) -> dict:
         "lower64": lower,
         "upper64": upper,
     }
-
-
-# Re-export the Rust constants under the same names for convenience
-__all__.extend([
-    "STABILITY_THRESHOLD",
-    "PRESSURE_THRESHOLD",
-    "STAGE_SIFT",
-    "STAGE_MEMORY",
-    "STAGE_KERNEL",
-    "STAGE_DETECTION",
-    "STAGE_MONITOR",
-    "STAGE_BODY",
-    "FLAG_STUCK",
-    "FLAG_DRIFTING",
-    "FLAG_LOW_CONFIDENCE",
-    "FLAG_DECAYING",
-    "FLAG_ANOMALY",
-    "FLAG_ADVERSARIAL",
-    "DETECTION_FLAGS_MASK",
-])
