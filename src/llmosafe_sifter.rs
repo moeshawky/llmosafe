@@ -278,14 +278,13 @@ fn word_in_list(word: &str, list: &[&str]) -> bool {
 /// Check if consecutive tokens match a multi-word phrase.
 #[cfg(feature = "std")]
 #[inline]
-fn phrase_matches(window: &[&str], phrase: &str) -> bool {
-    let phrase_len = phrase.split_whitespace().count();
-    if window.len() < phrase_len {
+fn phrase_matches(window: &[&str], phrase_words: &[&str]) -> bool {
+    if window.len() < phrase_words.len() {
         return false;
     }
-    window[..phrase_len]
+    window[..phrase_words.len()]
         .iter()
-        .zip(phrase.split_whitespace())
+        .zip(phrase_words.iter())
         .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
@@ -371,10 +370,11 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             if !phrase.contains(' ') {
                 continue;
             }
+            let phrase_words: Vec<&str> = phrase.split_whitespace().collect();
             if tokens
-                .windows(phrase.split_whitespace().count())
+                .windows(phrase_words.len())
                 .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
+                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, &phrase_words))
             {
                 breakdown.semantic_traps = breakdown.semantic_traps.saturating_add(100);
             }
@@ -384,10 +384,11 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             if !phrase.contains(' ') {
                 continue;
             }
+            let phrase_words: Vec<&str> = phrase.split_whitespace().collect();
             if tokens
-                .windows(phrase.split_whitespace().count())
+                .windows(phrase_words.len())
                 .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
+                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, &phrase_words))
             {
                 breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
             }
