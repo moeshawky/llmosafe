@@ -278,14 +278,13 @@ fn word_in_list(word: &str, list: &[&str]) -> bool {
 /// Check if consecutive tokens match a multi-word phrase.
 #[cfg(feature = "std")]
 #[inline]
-fn phrase_matches(window: &[&str], phrase: &str) -> bool {
-    let phrase_len = phrase.split_whitespace().count();
-    if window.len() < phrase_len {
+fn phrase_matches(window: &[&str], phrase_tokens: &[&str]) -> bool {
+    if window.len() < phrase_tokens.len() {
         return false;
     }
-    window[..phrase_len]
+    window[..phrase_tokens.len()]
         .iter()
-        .zip(phrase.split_whitespace())
+        .zip(phrase_tokens)
         .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
@@ -371,10 +370,20 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             if !phrase.contains(' ') {
                 continue;
             }
+            let mut phrase_tokens = [""; 16];
+            let mut phrase_len = 0;
+            for token in phrase.split_whitespace() {
+                if phrase_len < 16 {
+                    phrase_tokens[phrase_len] = token;
+                    phrase_len += 1;
+                }
+            }
+            let phrase_slice = &phrase_tokens[..phrase_len];
+
             if tokens
-                .windows(phrase.split_whitespace().count())
+                .windows(phrase_len)
                 .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
+                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase_slice))
             {
                 breakdown.semantic_traps = breakdown.semantic_traps.saturating_add(100);
             }
@@ -384,10 +393,20 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             if !phrase.contains(' ') {
                 continue;
             }
+            let mut phrase_tokens = [""; 16];
+            let mut phrase_len = 0;
+            for token in phrase.split_whitespace() {
+                if phrase_len < 16 {
+                    phrase_tokens[phrase_len] = token;
+                    phrase_len += 1;
+                }
+            }
+            let phrase_slice = &phrase_tokens[..phrase_len];
+
             if tokens
-                .windows(phrase.split_whitespace().count())
+                .windows(phrase_len)
                 .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase))
+                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, phrase_slice))
             {
                 breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
             }
