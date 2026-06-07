@@ -814,7 +814,7 @@ mod tests {
 
     #[test]
     fn test_check_ctrl_valid_ceiling_returns_body_output() {
-        let guard = ResourceGuard::for_testing(100 * 1024 * 1024, 100, 20);
+        let guard = ResourceGuard::for_testing(usize::MAX, 100, 20);
         let result = guard.check_ctrl().unwrap();
         assert!((0.0..=1.0).contains(&result.error_body));
         assert!(result.pressure <= 100);
