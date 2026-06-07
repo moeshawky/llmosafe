@@ -424,10 +424,43 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         body_entropy: u16,
         pressure: u8,
     ) -> PipelineResult {
+        use crate::llmosafe_integration::PressureLevel;
+
+        // Pre-SIFT pressure gate: map pressure to PressureLevel.
+        // If pressure is Critical or Emergency, short-circuit before SIFT
+        // via decide_with_pressure(). This is the documented safety
+        // requirement from the pipeline doc comment (line 408-412).
+        let pressure_level = PressureLevel::from_percentage(pressure);
+        if pressure_level.requires_action() {
+            // Without SIFT data, use body_entropy as entropy proxy;
+            // surprise=0, has_bias=false (not classified yet).
+            let decision =
+                self.esc_policy
+                    .decide_with_pressure(body_entropy, 0, false, pressure_level);
+            let mut synapse = Synapse::new();
+            synapse.set_raw_entropy(body_entropy);
+            return PipelineResult {
+                decision,
+                synapse,
+                stages_executed: STAGE_BODY,
+                detection_flags: 0,
+                oov_ratio: 0,
+                entropy: body_entropy,
+                surprise: 0,
+                monitor_state: crate::llmosafe_kernel::StabilityResult::Stable,
+                #[cfg(feature = "std")]
+                body_pressure: Some(pressure),
+                step_count: self.step_count,
+                kernel_output: None,
+                classifier_score: 0.0,
+            };
+        }
+
         // Route body pressure through BodyOutput → PidInput.e_body
         let e_body = (f32::from(body_entropy) / 1000.0_f32).clamp(0.0, 1.0);
         let mut result = self.process_ctrl(observation, e_body, pressure);
         result.stages_executed |= STAGE_BODY;
+        result.body_pressure = Some(pressure);
         result
     }
 
@@ -679,11 +712,20 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         // ── Stage 5: PID COMPOSITION ──
         let pressure_term = (e_body * 100.0_f32) as u8;
         let trend = self.memory.trend();
+
+        // Compute tier error signals for the 4-tier PID cascade.
+        // e_mem: memory surprise = |current_entropy − mean_entropy| / 65535
+        // e_kernel: kernel stability error = kernel_entropy / 65535
+        // Both clamped to [0.0, 1.0].
+        let mem_mean = self.memory.mean_entropy();
+        let e_mem = ((f64::from(entropy) - mem_mean).abs() as f32 / 65535.0_f32).clamp(0.0, 1.0);
+        let e_kernel = (f32::from(kernel_entropy) / 65535.0_f32).clamp(0.0, 1.0);
+
         let pid_input = crate::control_types::PidInput::new(
             e_body,
             f32::from(entropy) / 65535.0_f32,
-            0.0,
-            0.0,
+            e_mem,
+            e_kernel,
             trend,
             classifier_prob,
             has_bias,
@@ -696,6 +738,10 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             &mut self.pid_state,
         );
 
+        // ── Stage 5bis: MONITOR (before overrides — gates KERNEL_UNSTABLE) ──
+        stages |= STAGE_MONITOR;
+        let monitor_state = self.monitor.update(u32::from(kernel_entropy));
+
         let mut override_flags = OverrideFlags::empty();
         if has_bias {
             override_flags = override_flags | OverrideFlags::BIAS;
@@ -703,16 +749,17 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         if e_body > 0.9 {
             override_flags = override_flags | OverrideFlags::EXHAUSTED;
         }
+        // KERNEL_UNSTABLE: set when the dynamic stability monitor detects
+        // High, Low, or Both — any non-Stable state triggers the safety gate.
+        if monitor_state != crate::llmosafe_kernel::StabilityResult::Stable {
+            override_flags = override_flags | OverrideFlags::KERNEL_UNSTABLE;
+        }
         let limited_risk = crate::llmosafe_pid::apply_safety_overrides(
             pure_risk,
             override_flags,
             &self.pid_config,
         );
         let decision = crate::llmosafe_pid::pid_risk_to_decision(limited_risk, &self.pid_config);
-
-        // ── Stage 6: MONITOR ──
-        stages |= STAGE_MONITOR;
-        let monitor_state = self.monitor.update(u32::from(entropy));
 
         let kernel_output = Some(KernelOutput {
             error_kernel: f32::from(kernel_entropy) / 65535.0_f32,

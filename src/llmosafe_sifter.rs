@@ -606,6 +606,9 @@ pub fn sift_observation(
 /// Multi-observation batch entry for processing multiple texts through the
 /// dual-path sifter (classifier + keyword bias). Selects the observation with
 /// highest entropy as the representative synapse+proof pair.
+///
+/// `_objective` is reserved for future metric scoring (halo signal based on
+/// objective-keyword alignment) and is currently unused.
 pub fn sift_perceptions(observations: &[&str], _objective: &str) -> (SiftedSynapse, SiftedProof) {
     if observations.is_empty() {
         let mut synapse = Synapse::new();

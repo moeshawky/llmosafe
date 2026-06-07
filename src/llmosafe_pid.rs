@@ -229,6 +229,19 @@ fn compute_pid_score_inner(input: &PidInput, config: &PidConfig, state: &mut Pid
     let pressure_norm = (f32::from(input.pressure) / 100.0_f32).clamp(0.0, 1.0);
     let f_norm = (1.0_f32 - input.classifier_prob).clamp(0.0, 1.0);
 
+    // Multi-channel integrator input blend for the 4-tier cascade.
+    // Acute (fast) integrator: e_sift (primary entropy) + e_body (resource
+    // pressure, weight 0.5) + e_kernel (stability modifier, weight 0.3).
+    // Chronic (slow) integrator: e_sift (primary entropy) + e_mem (memory
+    // surprise, weight 0.5) + e_kernel (stability modifier, weight 0.3).
+    // When e_body/e_mem/e_kernel are zero, behaviour is identical to the
+    // single-channel (e_sift-only) v0.7 formula.
+    let body_norm = input.e_body.clamp(0.0, 1.0);
+    let mem_norm = input.e_mem.clamp(0.0, 1.0);
+    let kernel_norm = input.e_kernel.clamp(0.0, 1.0);
+    let acute_input = (entropy_norm + body_norm * 0.5 + kernel_norm * 0.3).clamp(0.0, 1.0);
+    let chronic_input = (entropy_norm + mem_norm * 0.5 + kernel_norm * 0.3).clamp(0.0, 1.0);
+
     let eff = modulate_gains(config, input.detection_flags);
 
     let pressure_delta = (pressure_norm - state.prev_pressure_norm).abs();
@@ -244,9 +257,9 @@ fn compute_pid_score_inner(input: &PidInput, config: &PidConfig, state: &mut Pid
         + (eff.kf * f_norm);
 
     if risk_estimate < config.halt_gain {
-        state.acute_entropy = (state.acute_entropy * 0.9 + entropy_norm).clamp(0.0, 1.0);
+        state.acute_entropy = (state.acute_entropy * 0.9 + acute_input).clamp(0.0, 1.0);
         state.chronic_entropy =
-            (state.chronic_entropy * config.integrator_decay + entropy_norm).clamp(0.0, 1.0);
+            (state.chronic_entropy * config.integrator_decay + chronic_input).clamp(0.0, 1.0);
     } else {
         state.acute_entropy *= 0.999;
         state.chronic_entropy *= 0.999;
@@ -271,14 +284,17 @@ fn compute_pid_score_inner(input: &PidInput, config: &PidConfig, state: &mut Pid
 ///
 /// # Field mapping
 ///
-/// | PidInput field     | PID term | Normalisation            |
-/// |--------------------|----------|--------------------------|
-/// | `e_sift`           | I (fast) | Already `[0, 1]`         |
-/// | `trend`            | D        | `abs(trend) / 65535`     |
-/// | `pressure`         | P        | `pressure / 100`         |
-/// | `classifier_prob`  | F        | `1.0 - classifier_prob`  |
-/// | `detection_flags`  | sidechain| Gain modulation          |
-/// | `has_bias`         | override | Forces `≥ halt_gain`     |
+/// | PidInput field     | PID term   | Normalisation                                |
+/// |--------------------|------------|----------------------------------------------|
+/// | `e_sift`           | I (fast+slow) | Already `[0, 1]`, primary integrator input |
+/// | `e_body`           | I (fast)   | `[0, 1]`, body pressure to acute integrator  |
+/// | `e_mem`            | I (slow)   | `[0, 1]`, memory surprise to chronic integrator |
+/// | `e_kernel`         | I (both)   | `[0, 1]`, kernel stability to both integrators |
+/// | `trend`            | D          | `abs(trend) / 65535`                         |
+/// | `pressure`         | P          | `pressure / 100`                             |
+/// | `classifier_prob`  | F          | `1.0 - classifier_prob`                      |
+/// | `detection_flags`  | sidechain  | Gain modulation                              |
+/// | `has_bias`         | override   | Forces `≥ halt_gain`                         |
 pub fn compute_pid_score(input: &PidInput, config: &PidConfig, state: &mut PidState) -> f32 {
     let mut risk = compute_pid_score_inner(input, config, state);
 
@@ -299,13 +315,16 @@ pub fn compute_pid_score(input: &PidInput, config: &PidConfig, state: &mut PidSt
 ///
 /// # Field mapping
 ///
-/// | PidInput field     | PID term | Normalisation            |
-/// |--------------------|----------|--------------------------|
-/// | `e_sift`           | I (fast) | Already `[0, 1]`         |
-/// | `trend`            | D        | `abs(trend) / 65535`     |
-/// | `pressure`         | P        | `pressure / 100`         |
-/// | `classifier_prob`  | F        | `1.0 - classifier_prob`  |
-/// | `detection_flags`  | sidechain| Gain modulation          |
+/// | PidInput field     | PID term   | Normalisation                                |
+/// |--------------------|------------|----------------------------------------------|
+/// | `e_sift`           | I (fast+slow) | Already `[0, 1]`, primary integrator input |
+/// | `e_body`           | I (fast)   | `[0, 1]`, body pressure to acute integrator  |
+/// | `e_mem`            | I (slow)   | `[0, 1]`, memory surprise to chronic integrator |
+/// | `e_kernel`         | I (both)   | `[0, 1]`, kernel stability to both integrators |
+/// | `trend`            | D          | `abs(trend) / 65535`                         |
+/// | `pressure`         | P          | `pressure / 100`                             |
+/// | `classifier_prob`  | F          | `1.0 - classifier_prob`                      |
+/// | `detection_flags`  | sidechain  | Gain modulation                              |
 ///
 /// # DAL A
 ///

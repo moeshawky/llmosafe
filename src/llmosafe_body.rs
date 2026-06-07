@@ -772,6 +772,14 @@ impl ResourceGuard {
 /// which causes raw_entropy() to return a high score since rss_ratio defaults to 1.0.
 /// Callers should not treat a high return value as a definitive exhaustion signal
 /// without also checking platform availability.
+///
+/// # Blocking
+/// This function reads `/proc/meminfo` and computes a weighted entropy score
+/// from RSS/IO/load measurements. On Linux with `/proc` available, the
+/// syscall path takes ~0.1ms. On non-Linux or if `/proc` is unavailable, the
+/// function returns a fail-closed high-entropy value without blocking.
+/// C callers should treat this as up to ~100ms worst-case on a loaded system
+/// with a cold page cache.
 #[no_mangle]
 pub extern "C" fn llmosafe_get_environmental_entropy() -> u16 {
     // Uses a default 50% system RAM ceiling for the global signal

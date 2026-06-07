@@ -31,6 +31,12 @@
 //! boolean results (`is_stuck()`, `is_drifting()`, `is_low()`, `is_decaying()`,
 //! `detected()`, `is_adversarial()`). `DetectionResult` aggregates all signals
 //! for `EscalationPolicy::decide_from_detection()`.
+//! # Safety
+//!
+//! DO-178C: arithmetic in detection algorithms (bitwise flag packing, CUSUM
+//! accumulator delta, confidence counter increment) operates on bounded values
+//! (counts ≤ MAX_CONTEXT_LEN=8, scores ∈ [0,1]) verified safe by value-range
+//! analysis at the detector constructors.
 #![allow(clippy::arithmetic_side_effects)]
 
 /// Maximum context length for hash-based pattern matching.

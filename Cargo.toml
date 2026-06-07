@@ -28,6 +28,12 @@ serde = ["dep:serde"]
 full = ["std", "serde", "dal"]
 testing = []
 dal = []
+# `dal` feature: Design Assurance Level safety gate (DO-178C tier A/E). When
+# enabled, `apply_safety_overrides()` enforces hard limits: BIAS forces halt
+# above halt_gain, EXHAUSTED forces risk=1.0, KERNEL_UNSTABLE forces risk
+# above halt_gain. Without `dal`, overrides are a pass-through — no hard
+# limits are enforced on PID risk scores. Default ON via `default = ["std", "dal"]`.
+# MC/DC: each override flag must independently force Halt regardless of PID output.
 
 [dev-dependencies]
 proptest = "1.5.0"

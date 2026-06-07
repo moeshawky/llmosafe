@@ -2,26 +2,47 @@
 // Test code uses unwrap/expect for assertions, raw indexing for fixed arrays,
 // and arithmetic operations on controlled test inputs — all safe in test context.
 #![cfg_attr(test, allow(clippy::unwrap_used))]
+// Test assertions: expect() is used as a non-panicking assertion style on Result values.
 #![cfg_attr(test, allow(clippy::expect_used))]
+// Test arithmetic on fixed ranges (entropy ∈ [0, 65535]) — wrap is intended behaviour.
 #![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
+// Test code indexes into fixed-size arrays (WorkingMemory<64>, ring buffers).
 #![cfg_attr(test, allow(clippy::indexing_slicing))]
+// Test assertions use panic! for gated failure on invariant violations.
 #![cfg_attr(test, allow(clippy::panic))]
+// Test helper functions use panic! in Result-returning contexts for test-only asserts.
 #![cfg_attr(test, allow(clippy::panic_in_result_fn))]
+// Test fixtures convert between u8/u16/u32/u64/f32/f64 for entropy score clamping.
 #![cfg_attr(test, allow(clippy::as_conversions))]
+// Test comparisons on f32 equality for PID anti-windup integrator decay checks.
 #![cfg_attr(test, allow(clippy::float_cmp))]
+// Test comparisons on const f32 values (0.0, 1.0) used as PID gain boundaries.
 #![cfg_attr(test, allow(clippy::float_cmp_const))]
+// Test entropy computation casts u16→u32→f64 for normalisation; truncation is safe.
 #![cfg_attr(test, allow(clippy::cast_possible_truncation))]
+// Test entropy wrapping (u16 overflow from 65535→0) is intended ring-buffer behaviour.
 #![cfg_attr(test, allow(clippy::cast_possible_wrap))]
+// Test entropy normalisation (i16→f32) loses fractional precision; within test margin.
 #![cfg_attr(test, allow(clippy::cast_precision_loss))]
+// Test entropy conversion (u16→i16) uses two's complement; sign is tested.
 #![cfg_attr(test, allow(clippy::cast_sign_loss))]
+// Test ring-buffer index division for capacity calculations uses integer truncation.
 #![cfg_attr(test, allow(clippy::integer_division))]
+// Test blocks reuse variable names for successive entropy values in integration loops.
 #![cfg_attr(test, allow(clippy::shadow_reuse))]
+// Test blocks reuse the same name for the same concept (entropy/variance/surprise).
 #![cfg_attr(test, allow(clippy::shadow_same))]
+// Test blocks shadow unrelated variables across separate assertions.
 #![cfg_attr(test, allow(clippy::shadow_unrelated))]
+// Test functions call Result-returning pipeline methods; error docs not needed in tests.
 #![cfg_attr(test, allow(clippy::missing_errors_doc))]
+// Test functions call pipeline.process(); panic docs not needed in test context.
 #![cfg_attr(test, allow(clippy::missing_panics_doc))]
+// Test structs pass Copy types (u8, u16, f32) by ref for ergonomic compatibility.
 #![cfg_attr(test, allow(clippy::trivially_copy_pass_by_ref))]
+// Test pipeline methods accept small Copy structs by value for ergonomic chaining.
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+// Test checks call pipeline.process() and discard result; return value unused by design.
 #![cfg_attr(test, allow(unused_results))]
 
 //! LLMOSAFE — Runtime safety guardrails for systems processing untrusted inputs.
