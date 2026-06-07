@@ -82,8 +82,9 @@ impl EnvironmentalVitals {
 
     #[cfg(target_os = "linux")]
     fn read_iowait() -> Option<u64> {
-        if let Ok(file) = fs::File::open("/proc/stat") {
-            if let Some(Ok(line)) = BufReader::new(file).lines().next() {
+        // Optimization: fs::read_to_string avoids BufReader allocation for single-line pseudo-files.
+        if let Ok(content) = fs::read_to_string("/proc/stat") {
+            if let Some(line) = content.lines().next() {
                 if let Some(iowait_str) = line.split_whitespace().nth(5) {
                     return Some(iowait_str.parse().unwrap_or(0));
                 }
@@ -99,8 +100,9 @@ impl EnvironmentalVitals {
 
     #[cfg(target_os = "linux")]
     fn read_loadavg() -> Option<f64> {
-        if let Ok(file) = fs::File::open("/proc/loadavg") {
-            if let Some(Ok(line)) = BufReader::new(file).lines().next() {
+        // Optimization: fs::read_to_string avoids BufReader allocation for single-line pseudo-files.
+        if let Ok(content) = fs::read_to_string("/proc/loadavg") {
+            if let Some(line) = content.lines().next() {
                 if let Some(first_part) = line.split_whitespace().next() {
                     return Some(first_part.parse().unwrap_or(0.0));
                 }
@@ -676,8 +678,9 @@ impl ResourceGuard {
     /// active = user + nice + system, total = active + idle + iowait.
     #[cfg(target_os = "linux")]
     fn parse_proc_stat() -> Option<(u64, u64)> {
-        let file = fs::File::open("/proc/stat").ok()?;
-        let line = BufReader::new(file).lines().next()?.ok()?;
+        // Optimization: fs::read_to_string avoids BufReader allocation for single-line pseudo-files.
+        let content = fs::read_to_string("/proc/stat").ok()?;
+        let line = content.lines().next()?;
         let mut parts = line.split_whitespace().skip(1);
         let user: u64 = parts.next()?.parse().unwrap_or(0);
         let nice: u64 = parts.next()?.parse().unwrap_or(0);
@@ -692,8 +695,9 @@ impl ResourceGuard {
     /// Parses the iowait field from /proc/stat and returns (iowait, total).
     #[cfg(target_os = "linux")]
     fn parse_proc_stat_iowait() -> Option<(u64, u64)> {
-        let file = fs::File::open("/proc/stat").ok()?;
-        let line = BufReader::new(file).lines().next()?.ok()?;
+        // Optimization: fs::read_to_string avoids BufReader allocation for single-line pseudo-files.
+        let content = fs::read_to_string("/proc/stat").ok()?;
+        let line = content.lines().next()?;
         let mut parts = line.split_whitespace().skip(1);
         let user: u64 = parts.next()?.parse().unwrap_or(0);
         let nice: u64 = parts.next()?.parse().unwrap_or(0);
