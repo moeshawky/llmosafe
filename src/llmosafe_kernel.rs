@@ -973,7 +973,7 @@ pub enum KernelError {
     HallucinationDetected,
     ResourceExhaustion,
     /// Daemon's own RSS exceeded self-imposed limit.
-    /// Reserved for future self-memory protection (see RECOMMENDATIONS.md #4).
+    /// Reserved for future self-memory protection.
     /// Not currently constructed — handled as a forward-compatible error code.
     SelfMemoryExceeded,
     /// Deadline exceeded while waiting for safe state.

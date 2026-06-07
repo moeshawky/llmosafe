@@ -79,7 +79,6 @@ __pycache__/
 .ix/
 
 # --- RNA artifacts (AI-generated, never committed per AGENTS.md) ---
-AGENTS.md
 .annotations/
 
 # --- AI-generated audit/analysis artifacts ---
@@ -122,3 +121,13 @@ references/
 .env.*
 *.pem
 *.key
+
+# --- Wheel distributions (never committed, published via CI) ---
+llmosafe-py/dist/
+
+# --- Training run artifacts ---
+output/
+training_metrics.jsonl
+
+# --- IDE/tool state ---
+.antigravitycli/
