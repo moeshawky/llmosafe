@@ -136,6 +136,27 @@ No fourth patch at the same boundary. Escalate with evidence.
 5. `uv build && twine check dist/*` — metadata valid
 6. Verify ARM64 CI build passes (check workflow `Build wheels (aarch64)`)
 
+### Audit Workpapers
+
+The repo maintenance workflow (CAM → CBP → AD → AP → Prepublish) writes structured
+audit evidence to `.audit/workpapers/`. These are RNA artifacts — AI-generated,
+gitignored, never published. Each phase produces a YAML workpaper:
+
+| Phase | Workpaper | Content |
+|-------|-----------|---------|
+| CAM | `cam-findings.yaml` | G-*/S-* failure scan with line-number evidence |
+| CBP | `cbp-boundary-sweep.yaml` | Cross-module boundary map, compound bug detection |
+| AD | `ad-root-cause.yaml` | Root cause analysis: file:line, assumption, violation, call chain |
+| AP | `ap-fix-report.yaml` | Fix applied, test results, DNA coverage verification |
+| Prepublish | `prepublish-recon.yaml` | Gate checklist: git hygiene, changelog, version, rustdoc, dry-run |
+
+**Rules:**
+- Workpapers are **evidence** for gate transitions. No phase N+1 without phase N's workpaper.
+- `.audit/` and `.annotations/` are RNA directories — gitignored per `.gitignore`.
+  Never commit AI-generated artifacts to the repo.
+- Audit workpapers are a rolling log: each sweep overwrites the prior.
+  If you need history, save manually.
+
 ### Version Bump Procedure
 
 ```bash
