@@ -90,11 +90,11 @@ proptest! {
         bias in proptest::bool::ANY,
     ) {
         let policy = EscalationPolicy::default();
-        if entropy >= policy.halt_entropy {
+        if entropy > policy.halt_entropy {
             let decision = policy.decide(entropy, surprise, bias);
             prop_assert!(
                 matches!(decision, SafetyDecision::Halt(..)),
-                "entropy={} >= halt={} but got {:?}",
+                "entropy={} > halt={} but got {:?}",
                 entropy, policy.halt_entropy, decision,
             );
         }
@@ -102,13 +102,13 @@ proptest! {
 
     #[test]
     fn bias_returns_escalate_when_no_halt(
-        entropy in 0u16..49999,
+        entropy in 0u16..=50000,
     ) {
         let policy = EscalationPolicy::default();
         let decision = policy.decide(entropy, 0, true);
         prop_assert!(
             matches!(decision, SafetyDecision::Escalate { .. }),
-            "bias=true, entropy={} < halt=50000 but got {:?}",
+            "bias=true, entropy={} <= halt=50000 but got {:?}",
             entropy, decision,
         );
     }
