@@ -99,3 +99,59 @@ No fourth patch at the same boundary. Escalate with evidence.
 | Patching the same boundary 4+ times | Bent Pyramid violation |
 | Adding code without a CMIT invariant check | Compound bug risk |
 | Deleting entries from rejection/DO_NOT library | History loss |
+
+---
+
+## Release & Publish Automation
+
+### Trichannel Release (crates.io + GitHub + PyPI)
+
+**Trigger:** Push a version tag (`git tag vX.Y.Z && git push origin vX.Y.Z`)
+
+**Workflow:** `.github/workflows/publish-pypi.yml`
+
+| Channel | Automation |
+|---------|------------|
+| crates.io | Manual: `cargo publish` (after dry-run) |
+| GitHub Releases | Manual: `gh release create vX.Y.Z` |
+| PyPI + TestPyPI | **Automatic** via trusted publishing OIDC |
+
+### PyPI Trusted Publishing Config
+
+| Field | Value |
+|-------|-------|
+| Project name | `llmosafe` |
+| Owner | `moeshawky` |
+| Repository | `llmosafe` |
+| Workflow | `publish-pypi.yml` |
+| Environment | `pypi` |
+
+### Pre-Publish Checklist (from pre-publish skill)
+
+1. `cargo test --all-features` — all pass
+2. `cargo clippy --all-targets` — clean
+3. `cargo fmt --check` — clean
+4. `cargo publish --dry-run` — passes
+5. `maturin build --release` — x86_64 wheel builds
+5. `uv build && twine check dist/*` — metadata valid
+6. Verify ARM64 CI build passes (check workflow `Build wheels (aarch64)`)
+
+### Version Bump Procedure
+
+```bash
+# 1. Bump version in all three manifests
+sed -i 's/version = "X.Y.Z"/version = "X.Y.(Z+1)"/' Cargo.toml llmosafe-py/Cargo.toml llmosafe-py/pyproject.toml
+
+# 2. Commit + tag
+git add -A && git commit -m "chore: bump version to X.Y.Z"
+git tag vX.Y.Z
+git push origin main && git push origin vX.Y.Z
+
+# 3. Cargo publish
+cargo publish
+
+# 4. GitHub Release
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "<CHANGELOG section>"
+
+# 5. PyPI auto-publishes via CI (no manual step needed)
+```
