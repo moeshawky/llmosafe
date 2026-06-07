@@ -562,6 +562,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_hash_str_invariants() {
+        // Note: hash_str is a lightweight FNV-1a hash for pattern matching, not a cryptographic hash.
+
+        // Determinism
+        assert_eq!(
+            RepetitionDetector::hash_str("test_string"),
+            RepetitionDetector::hash_str("test_string")
+        );
+
+        // Distinguishes different inputs
+        assert_ne!(
+            RepetitionDetector::hash_str("test_string"),
+            RepetitionDetector::hash_str("different_string")
+        );
+
+        // Handles empty string deterministically (FNV offset basis)
+        assert_eq!(RepetitionDetector::hash_str(""), 2_166_136_261);
+
+        // Preserves case-sensitive behavior
+        assert_ne!(
+            RepetitionDetector::hash_str("Test"),
+            RepetitionDetector::hash_str("test")
+        );
+
+        // Handles ASCII and non-ASCII UTF-8 without panic
+        let _ = RepetitionDetector::hash_str("hello 🌍");
+    }
+
+    #[test]
+    fn test_repetition_detector_relies_on_hash_str() {
+        let mut det = RepetitionDetector::new(5);
+
+        // Initial state
+        assert_eq!(det.repetition_count(), 0);
+
+        // Observe first string
+        det.observe("hello");
+        assert_eq!(det.repetition_count(), 1);
+
+        // Observe same string again (same hash)
+        det.observe("hello");
+        assert_eq!(det.repetition_count(), 2);
+
+        // Observe different string (different hash)
+        det.observe("world");
+        assert_eq!(det.repetition_count(), 1); // resets to 1 for new string
+
+        // Observe string that differs only by case
+        det.observe("World");
+        assert_eq!(det.repetition_count(), 1); // resets because hashes differ
+    }
+
+    #[test]
     fn test_repetition_detector_single() {
         let mut det = RepetitionDetector::new(3);
         det.observe("hello");
