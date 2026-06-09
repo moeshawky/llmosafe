@@ -225,7 +225,10 @@ pub mod c_abi {
     /// lives in the Box which lives in the PipelineSlot, and the slot is only
     /// destroyed after the pipeline is dropped (field declaration order).
     unsafe fn store_objective(buf: &mut Box<[u8; MAX_OBJECTIVE_LEN]>, input: &str) -> &'static str {
-        let len = input.len().min(MAX_OBJECTIVE_LEN - 1);
+        let mut len = input.len().min(MAX_OBJECTIVE_LEN - 1);
+        while !input.is_char_boundary(len) {
+            len = len.saturating_sub(1);
+        }
         buf[..len].copy_from_slice(&input.as_bytes()[..len]);
         buf[len] = 0;
         let len_val = len;
@@ -982,6 +985,31 @@ mod tests {
         let objective = b"test";
         let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), (isize::MAX as usize) + 1);
         assert_eq!(handle, usize::MAX);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_create_invalid_utf8_truncation() {
+        // Construct a string that is exactly MAX_OBJECTIVE_LEN (1024) bytes.
+        // The string ends with a multi-byte UTF-8 character that crosses the
+        // internal truncation boundary (MAX_OBJECTIVE_LEN - 1, which is 1023).
+        // The earth emoji 🌍 is 4 bytes: \xF0\x9F\x8C\x8D.
+        let mut s = String::new();
+        // Append 1020 'a's (1020 bytes).
+        for _ in 0..1020 {
+            s.push('a');
+        }
+        // Append a 4-byte emoji. Now it's 1024 bytes and valid UTF-8.
+        s.push('🌍'); // 4 bytes
+        assert_eq!(s.len(), 1024);
+
+        // `llmosafe_create` passes the length check (<= 1024), and its internal
+        // `from_utf8` succeeds. Then `store_objective` caps length to 1023,
+        // which slices through the emoji. The `is_char_boundary` check ensures
+        // it rolls back to 1020 bytes safely without undefined behavior.
+        let handle = crate::c_abi::llmosafe_create(s.as_bytes().as_ptr(), s.len());
+        assert!(handle != usize::MAX);
+        crate::c_abi::llmosafe_destroy(handle);
     }
 
     #[cfg(feature = "std")]
