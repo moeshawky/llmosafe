@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **C-ABI UTF-8 truncation UB** — `store_objective` now uses `is_char_boundary()` backtracking
+  to prevent multi-byte character splitting before `from_utf8_unchecked`. (#127)
+- **System metrics silent failures** — Fixed silent failures in system metrics parsing. (#123)
+
+### Added
+- **Resource Body test coverage** — Expanded test coverage for Resource Body component. (#126)
+
 ## [0.7.3] — 2026-06-07
 
 ### Fixed

@@ -113,6 +113,7 @@ copilot-instructions.md
 .github/copilot-instructions.md
 .github/copilot/
 .github/agents/
+AGENTS.md
 references/
 *.agent/
 .agents/
