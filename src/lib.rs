@@ -225,7 +225,10 @@ pub mod c_abi {
     /// lives in the Box which lives in the PipelineSlot, and the slot is only
     /// destroyed after the pipeline is dropped (field declaration order).
     unsafe fn store_objective(buf: &mut Box<[u8; MAX_OBJECTIVE_LEN]>, input: &str) -> &'static str {
-        let len = input.len().min(MAX_OBJECTIVE_LEN - 1);
+        let mut len = input.len().min(MAX_OBJECTIVE_LEN - 1);
+        while !input.is_char_boundary(len) {
+            len = len.saturating_sub(1);
+        }
         buf[..len].copy_from_slice(&input.as_bytes()[..len]);
         buf[len] = 0;
         let len_val = len;
