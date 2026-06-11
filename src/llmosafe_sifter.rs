@@ -428,33 +428,16 @@ pub fn calculate_halo_signal(text: &str) -> u16 {
 /// assert!(utility > 0);
 /// ```
 pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
-    let mut obj_words = [""; 128];
+    // Optimization: Parse all words up to 256 length into a single contiguous array.
+    // This avoids a secondary pass over the objective string (avoiding iterator skipping
+    // overhead) and simplifies the O(N*M) inner search loop, improving calculation speed.
+    let mut obj_words = [""; 256];
     let mut obj_len = 0;
 
     for word_b in objective.split_whitespace() {
-        if obj_len < 128 {
+        if obj_len < 256 {
             obj_words[obj_len] = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
             obj_len += 1;
-        } else {
-            break;
-        }
-    }
-
-    calculate_utility_with_cache(observation, objective, &obj_words, obj_len)
-}
-
-fn calculate_utility_with_cache(
-    observation: &str,
-    objective: &str,
-    obj_words: &[&str],
-    obj_len: usize,
-) -> u16 {
-    let mut excess_words = [""; 128];
-    let mut excess_len = 0;
-    for word_b in objective.split_whitespace().skip(obj_len) {
-        if excess_len < 128 {
-            excess_words[excess_len] = word_b.trim_matches(|c: char| c.is_ascii_punctuation());
-            excess_len += 1;
         } else {
             break;
         }
@@ -465,21 +448,10 @@ fn calculate_utility_with_cache(
     for word_a in observation.split_whitespace() {
         let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
 
-        let mut found = false;
         for word_b in obj_words.iter().take(obj_len) {
             if trimmed_a.eq_ignore_ascii_case(word_b) {
                 count += 1;
-                found = true;
                 break;
-            }
-        }
-
-        if !found && excess_len > 0 {
-            for word_b in excess_words.iter().take(excess_len) {
-                if trimmed_a.eq_ignore_ascii_case(word_b) {
-                    count += 1;
-                    break;
-                }
             }
         }
     }
