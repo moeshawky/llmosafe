@@ -165,6 +165,7 @@ pub use llmosafe_pipeline::{
     STAGE_MEMORY, STAGE_MONITOR, STAGE_SIFT,
 };
 pub use llmosafe_sifter::SifterOutput;
+#[allow(deprecated)]
 pub use llmosafe_sifter::{
     calculate_halo_signal, calculate_utility, get_bias_breakdown, sift_perceptions, sift_text,
     BiasBreakdown,
