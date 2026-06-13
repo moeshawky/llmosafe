@@ -357,6 +357,22 @@ pub mod cognitive_memory {
     // values >58000 will be rejected as HallucinationDetected (-4).
     static GLOBAL_MEMORY: Mutex<WorkingMemory<64>> = Mutex::new(WorkingMemory::<64>::new(58000));
 
+    /// Lock the global memory, recovering from mutex poisoning with a warning.
+    ///
+    /// Mutex poisoning occurs when a thread panics while holding the lock.
+    /// Recovery is used here because `get_memory_stats()` is a read-only
+    /// operation where returning stale data is safer than panicking across
+    /// the FFI boundary.
+    fn lock_memory() -> std::sync::MutexGuard<'static, WorkingMemory<64>> {
+        GLOBAL_MEMORY.lock().unwrap_or_else(|e| {
+            tracing::warn!(
+                target: "llmosafe::cognitive_memory",
+                "GLOBAL_MEMORY mutex poisoned (prior panic detected), recovering inner state"
+            );
+            e.into_inner()
+        })
+    }
+
     pub fn process_state_update(synapse_bits: u128) -> i32 {
         let synapse = Synapse::from_raw_u128(synapse_bits);
         let sifted = SiftedSynapse::new(synapse);
@@ -380,9 +396,7 @@ pub mod cognitive_memory {
     }
 
     pub fn get_memory_stats() -> (f64, f64, f64, bool) {
-        let memory = GLOBAL_MEMORY
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let memory = lock_memory();
         let mean = memory.mean_entropy();
         let variance = memory.entropy_variance();
         let trend = memory.trend();

@@ -289,6 +289,10 @@ fn phrase_matches(window: &[&str], phrase_words: &[&str]) -> bool {
 }
 
 /// Returns a breakdown of detected biases by category.
+#[deprecated(
+    since = "0.8.0",
+    note = "keyword-based detection retained for backward compatibility. Use sift_perceptions() for higher accuracy (93.4% vs keyword-based) via the TF-IDF classifier."
+)]
 pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
     let mut breakdown = BiasBreakdown::default();
 
@@ -413,7 +417,12 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
 /// let signal = calculate_halo_signal("The expert provided a professional opinion.");
 /// assert!(signal > 0);
 /// ```
+#[deprecated(
+    since = "0.8.0",
+    note = "keyword-based detection retained for backward compatibility. Use sift_perceptions() for higher accuracy (93.4% vs keyword-based) via the TF-IDF classifier."
+)]
 pub fn calculate_halo_signal(text: &str) -> u16 {
+    #[allow(deprecated)]
     get_bias_breakdown(text).total()
 }
 
@@ -463,6 +472,7 @@ pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
 ///
 /// The score is the unbounded logistic regression sum before sigmoid.
 /// Callers that need only the synapse/proof pair should use `sift_text()`.
+#[allow(deprecated)]
 pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedProof, f32) {
     let classification = classify_text(observation);
     let bias = get_bias_breakdown(observation);
@@ -528,6 +538,7 @@ pub fn sift_text(observation: &str) -> (SiftedSynapse, SiftedProof) {
 /// even if classifier is compromised, keyword pattern-matching flags text with
 /// known manipulation markers. Entropy is `max(classifier_entropy, keyword_boost)`,
 /// and bias is `classifier.is_manipulation || bias_breakdown.total() > 0`.
+#[allow(deprecated)]
 pub fn sift_observation(
     classification: &ClassificationResult,
     observation: &str,

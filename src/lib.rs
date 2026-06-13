@@ -44,6 +44,9 @@
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 // Test checks call pipeline.process() and discard result; return value unused by design.
 #![cfg_attr(test, allow(unused_results))]
+// Test code calls deprecated legacy functions (calculate_halo_signal, get_bias_breakdown)
+// for backward-compatibility verification — deprecation warnings are expected.
+#![cfg_attr(test, allow(deprecated))]
 
 //! LLMOSAFE — Runtime safety guardrails for systems processing untrusted inputs.
 //!
@@ -215,6 +218,23 @@ pub mod c_abi {
         None,
     ]);
 
+    /// Lock the pipeline arena, recovering from mutex poisoning with a warning.
+    ///
+    /// Mutex poisoning occurs when a thread panics while holding the lock.
+    /// In a safety-critical FFI context, panicking across the Rust↔C boundary
+    /// is UB — so we recover the inner state rather than panicking. However,
+    /// poisoning indicates a prior panic, which is a serious error condition
+    /// that must be logged for observability.
+    fn lock_arena() -> std::sync::MutexGuard<'static, [Option<PipelineSlot>; ARENA_SIZE]> {
+        PIPELINE_ARENA.lock().unwrap_or_else(|e| {
+            tracing::warn!(
+                target: "llmosafe::c_abi",
+                "PIPELINE_ARENA mutex poisoned (prior panic detected), recovering inner state"
+            );
+            e.into_inner()
+        })
+    }
+
     /// Stores `input` in `buf` and returns a `&'static str` pointing into the buffer.
     ///
     /// # Safety
@@ -288,9 +308,7 @@ pub mod c_abi {
             Err(_) => return usize::MAX,
         };
         let gen = NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut arena = lock_arena();
         for (i, slot) in arena.iter_mut().enumerate() {
             if slot.is_none() {
                 *slot = Some(PipelineSlot {
@@ -346,9 +364,7 @@ pub mod c_abi {
         // The slice is consumed immediately via from_utf8_lossy.
         let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
         let text = String::from_utf8_lossy(slice);
-        let mut arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut arena = lock_arena();
         let slot = match get_validated_slot(&mut arena, handle) {
             Some(s) => s,
             None => return -9,
@@ -366,9 +382,7 @@ pub mod c_abi {
     /// has not been called yet.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_decision(handle: usize) -> i32 {
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         let (index, generation) = unpack_handle(handle);
         if index >= ARENA_SIZE {
             return -9;
@@ -391,9 +405,7 @@ pub mod c_abi {
     /// is invalid, the slot is uninitialized, or no result is available.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_classifier_score(instance_id: u32) -> f64 {
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         if (instance_id as usize) >= ARENA_SIZE {
             return -1.0;
         }
@@ -424,9 +436,7 @@ pub mod c_abi {
         if acute.is_null() || chronic.is_null() || pressure.is_null() {
             return 1;
         }
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         let handle = instance_id as usize;
         if handle >= ARENA_SIZE {
             return 1;
@@ -457,9 +467,7 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return;
         }
-        let mut arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut arena = lock_arena();
         match &arena[index] {
             Some(slot) if slot.generation == generation => {
                 arena[index] = None;
@@ -568,9 +576,7 @@ pub mod c_abi {
         if mean.is_null() || variance.is_null() || trend.is_null() || drifting.is_null() {
             return 1;
         }
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         let idx = instance_id as usize;
         if idx >= ARENA_SIZE {
             return 1;
@@ -615,9 +621,7 @@ pub mod c_abi {
         if error_out.is_null() || is_stable_out.is_null() || depth_out.is_null() {
             return -9;
         }
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         if (instance_id as usize) >= ARENA_SIZE {
             return -9;
         }
@@ -644,9 +648,7 @@ pub mod c_abi {
     /// no result is available.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_body_pressure(instance_id: u32) -> u32 {
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         if (instance_id as usize) >= ARENA_SIZE {
             return u32::MAX;
         }
@@ -676,9 +678,7 @@ pub mod c_abi {
     /// Returns the entropy field from the last pipeline result.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_entropy(instance_id: u32) -> u16 {
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         if (instance_id as usize) >= ARENA_SIZE {
             return 0;
         }
@@ -690,9 +690,7 @@ pub mod c_abi {
     /// Returns the surprise field from the last pipeline result.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_surprise(instance_id: u32) -> u16 {
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         if (instance_id as usize) >= ARENA_SIZE {
             return 0;
         }
@@ -704,9 +702,7 @@ pub mod c_abi {
     /// Returns the detection_flags field from the last pipeline result.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_detection_flags(instance_id: u32) -> u8 {
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         if (instance_id as usize) >= ARENA_SIZE {
             return 0;
         }
@@ -718,9 +714,7 @@ pub mod c_abi {
     /// Returns the oov_ratio field from the last pipeline result.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_oov_ratio(instance_id: u32) -> u8 {
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         if (instance_id as usize) >= ARENA_SIZE {
             return 0;
         }
@@ -732,9 +726,7 @@ pub mod c_abi {
     /// Returns the stages_executed field from the last pipeline result.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_stages_executed(instance_id: u32) -> u8 {
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         if (instance_id as usize) >= ARENA_SIZE {
             return 0;
         }
@@ -746,9 +738,7 @@ pub mod c_abi {
     /// Returns the step_count field from the last pipeline result.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_step_count(instance_id: u32) -> u32 {
-        let arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = lock_arena();
         if (instance_id as usize) >= ARENA_SIZE {
             return 0;
         }
@@ -779,9 +769,7 @@ pub mod c_abi {
         // for the duration of String::from_utf8_lossy below.
         let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
         let text = String::from_utf8_lossy(slice);
-        let mut arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut arena = lock_arena();
         let slot = match get_validated_slot(&mut arena, handle) {
             Some(s) => s,
             None => return -9,
@@ -797,9 +785,7 @@ pub mod c_abi {
     /// Resets detectors and monitor only (preserves memory and reasoning).
     #[no_mangle]
     pub extern "C" fn llmosafe_reset_detectors(handle: usize) -> u32 {
-        let mut arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut arena = lock_arena();
         match get_validated_slot(&mut arena, handle) {
             Some(s) => {
                 s.pipeline.reset_detectors();
@@ -812,9 +798,7 @@ pub mod c_abi {
     /// Full reset to post-construction state.
     #[no_mangle]
     pub extern "C" fn llmosafe_reset_full(handle: usize) -> u32 {
-        let mut arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut arena = lock_arena();
         match get_validated_slot(&mut arena, handle) {
             Some(s) => {
                 s.pipeline.reset_full();
@@ -848,9 +832,7 @@ pub mod c_abi {
             3 => crate::control_types::DesignAssuranceLevel::D,
             _ => crate::control_types::DesignAssuranceLevel::E,
         };
-        let mut arena = PIPELINE_ARENA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut arena = lock_arena();
         let handle = instance_id as usize;
         if handle >= ARENA_SIZE {
             return 1;
