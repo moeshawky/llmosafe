@@ -73,7 +73,7 @@ jobs:
   # ═══════════════════════════════════════════════════════════════════════════
   build-macos:
     name: macos (${{ matrix.target }})
-    if: env.PROJECT == 'ix'
+    if: ${{ env.PROJECT == 'ix' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -105,7 +105,7 @@ jobs:
   # ═══════════════════════════════════════════════════════════════════════════
   build-windows:
     name: windows (${{ matrix.target }})
-    if: env.PROJECT == 'ix'
+    if: ${{ env.PROJECT == 'ix' }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
