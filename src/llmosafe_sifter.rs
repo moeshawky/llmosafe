@@ -366,15 +366,20 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             negated_positions[i] = curr_negated;
         }
 
+        // Optimization: Lift Vec allocation outside the hot loop and reuse it via
+        // `.clear()` and `.extend()` to avoid dynamic allocations per phrase.
+        let mut phrase_words_buf: Vec<&str> = Vec::new();
+
         for phrase in SEMANTIC_TRAPS {
             if !phrase.contains(' ') {
                 continue;
             }
-            let phrase_words: Vec<&str> = phrase.split_whitespace().collect();
+            phrase_words_buf.clear();
+            phrase_words_buf.extend(phrase.split_whitespace());
             if tokens
-                .windows(phrase_words.len())
+                .windows(phrase_words_buf.len())
                 .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, &phrase_words))
+                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, &phrase_words_buf))
             {
                 breakdown.semantic_traps = breakdown.semantic_traps.saturating_add(100);
             }
@@ -384,11 +389,12 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             if !phrase.contains(' ') {
                 continue;
             }
-            let phrase_words: Vec<&str> = phrase.split_whitespace().collect();
+            phrase_words_buf.clear();
+            phrase_words_buf.extend(phrase.split_whitespace());
             if tokens
-                .windows(phrase_words.len())
+                .windows(phrase_words_buf.len())
                 .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, &phrase_words))
+                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, &phrase_words_buf))
             {
                 breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
             }
