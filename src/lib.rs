@@ -394,17 +394,21 @@ pub mod c_abi {
         let arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return -1.0;
         }
-        arena[instance_id as usize].as_ref().map_or_else(
-            || -1.0,
-            |slot| {
-                slot.last_result
-                    .as_ref()
-                    .map_or_else(|| -1.0, |r| f64::from(r.classifier_score))
-            },
-        )
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or_else(
+                || -1.0,
+                |slot| {
+                    slot.last_result
+                        .as_ref()
+                        .map_or_else(|| -1.0, |r| f64::from(r.classifier_score))
+                },
+            )
     }
 
     /// Reads PID state from the pipeline associated with `instance_id`.
@@ -428,12 +432,13 @@ pub mod c_abi {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let handle = instance_id as usize;
-        if handle >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(handle);
+        if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[handle] {
-            Some(s) => s,
-            None => return 1,
+        let slot = match &arena[index] {
+            Some(s) if s.generation == generation => s,
+            _ => return 1,
         };
         let state = slot.pipeline.pid_state();
         // SAFETY: acute, chronic, pressure are all non-null (validated above).
@@ -571,13 +576,14 @@ pub mod c_abi {
         let arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let idx = instance_id as usize;
-        if idx >= ARENA_SIZE {
+        let handle = instance_id as usize;
+        let (index, generation) = unpack_handle(handle);
+        if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[idx] {
-            Some(s) => s,
-            None => return 1,
+        let slot = match &arena[index] {
+            Some(s) if s.generation == generation => s,
+            _ => return 1,
         };
         let stats = slot.pipeline.memory_stats();
         // SAFETY: mean, variance, trend, drifting are all non-null (validated above).
@@ -618,11 +624,13 @@ pub mod c_abi {
         let arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return -9;
         }
-        arena[instance_id as usize]
+        arena[index]
             .as_ref()
+            .filter(|s| s.generation == generation)
             .and_then(|slot| slot.last_result.as_ref())
             .and_then(|r| r.kernel_output())
             .map_or(-9, |ko| {
@@ -647,11 +655,13 @@ pub mod c_abi {
         let arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return u32::MAX;
         }
-        arena[instance_id as usize]
+        arena[index]
             .as_ref()
+            .filter(|s| s.generation == generation)
             .map_or(u32::MAX, |slot| {
                 slot.last_result
                     .as_ref()
@@ -679,11 +689,13 @@ pub mod c_abi {
         let arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize]
+        arena[index]
             .as_ref()
+            .filter(|s| s.generation == generation)
             .map_or(0, |slot| slot.last_result.as_ref().map_or(0, |r| r.entropy))
     }
 
@@ -693,12 +705,16 @@ pub mod c_abi {
         let arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize].as_ref().map_or(0, |slot| {
-            slot.last_result.as_ref().map_or(0, |r| r.surprise)
-        })
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or(0, |slot| {
+                slot.last_result.as_ref().map_or(0, |r| r.surprise)
+            })
     }
 
     /// Returns the detection_flags field from the last pipeline result.
@@ -707,12 +723,16 @@ pub mod c_abi {
         let arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize].as_ref().map_or(0, |slot| {
-            slot.last_result.as_ref().map_or(0, |r| r.detection_flags)
-        })
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or(0, |slot| {
+                slot.last_result.as_ref().map_or(0, |r| r.detection_flags)
+            })
     }
 
     /// Returns the oov_ratio field from the last pipeline result.
@@ -721,12 +741,16 @@ pub mod c_abi {
         let arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize].as_ref().map_or(0, |slot| {
-            slot.last_result.as_ref().map_or(0, |r| r.oov_ratio)
-        })
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or(0, |slot| {
+                slot.last_result.as_ref().map_or(0, |r| r.oov_ratio)
+            })
     }
 
     /// Returns the stages_executed field from the last pipeline result.
@@ -735,12 +759,16 @@ pub mod c_abi {
         let arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize].as_ref().map_or(0, |slot| {
-            slot.last_result.as_ref().map_or(0, |r| r.stages_executed)
-        })
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or(0, |slot| {
+                slot.last_result.as_ref().map_or(0, |r| r.stages_executed)
+            })
     }
 
     /// Returns the step_count field from the last pipeline result.
@@ -749,12 +777,16 @@ pub mod c_abi {
         let arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize].as_ref().map_or(0, |slot| {
-            slot.last_result.as_ref().map_or(0, |r| r.step_count as u32)
-        })
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or(0, |slot| {
+                slot.last_result.as_ref().map_or(0, |r| r.step_count as u32)
+            })
     }
 
     /// Runs text through the pipeline with body pressure gating.
@@ -852,16 +884,17 @@ pub mod c_abi {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let handle = instance_id as usize;
-        if handle >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(handle);
+        if index >= ARENA_SIZE {
             return 1;
         }
-        match arena[handle].as_mut() {
-            Some(s) => {
-                s.pipeline.esc_policy.dal = dal;
-                s.pipeline.use_detection_gate = use_detection_gate != 0;
+        match arena[index].as_mut() {
+            Some(slot) if slot.generation == generation => {
+                slot.pipeline.esc_policy.dal = dal;
+                slot.pipeline.use_detection_gate = use_detection_gate != 0;
                 0
             }
-            None => 1,
+            _ => 1,
         }
     }
 }
