@@ -10,6 +10,9 @@
 #![cfg_attr(test, allow(clippy::expect_used))]
 #![cfg_attr(test, allow(unused_results))]
 #![cfg_attr(test, allow(clippy::shadow_reuse))]
+// Tests exercise deprecated legacy functions (calculate_halo_signal,
+// get_bias_breakdown) for backward-compatibility verification.
+#![allow(deprecated)]
 #![cfg_attr(test, allow(clippy::shadow_same))]
 #![cfg_attr(test, allow(clippy::shadow_unrelated))]
 

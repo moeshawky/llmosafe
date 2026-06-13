@@ -8,6 +8,9 @@
 #![cfg_attr(test, allow(clippy::indexing_slicing))]
 #![cfg_attr(test, allow(clippy::as_conversions))]
 #![cfg_attr(test, allow(clippy::expect_used))]
+// Tests exercise deprecated legacy functions (calculate_halo_signal,
+// get_bias_breakdown) for backward-compatibility verification.
+#![allow(deprecated)]
 #![cfg_attr(test, allow(unused_results))]
 #![cfg_attr(test, allow(clippy::shadow_reuse))]
 #![cfg_attr(test, allow(clippy::shadow_same))]

@@ -49,7 +49,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: cargo publish --dry-run
-        run: cargo publish ${{ env.PUBLISH_FLAGS }} --dry-run --locked
+        run: cargo publish ${{ env.PUBLISH_FLAGS }} --dry-run
 
   # ── Publish ──────────────────────────────────────────────────────────────
   publish:
@@ -65,4 +65,4 @@ jobs:
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish ${{ env.PUBLISH_FLAGS }} --locked
+        run: cargo publish ${{ env.PUBLISH_FLAGS }}
