@@ -7,13 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-06-13
+
+### Added
+- **Maat systemic order audit** — Ran Maat audit (PASS, weight 4,248), found 2 clustered findings
+- **Mutex poisoning observability** — Added `tracing::warn!` on all `PoisonError::into_inner()` recovery paths
+  - Created `lock_arena()` helper in C-ABI module (replaces 19 inline patterns)
+  - Created `lock_memory()` helper in cognitive_memory module
+  - `tracing` added as optional dependency gated behind `std` feature
+- **Legacy function deprecation** — Added `#[deprecated(since = "0.8.0")]` to keyword-based functions
+  - `calculate_halo_signal()` — keyword-only (18.6% accuracy), use `sift_perceptions()` (93.4%)
+  - `get_bias_breakdown()` — keyword-only, use `sift_perceptions()` instead
+  - Internal callers marked with `#[allow(deprecated)]` for backward compatibility
+- **Branch hygiene** — Extracted useful code from 3 stale branches before deletion
+  - i128 trend optimization tests
+  - Integration policy tests (231 lines)
+  - hash_str invariant tests (53 lines)
+- **Python bindings audit** — Verified no mocks/stubs, all functions call real Rust FFI
+
+### Changed
+- **Python version sync** — `__init__.py` version bumped 0.7.3 → 0.7.4 to match Cargo.toml
+- **Clippy compliance** — Added `#[allow(deprecated)]` to public re-exports in `lib.rs`
+
 ### Fixed
 - **C-ABI UTF-8 truncation UB** — `store_objective` now uses `is_char_boundary()` backtracking
   to prevent multi-byte character splitting before `from_utf8_unchecked`. (#127)
 - **System metrics silent failures** — Fixed silent failures in system metrics parsing. (#123)
 
-### Added
-- **Resource Body test coverage** — Expanded test coverage for Resource Body component. (#126)
+### Removed
+- **Stale branches** — Deleted 120 remote branches and 3 local branches (`devel`, `bolt-memory-trend-i128`, `fix-spin-loop-dos`)
 
 ## [0.7.3] — 2026-06-07
 
