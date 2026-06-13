@@ -44,9 +44,6 @@
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 // Test checks call pipeline.process() and discard result; return value unused by design.
 #![cfg_attr(test, allow(unused_results))]
-// Test code calls deprecated legacy functions (calculate_halo_signal, get_bias_breakdown)
-// for backward-compatibility verification — deprecation warnings are expected.
-#![cfg_attr(test, allow(deprecated))]
 
 //! LLMOSAFE — Runtime safety guardrails for systems processing untrusted inputs.
 //!
@@ -214,18 +211,9 @@ pub mod c_abi {
         (index, generation)
     }
 
-    static PIPELINE_ARENA: Mutex<[Option<PipelineSlot>; ARENA_SIZE]> = Mutex::new([
-        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        None,
-    ]);
-
-    /// Lock the pipeline arena, recovering from mutex poisoning with a warning.
-    ///
-    /// Mutex poisoning occurs when a thread panics while holding the lock.
-    /// In a safety-critical FFI context, panicking across the Rust↔C boundary
-    /// is UB — so we recover the inner state rather than panicking. However,
-    /// poisoning indicates a prior panic, which is a serious error condition
-    /// that must be logged for observability.
+    /// Acquires the arena lock with observability: if the mutex is poisoned
+    /// (a prior panic), recover the inner state instead of crashing the FFI
+    /// caller. Logs a warning so poisoning is visible, not silently swallowed.
     fn lock_arena() -> std::sync::MutexGuard<'static, [Option<PipelineSlot>; ARENA_SIZE]> {
         PIPELINE_ARENA.lock().unwrap_or_else(|e| {
             tracing::warn!(
@@ -235,6 +223,11 @@ pub mod c_abi {
             e.into_inner()
         })
     }
+
+    static PIPELINE_ARENA: Mutex<[Option<PipelineSlot>; ARENA_SIZE]> = Mutex::new([
+        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+        None,
+    ]);
 
     /// Stores `input` in `buf` and returns a `&'static str` pointing into the buffer.
     ///
@@ -309,7 +302,9 @@ pub mod c_abi {
             Err(_) => return usize::MAX,
         };
         let gen = NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut arena = lock_arena();
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for (i, slot) in arena.iter_mut().enumerate() {
             if slot.is_none() {
                 *slot = Some(PipelineSlot {
@@ -365,7 +360,9 @@ pub mod c_abi {
         // The slice is consumed immediately via from_utf8_lossy.
         let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
         let text = String::from_utf8_lossy(slice);
-        let mut arena = lock_arena();
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = match get_validated_slot(&mut arena, handle) {
             Some(s) => s,
             None => return -9,
@@ -407,17 +404,21 @@ pub mod c_abi {
     #[no_mangle]
     pub extern "C" fn llmosafe_get_classifier_score(instance_id: u32) -> f64 {
         let arena = lock_arena();
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return -1.0;
         }
-        arena[instance_id as usize].as_ref().map_or_else(
-            || -1.0,
-            |slot| {
-                slot.last_result
-                    .as_ref()
-                    .map_or_else(|| -1.0, |r| f64::from(r.classifier_score))
-            },
-        )
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or_else(
+                || -1.0,
+                |slot| {
+                    slot.last_result
+                        .as_ref()
+                        .map_or_else(|| -1.0, |r| f64::from(r.classifier_score))
+                },
+            )
     }
 
     /// Reads PID state from the pipeline associated with `instance_id`.
@@ -439,12 +440,13 @@ pub mod c_abi {
         }
         let arena = lock_arena();
         let handle = instance_id as usize;
-        if handle >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(handle);
+        if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[handle] {
-            Some(s) => s,
-            None => return 1,
+        let slot = match &arena[index] {
+            Some(s) if s.generation == generation => s,
+            _ => return 1,
         };
         let state = slot.pipeline.pid_state();
         // SAFETY: acute, chronic, pressure are all non-null (validated above).
@@ -468,7 +470,9 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return;
         }
-        let mut arena = lock_arena();
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match &arena[index] {
             Some(slot) if slot.generation == generation => {
                 arena[index] = None;
@@ -578,13 +582,14 @@ pub mod c_abi {
             return 1;
         }
         let arena = lock_arena();
-        let idx = instance_id as usize;
-        if idx >= ARENA_SIZE {
+        let handle = instance_id as usize;
+        let (index, generation) = unpack_handle(handle);
+        if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[idx] {
-            Some(s) => s,
-            None => return 1,
+        let slot = match &arena[index] {
+            Some(s) if s.generation == generation => s,
+            _ => return 1,
         };
         let stats = slot.pipeline.memory_stats();
         // SAFETY: mean, variance, trend, drifting are all non-null (validated above).
@@ -623,11 +628,13 @@ pub mod c_abi {
             return -9;
         }
         let arena = lock_arena();
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return -9;
         }
-        arena[instance_id as usize]
+        arena[index]
             .as_ref()
+            .filter(|s| s.generation == generation)
             .and_then(|slot| slot.last_result.as_ref())
             .and_then(|r| r.kernel_output())
             .map_or(-9, |ko| {
@@ -650,11 +657,13 @@ pub mod c_abi {
     #[no_mangle]
     pub extern "C" fn llmosafe_get_body_pressure(instance_id: u32) -> u32 {
         let arena = lock_arena();
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return u32::MAX;
         }
-        arena[instance_id as usize]
+        arena[index]
             .as_ref()
+            .filter(|s| s.generation == generation)
             .map_or(u32::MAX, |slot| {
                 slot.last_result
                     .as_ref()
@@ -680,11 +689,13 @@ pub mod c_abi {
     #[no_mangle]
     pub extern "C" fn llmosafe_get_entropy(instance_id: u32) -> u16 {
         let arena = lock_arena();
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize]
+        arena[index]
             .as_ref()
+            .filter(|s| s.generation == generation)
             .map_or(0, |slot| slot.last_result.as_ref().map_or(0, |r| r.entropy))
     }
 
@@ -692,60 +703,80 @@ pub mod c_abi {
     #[no_mangle]
     pub extern "C" fn llmosafe_get_surprise(instance_id: u32) -> u16 {
         let arena = lock_arena();
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize].as_ref().map_or(0, |slot| {
-            slot.last_result.as_ref().map_or(0, |r| r.surprise)
-        })
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or(0, |slot| {
+                slot.last_result.as_ref().map_or(0, |r| r.surprise)
+            })
     }
 
     /// Returns the detection_flags field from the last pipeline result.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_detection_flags(instance_id: u32) -> u8 {
         let arena = lock_arena();
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize].as_ref().map_or(0, |slot| {
-            slot.last_result.as_ref().map_or(0, |r| r.detection_flags)
-        })
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or(0, |slot| {
+                slot.last_result.as_ref().map_or(0, |r| r.detection_flags)
+            })
     }
 
     /// Returns the oov_ratio field from the last pipeline result.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_oov_ratio(instance_id: u32) -> u8 {
         let arena = lock_arena();
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize].as_ref().map_or(0, |slot| {
-            slot.last_result.as_ref().map_or(0, |r| r.oov_ratio)
-        })
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or(0, |slot| {
+                slot.last_result.as_ref().map_or(0, |r| r.oov_ratio)
+            })
     }
 
     /// Returns the stages_executed field from the last pipeline result.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_stages_executed(instance_id: u32) -> u8 {
         let arena = lock_arena();
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize].as_ref().map_or(0, |slot| {
-            slot.last_result.as_ref().map_or(0, |r| r.stages_executed)
-        })
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or(0, |slot| {
+                slot.last_result.as_ref().map_or(0, |r| r.stages_executed)
+            })
     }
 
     /// Returns the step_count field from the last pipeline result.
     #[no_mangle]
     pub extern "C" fn llmosafe_get_step_count(instance_id: u32) -> u32 {
         let arena = lock_arena();
-        if (instance_id as usize) >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(instance_id as usize);
+        if index >= ARENA_SIZE {
             return 0;
         }
-        arena[instance_id as usize].as_ref().map_or(0, |slot| {
-            slot.last_result.as_ref().map_or(0, |r| r.step_count as u32)
-        })
+        arena[index]
+            .as_ref()
+            .filter(|s| s.generation == generation)
+            .map_or(0, |slot| {
+                slot.last_result.as_ref().map_or(0, |r| r.step_count as u32)
+            })
     }
 
     /// Runs text through the pipeline with body pressure gating.
@@ -770,7 +801,9 @@ pub mod c_abi {
         // for the duration of String::from_utf8_lossy below.
         let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
         let text = String::from_utf8_lossy(slice);
-        let mut arena = lock_arena();
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = match get_validated_slot(&mut arena, handle) {
             Some(s) => s,
             None => return -9,
@@ -786,7 +819,9 @@ pub mod c_abi {
     /// Resets detectors and monitor only (preserves memory and reasoning).
     #[no_mangle]
     pub extern "C" fn llmosafe_reset_detectors(handle: usize) -> u32 {
-        let mut arena = lock_arena();
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match get_validated_slot(&mut arena, handle) {
             Some(s) => {
                 s.pipeline.reset_detectors();
@@ -799,7 +834,9 @@ pub mod c_abi {
     /// Full reset to post-construction state.
     #[no_mangle]
     pub extern "C" fn llmosafe_reset_full(handle: usize) -> u32 {
-        let mut arena = lock_arena();
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match get_validated_slot(&mut arena, handle) {
             Some(s) => {
                 s.pipeline.reset_full();
@@ -833,18 +870,21 @@ pub mod c_abi {
             3 => crate::control_types::DesignAssuranceLevel::D,
             _ => crate::control_types::DesignAssuranceLevel::E,
         };
-        let mut arena = lock_arena();
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let handle = instance_id as usize;
-        if handle >= ARENA_SIZE {
+        let (index, generation) = unpack_handle(handle);
+        if index >= ARENA_SIZE {
             return 1;
         }
-        match arena[handle].as_mut() {
-            Some(s) => {
-                s.pipeline.esc_policy.dal = dal;
-                s.pipeline.use_detection_gate = use_detection_gate != 0;
+        match arena[index].as_mut() {
+            Some(slot) if slot.generation == generation => {
+                slot.pipeline.esc_policy.dal = dal;
+                slot.pipeline.use_detection_gate = use_detection_gate != 0;
                 0
             }
-            None => 1,
+            _ => 1,
         }
     }
 }
