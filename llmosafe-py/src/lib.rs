@@ -220,6 +220,7 @@ impl PySynapse {
 
 use ::llmosafe::llmosafe_body::ResourceGuard;
 use ::llmosafe::llmosafe_kernel::{KernelError, Synapse};
+#[allow(deprecated)]
 use ::llmosafe::llmosafe_sifter::{sift_text, get_bias_breakdown as rust_get_bias_breakdown, calculate_halo_signal, BiasBreakdown};
 use ::llmosafe::llmosafe_body::llmosafe_get_environmental_entropy;
 use ::llmosafe::llmosafe_memory::cognitive_memory::{process_state_update, get_memory_stats};
