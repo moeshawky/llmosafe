@@ -819,4 +819,235 @@ mod tests {
         assert!(PressureLevel::Critical.requires_action());
         assert!(PressureLevel::Emergency.requires_action());
     }
+
+    #[test]
+    fn test_must_halt_behavior() {
+        // must_halt should return true ONLY for Halt, not for Exit or Escalate.
+        assert!(!SafetyDecision::Proceed.must_halt());
+        assert!(!SafetyDecision::Warn("test").must_halt());
+        assert!(!SafetyDecision::Escalate {
+            entropy: 500,
+            reason: EscalationReason::BiasDetected,
+            cooldown_ms: 5000,
+        }
+        .must_halt());
+        assert!(SafetyDecision::Halt(KernelError::CognitiveInstability, 30000).must_halt());
+        assert!(!SafetyDecision::Exit(KernelError::ResourceExhaustion).must_halt());
+    }
+
+    #[test]
+    fn test_default_context_boundaries() {
+        let mut ctx = SafetyContext::default_context();
+        // Check conservative/sane defaults
+        assert_eq!(ctx.observation_count(), 0);
+        assert_eq!(ctx.max_entropy, 0);
+        assert_eq!(ctx.max_surprise, 0);
+        assert!(!ctx.any_bias);
+
+        // Finalize before any observations
+        let decision = ctx.finalize();
+        assert!(matches!(decision, SafetyDecision::Proceed));
+
+        // Observation exactly at warn boundary (30000 entropy)
+        ctx.observe(30000, 100, false);
+        let decision = ctx.finalize();
+        assert!(matches!(decision, SafetyDecision::Warn(_)));
+        assert_eq!(ctx.observation_count(), 1);
+
+        // Exceeding warn_surprise (42600)
+        ctx.observe(30000, 42600, false);
+        let decision = ctx.finalize();
+        assert!(matches!(decision, SafetyDecision::Warn(_)));
+    }
+
+    #[test]
+    fn test_decide_from_stability_bypasses_dal() {
+        // decide_from_stability maps enums directly and intentionally bypasses apply_dal_to_decision()
+        // Here we test that a DAL E configuration (which would otherwise suppress Halt)
+        // does not suppress a Halt decision coming from Unstable stability.
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::E);
+
+        let decision = policy.decide_from_stability(CognitiveStability::Unstable);
+        assert!(
+            matches!(decision, SafetyDecision::Halt(..)),
+            "decide_from_stability should intentionally bypass DAL logic"
+        );
+    }
+
+    #[test]
+    fn test_apply_dal_to_decision_boundaries() {
+        let halt_decision = SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
+        let escalate_decision = SafetyDecision::Escalate {
+            entropy: 40000,
+            reason: EscalationReason::ResourcePressure,
+            cooldown_ms: 5000,
+        };
+        let warn_decision = SafetyDecision::Warn("Test");
+
+        // DAL A: Pass through
+        let policy_a = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        assert!(matches!(
+            policy_a.apply_dal_to_decision(halt_decision),
+            SafetyDecision::Halt(..)
+        ));
+        assert!(matches!(
+            policy_a.apply_dal_to_decision(escalate_decision),
+            SafetyDecision::Escalate { .. }
+        ));
+
+        // DAL B: Halt downgraded to Escalate
+        let policy_b = EscalationPolicy::default().with_dal(DesignAssuranceLevel::B);
+        assert!(matches!(
+            policy_b.apply_dal_to_decision(halt_decision),
+            SafetyDecision::Escalate { .. }
+        ));
+        assert!(matches!(
+            policy_b.apply_dal_to_decision(escalate_decision),
+            SafetyDecision::Escalate { .. }
+        )); // Escalate passes through
+
+        // DAL C: Halt/Escalate downgraded to Warn
+        let policy_c = EscalationPolicy::default().with_dal(DesignAssuranceLevel::C);
+        assert!(matches!(
+            policy_c.apply_dal_to_decision(halt_decision),
+            SafetyDecision::Warn(_)
+        ));
+        assert!(matches!(
+            policy_c.apply_dal_to_decision(escalate_decision),
+            SafetyDecision::Warn(_)
+        ));
+        assert!(matches!(
+            policy_c.apply_dal_to_decision(warn_decision),
+            SafetyDecision::Warn(_)
+        ));
+
+        // DAL D: Halt/Escalate downgraded to Warn, Exit to Warn
+        let policy_d = EscalationPolicy::default().with_dal(DesignAssuranceLevel::D);
+        assert!(matches!(
+            policy_d.apply_dal_to_decision(halt_decision),
+            SafetyDecision::Warn(_)
+        ));
+        assert!(matches!(
+            policy_d.apply_dal_to_decision(SafetyDecision::Exit(KernelError::ResourceExhaustion)),
+            SafetyDecision::Warn(_)
+        ));
+
+        // DAL E: All converted to Proceed
+        let policy_e = EscalationPolicy::default().with_dal(DesignAssuranceLevel::E);
+        assert!(matches!(
+            policy_e.apply_dal_to_decision(halt_decision),
+            SafetyDecision::Proceed
+        ));
+        assert!(matches!(
+            policy_e.apply_dal_to_decision(escalate_decision),
+            SafetyDecision::Proceed
+        ));
+        assert!(matches!(
+            policy_e.apply_dal_to_decision(warn_decision),
+            SafetyDecision::Proceed
+        ));
+    }
+
+    #[test]
+    fn test_decide_boundaries() {
+        let policy = EscalationPolicy::default();
+
+        // warn_entropy is 30000. Test below, equal, above
+        assert!(matches!(
+            policy.decide(29999, 100, false),
+            SafetyDecision::Proceed
+        ));
+        assert!(matches!(
+            policy.decide(30000, 100, false),
+            SafetyDecision::Warn(_)
+        ));
+        assert!(matches!(
+            policy.decide(30001, 100, false),
+            SafetyDecision::Warn(_)
+        ));
+
+        // escalate_entropy is 40000. Test below, equal, above
+        assert!(matches!(
+            policy.decide(39999, 100, false),
+            SafetyDecision::Warn(_)
+        ));
+        assert!(matches!(
+            policy.decide(40000, 100, false),
+            SafetyDecision::Escalate { .. }
+        ));
+        assert!(matches!(
+            policy.decide(40001, 100, false),
+            SafetyDecision::Escalate { .. }
+        ));
+
+        // halt_entropy is 50000. Test below, equal, above
+        assert!(matches!(
+            policy.decide(50000, 100, false),
+            SafetyDecision::Escalate { .. }
+        ));
+        assert!(matches!(
+            policy.decide(50001, 100, false),
+            SafetyDecision::Halt(..)
+        ));
+
+        // warn_surprise is 42600. Test below, equal, above
+        assert!(matches!(
+            policy.decide(100, 42599, false),
+            SafetyDecision::Proceed
+        ));
+        assert!(matches!(
+            policy.decide(100, 42600, false),
+            SafetyDecision::Warn(_)
+        ));
+        assert!(matches!(
+            policy.decide(100, 42601, false),
+            SafetyDecision::Warn(_)
+        ));
+
+        // escalate_surprise is 55700. Test below, equal, above
+        assert!(matches!(
+            policy.decide(100, 55699, false),
+            SafetyDecision::Warn(_)
+        ));
+        assert!(matches!(
+            policy.decide(100, 55700, false),
+            SafetyDecision::Escalate { .. }
+        ));
+        assert!(matches!(
+            policy.decide(100, 55701, false),
+            SafetyDecision::Escalate { .. }
+        ));
+    }
+
+    #[test]
+    fn test_decision_path_isolation() {
+        let policy = EscalationPolicy::default();
+
+        // Bias should escalate even if entropy is low
+        assert!(matches!(
+            policy.decide(100, 100, true),
+            SafetyDecision::Escalate {
+                reason: EscalationReason::BiasDetected,
+                ..
+            }
+        ));
+
+        // Pressure should escalate even if entropy and bias are low
+        assert!(matches!(
+            policy.decide_with_pressure(100, 100, false, PressureLevel::Critical),
+            SafetyDecision::Escalate {
+                reason: EscalationReason::ResourcePressure,
+                ..
+            }
+        ));
+
+        // High entropy should Escalate for entropy, not bias or pressure
+        assert!(matches!(
+            policy.decide(41000, 100, false),
+            SafetyDecision::Escalate {
+                reason: EscalationReason::EntropyApproachingLimit,
+                ..
+            }
+        ));
+    }
 }
