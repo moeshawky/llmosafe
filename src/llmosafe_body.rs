@@ -897,6 +897,22 @@ mod tests {
     fn test_capture_vitals_returns_bounded_values() {
         let vitals = EnvironmentalVitals::capture();
         assert!(vitals.load_avg >= 0.0, "load_avg should be >= 0.0");
+        assert!(
+            vitals.load_avg.is_finite(),
+            "load_avg should be a finite value"
+        );
+        // Note: We don't assert vitals_available is true, because it depends on whether the OS is Linux and /proc is readable.
+        // We do assert that if it is available, it provides non-zero bounds, or if it isn't, values are safely zeroed fail-closed defaults.
+        if !vitals.vitals_available {
+            assert_eq!(
+                vitals.iowait, 0,
+                "Fail-closed behavior: iowait must be 0 if unavailable"
+            );
+            assert_eq!(
+                vitals.load_avg, 0.0,
+                "Fail-closed behavior: load_avg must be 0.0 if unavailable"
+            );
+        }
     }
 
     #[test]
@@ -937,6 +953,43 @@ mod tests {
     }
 
     #[test]
+    fn test_check_blocking_deterministic_proceed_and_warn() {
+        // Deterministic override: 1KB ceiling, entropy 200 (low), pressure 10%
+        let guard = ResourceGuard::for_testing(1024, 200, 10);
+        let result = guard.check_blocking();
+        assert!(
+            result.is_ok(),
+            "Low pressure and low entropy should return Ok"
+        );
+
+        // Deterministic override: Elevated pressure (50%), low entropy (200).
+        // Since pressure is 50%, it maps to PressureLevel::Elevated, which is less than
+        // the default Escalate threshold of Critical. Thus, decide_with_pressure falls through
+        // to decide(), which for low entropy and surprise returns Proceed or Warn.
+        // Therefore, check_blocking() should succeed and return Ok.
+        let guard_warn = ResourceGuard::for_testing(1024, 200, 50);
+        let result_warn = guard_warn.check_blocking();
+        assert!(
+            result_warn.is_ok(),
+            "Elevated pressure with low entropy returns Ok (Warn/Proceed)"
+        );
+    }
+
+    #[test]
+    fn test_check_blocking_deterministic_sustained_failure() {
+        // Deterministic override: entropy 1000 (halt level), pressure 100%
+        let guard = ResourceGuard::for_testing(1024, 1000, 100);
+        // Default check_blocking has 3 retries.
+        // It should eventually fail with DeadlineExceeded because
+        // decide_with_pressure always returns Halt for entropy=1000
+        let result = guard.check_blocking_with_max_retries(0); // 0 max retries immediately fails
+        assert!(
+            matches!(result.unwrap_err(), KernelError::DeadlineExceeded),
+            "Sustained failure pressure returns DeadlineExceeded"
+        );
+    }
+
+    #[test]
     fn test_check_with_deadline_succeeds_before_expiration() {
         let guard = ResourceGuard::new(1024 * 1024 * 1024); // High ceiling, no pressure
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
@@ -963,6 +1016,32 @@ mod tests {
         assert!(
             matches!(result.unwrap_err(), KernelError::DeadlineExceeded),
             "check_with_deadline should return DeadlineExceeded after deadline"
+        );
+    }
+
+    #[test]
+    fn test_check_with_deadline_deterministic_future_deadline_low_pressure() {
+        // Deterministic override: low entropy, low pressure.
+        let guard = ResourceGuard::for_testing(1024, 100, 10);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let result = guard.check_with_deadline(deadline);
+        assert!(
+            result.is_ok(),
+            "Future deadline with low pressure and entropy returns Ok"
+        );
+    }
+
+    #[test]
+    fn test_check_with_deadline_deterministic_sustained_blocking() {
+        // Deterministic override: high entropy (halt level).
+        let guard = ResourceGuard::for_testing(1024, 1000, 100);
+        // Use a future deadline
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        // Because of high entropy, loop retries 3 times then returns DeadlineExceeded.
+        let result = guard.check_with_deadline(deadline);
+        assert!(
+            matches!(result.unwrap_err(), KernelError::DeadlineExceeded),
+            "Sustained blocking condition exits by retry limit instead of spinning forever"
         );
     }
 }

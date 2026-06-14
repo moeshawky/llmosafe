@@ -387,6 +387,8 @@ pub fn apply_safety_overrides(risk: f32, flags: OverrideFlags, config: &PidConfi
     }
     #[cfg(not(feature = "dal"))]
     {
+        let _ = flags;
+        let _ = config;
         risk
     }
 }

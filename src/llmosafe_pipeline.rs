@@ -334,8 +334,10 @@ pub struct CognitivePipeline<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> 
     step_count: usize,
     pid_state: PidState,
     pid_config: PidConfig,
+    #[allow(dead_code)]
     pub(crate) esc_policy: EscalationPolicy,
     /// When true, routes decisions through the detection-gate path instead of PID.
+    #[allow(dead_code)]
     pub(crate) use_detection_gate: bool,
     /// Drift threshold [0.0, 1.0]. Stored for `reset_detectors()` and `reset_full()`.
     drift_threshold: f32,
@@ -579,6 +581,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
     /// `e_body` is the normalised body pressure error [0.0, 1.0] from BodyOutput.
     /// `pressure` is the resource pressure percentage [0, 100], passed for diagnostics.
     pub fn process_ctrl(&mut self, observation: &str, e_body: f32, pressure: u8) -> PipelineResult {
+        let _pressure = pressure; // Only used in test/diagnostics in some configurations
         let mut stages = 0u8;
 
         // ── Stage 1: SIFT (Tier 3) ──
