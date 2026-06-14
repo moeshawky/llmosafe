@@ -686,97 +686,202 @@ pub mod c_abi {
     }
 
     /// Returns the entropy field from the last pipeline result.
+    ///
+    /// # Returns
+    /// * `0` on success — entropy value [0, 65535] written to `*out`
+    /// * `1` if `instance_id` is invalid (slot not found, uninitialized, stale, or index out of bounds)
+    /// * `2` if `out` pointer is null
+    /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
-    pub extern "C" fn llmosafe_get_entropy(instance_id: u32) -> u16 {
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_get_entropy(instance_id: u32, out: *mut u16) -> i32 {
+        if out.is_null() {
+            return 2;
+        }
         let arena = lock_arena();
         let (index, generation) = unpack_handle(instance_id as usize);
         if index >= ARENA_SIZE {
-            return 0;
+            return 1;
         }
-        arena[index]
-            .as_ref()
-            .filter(|s| s.generation == generation)
-            .map_or(0, |slot| slot.last_result.as_ref().map_or(0, |r| r.entropy))
+        let slot = match &arena[index] {
+            Some(s) if s.generation == generation => s,
+            _ => return 1,
+        };
+        let entropy = match slot.last_result.as_ref() {
+            Some(r) => r.entropy,
+            None => return 3,
+        };
+        // SAFETY: out is non-null (validated above). Write via write_unaligned for alignment safety.
+        unsafe {
+            std::ptr::write_unaligned(out, entropy);
+        }
+        0
     }
 
     /// Returns the surprise field from the last pipeline result.
+    ///
+    /// # Returns
+    /// * `0` on success — surprise value [0, 65535] written to `*out`
+    /// * `1` if `instance_id` is invalid (slot not found, uninitialized, stale, or index out of bounds)
+    /// * `2` if `out` pointer is null
+    /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
-    pub extern "C" fn llmosafe_get_surprise(instance_id: u32) -> u16 {
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_get_surprise(instance_id: u32, out: *mut u16) -> i32 {
+        if out.is_null() {
+            return 2;
+        }
         let arena = lock_arena();
         let (index, generation) = unpack_handle(instance_id as usize);
         if index >= ARENA_SIZE {
-            return 0;
+            return 1;
         }
-        arena[index]
-            .as_ref()
-            .filter(|s| s.generation == generation)
-            .map_or(0, |slot| {
-                slot.last_result.as_ref().map_or(0, |r| r.surprise)
-            })
+        let slot = match &arena[index] {
+            Some(s) if s.generation == generation => s,
+            _ => return 1,
+        };
+        let surprise = match slot.last_result.as_ref() {
+            Some(r) => r.surprise,
+            None => return 3,
+        };
+        // SAFETY: out is non-null (validated above). Write via write_unaligned for alignment safety.
+        unsafe {
+            std::ptr::write_unaligned(out, surprise);
+        }
+        0
     }
 
     /// Returns the detection_flags field from the last pipeline result.
+    ///
+    /// # Returns
+    /// * `0` on success — detection flags bitmask [0, 63] written to `*out`
+    /// * `1` if `instance_id` is invalid (slot not found, uninitialized, stale, or index out of bounds)
+    /// * `2` if `out` pointer is null
+    /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
-    pub extern "C" fn llmosafe_get_detection_flags(instance_id: u32) -> u8 {
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_get_detection_flags(instance_id: u32, out: *mut u8) -> i32 {
+        if out.is_null() {
+            return 2;
+        }
         let arena = lock_arena();
         let (index, generation) = unpack_handle(instance_id as usize);
         if index >= ARENA_SIZE {
-            return 0;
+            return 1;
         }
-        arena[index]
-            .as_ref()
-            .filter(|s| s.generation == generation)
-            .map_or(0, |slot| {
-                slot.last_result.as_ref().map_or(0, |r| r.detection_flags)
-            })
+        let slot = match &arena[index] {
+            Some(s) if s.generation == generation => s,
+            _ => return 1,
+        };
+        let flags = match slot.last_result.as_ref() {
+            Some(r) => r.detection_flags,
+            None => return 3,
+        };
+        // SAFETY: out is non-null (validated above). Write via write_unaligned for alignment safety.
+        unsafe {
+            std::ptr::write_unaligned(out, flags);
+        }
+        0
     }
 
     /// Returns the oov_ratio field from the last pipeline result.
+    ///
+    /// # Returns
+    /// * `0` on success — OOV ratio [0, 255] written to `*out` (0=0%, 255=100%)
+    /// * `1` if `instance_id` is invalid (slot not found, uninitialized, stale, or index out of bounds)
+    /// * `2` if `out` pointer is null
+    /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
-    pub extern "C" fn llmosafe_get_oov_ratio(instance_id: u32) -> u8 {
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_get_oov_ratio(instance_id: u32, out: *mut u8) -> i32 {
+        if out.is_null() {
+            return 2;
+        }
         let arena = lock_arena();
         let (index, generation) = unpack_handle(instance_id as usize);
         if index >= ARENA_SIZE {
-            return 0;
+            return 1;
         }
-        arena[index]
-            .as_ref()
-            .filter(|s| s.generation == generation)
-            .map_or(0, |slot| {
-                slot.last_result.as_ref().map_or(0, |r| r.oov_ratio)
-            })
+        let slot = match &arena[index] {
+            Some(s) if s.generation == generation => s,
+            _ => return 1,
+        };
+        let oov = match slot.last_result.as_ref() {
+            Some(r) => r.oov_ratio,
+            None => return 3,
+        };
+        // SAFETY: out is non-null (validated above). Write via write_unaligned for alignment safety.
+        unsafe {
+            std::ptr::write_unaligned(out, oov);
+        }
+        0
     }
 
     /// Returns the stages_executed field from the last pipeline result.
+    ///
+    /// # Returns
+    /// * `0` on success — stages executed bitmask written to `*out`
+    ///   (0x01=SIFT, 0x02=MEMORY, 0x04=KERNEL, 0x08=DETECTION, 0x10=MONITOR, 0x20=BODY)
+    /// * `1` if `instance_id` is invalid (slot not found, uninitialized, stale, or index out of bounds)
+    /// * `2` if `out` pointer is null
+    /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
-    pub extern "C" fn llmosafe_get_stages_executed(instance_id: u32) -> u8 {
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_get_stages_executed(instance_id: u32, out: *mut u8) -> i32 {
+        if out.is_null() {
+            return 2;
+        }
         let arena = lock_arena();
         let (index, generation) = unpack_handle(instance_id as usize);
         if index >= ARENA_SIZE {
-            return 0;
+            return 1;
         }
-        arena[index]
-            .as_ref()
-            .filter(|s| s.generation == generation)
-            .map_or(0, |slot| {
-                slot.last_result.as_ref().map_or(0, |r| r.stages_executed)
-            })
+        let slot = match &arena[index] {
+            Some(s) if s.generation == generation => s,
+            _ => return 1,
+        };
+        let stages = match slot.last_result.as_ref() {
+            Some(r) => r.stages_executed,
+            None => return 3,
+        };
+        // SAFETY: out is non-null (validated above). Write via write_unaligned for alignment safety.
+        unsafe {
+            std::ptr::write_unaligned(out, stages);
+        }
+        0
     }
 
     /// Returns the step_count field from the last pipeline result.
+    ///
+    /// # Returns
+    /// * `0` on success — step count [0, u32::MAX] written to `*out`
+    /// * `1` if `instance_id` is invalid (slot not found, uninitialized, stale, or index out of bounds)
+    /// * `2` if `out` pointer is null
+    /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
-    pub extern "C" fn llmosafe_get_step_count(instance_id: u32) -> u32 {
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_get_step_count(instance_id: u32, out: *mut u32) -> i32 {
+        if out.is_null() {
+            return 2;
+        }
         let arena = lock_arena();
         let (index, generation) = unpack_handle(instance_id as usize);
         if index >= ARENA_SIZE {
-            return 0;
+            return 1;
         }
-        arena[index]
-            .as_ref()
-            .filter(|s| s.generation == generation)
-            .map_or(0, |slot| {
-                slot.last_result.as_ref().map_or(0, |r| r.step_count as u32)
-            })
+        let slot = match &arena[index] {
+            Some(s) if s.generation == generation => s,
+            _ => return 1,
+        };
+        let steps = match slot.last_result.as_ref() {
+            Some(r) => r.step_count as u32,
+            None => return 3,
+        };
+        // SAFETY: out is non-null (validated above). Write via write_unaligned for alignment safety.
+        unsafe {
+            std::ptr::write_unaligned(out, steps);
+        }
+        0
     }
 
     /// Runs text through the pipeline with body pressure gating.

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-06-14
+
+### Changed (BREAKING)
+- **C-ABI getter signatures** — 6 getters changed from `T get_foo(id)` to `int32_t get_foo(id, T* out)` (Option B out-param pattern)
+  - `llmosafe_get_entropy`: `u16` → `i32` with `*mut u16` out param
+  - `llmosafe_get_surprise`: `u16` → `i32` with `*mut u16` out param
+  - `llmosafe_get_detection_flags`: `u8` → `i32` with `*mut u8` out param
+  - `llmosafe_get_oov_ratio`: `u8` → `i32` with `*mut u8` out param
+  - `llmosafe_get_stages_executed`: `u8` → `i32` with `*mut u8` out param
+  - `llmosafe_get_step_count`: `u32` → `i32` with `*mut u32` out param
+  - Returns: `0` = OK, `1` = invalid handle, `2` = null pointer, `3` = no result
+  - Eliminates sentinel ambiguity: previously 0 was valid value AND error indicator
+- **Python getter error handling** — All 6 Python getter functions now raise `LLMOSafeError` on error instead of returning 0
+  - `get_entropy()`, `get_surprise()`, `get_detection_flags()`, `get_oov_ratio()`, `get_stages_executed()`, `get_step_count()`
+  - `build_result_dict()` updated to propagate errors via `?` operator
+- **C header regenerated** via cbindgen with new signatures
+
+### Added
+- **Python getter error tests** — 18 new tests covering success, invalid instance, and pre-process error paths for all 6 getters
+- **CognitivePipeline.instance_id getter** — exposes arena slot handle from Python
+
 ## [0.7.4] — 2026-06-13
 
 ### Added
