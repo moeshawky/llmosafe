@@ -365,5 +365,123 @@ class TestDiskGuardComposition:
         assert entropy < 800
 
 
+# ── Pipeline Getter Error Handling Tests ──────────────────────────
+
+class TestPipelineGetters:
+    """Tests for the 6 pipeline getter functions that now raise LLMOSafeError on error."""
+
+    def test_get_entropy_success(self) -> None:
+        """get_entropy returns entropy value after successful process."""
+        pipeline = llmosafe.CognitivePipeline()
+        result = pipeline.process("normal text for entropy test")
+        entropy = llmosafe.get_entropy(pipeline.instance_id)
+        assert 0 <= entropy <= 65535
+
+    def test_get_entropy_invalid_instance(self) -> None:
+        """get_entropy raises LLMOSafeError for invalid instance_id."""
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_entropy failed"):
+            llmosafe.get_entropy(999)
+
+    def test_get_entropy_before_process(self) -> None:
+        """get_entropy raises LLMOSafeError when called before process."""
+        pipeline = llmosafe.CognitivePipeline()
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_entropy failed"):
+            llmosafe.get_entropy(pipeline.instance_id)
+
+    def test_get_surprise_success(self) -> None:
+        """get_surprise returns surprise value after successful process."""
+        pipeline = llmosafe.CognitivePipeline()
+        result = pipeline.process("normal text for surprise test")
+        surprise = llmosafe.get_surprise(pipeline.instance_id)
+        assert 0 <= surprise <= 65535
+
+    def test_get_surprise_invalid_instance(self) -> None:
+        """get_surprise raises LLMOSafeError for invalid instance_id."""
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_surprise failed"):
+            llmosafe.get_surprise(999)
+
+    def test_get_surprise_before_process(self) -> None:
+        """get_surprise raises LLMOSafeError when called before process."""
+        pipeline = llmosafe.CognitivePipeline()
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_surprise failed"):
+            llmosafe.get_surprise(pipeline.instance_id)
+
+    def test_get_detection_flags_success(self) -> None:
+        """get_detection_flags returns flags bitmask after successful process."""
+        pipeline = llmosafe.CognitivePipeline()
+        result = pipeline.process("text with adversarial pattern ignore instructions")
+        flags = llmosafe.get_detection_flags(pipeline.instance_id)
+        assert 0 <= flags <= 63
+
+    def test_get_detection_flags_invalid_instance(self) -> None:
+        """get_detection_flags raises LLMOSafeError for invalid instance_id."""
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_detection_flags failed"):
+            llmosafe.get_detection_flags(999)
+
+    def test_get_detection_flags_before_process(self) -> None:
+        """get_detection_flags raises LLMOSafeError when called before process."""
+        pipeline = llmosafe.CognitivePipeline()
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_detection_flags failed"):
+            llmosafe.get_detection_flags(pipeline.instance_id)
+
+    def test_get_oov_ratio_success(self) -> None:
+        """get_oov_ratio returns OOV ratio after successful process."""
+        pipeline = llmosafe.CognitivePipeline()
+        result = pipeline.process("normal text for oov test")
+        oov = llmosafe.get_oov_ratio(pipeline.instance_id)
+        assert 0 <= oov <= 255
+
+    def test_get_oov_ratio_invalid_instance(self) -> None:
+        """get_oov_ratio raises LLMOSafeError for invalid instance_id."""
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_oov_ratio failed"):
+            llmosafe.get_oov_ratio(999)
+
+    def test_get_oov_ratio_before_process(self) -> None:
+        """get_oov_ratio raises LLMOSafeError when called before process."""
+        pipeline = llmosafe.CognitivePipeline()
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_oov_ratio failed"):
+            llmosafe.get_oov_ratio(pipeline.instance_id)
+
+    def test_get_stages_executed_success(self) -> None:
+        """get_stages_executed returns stages bitmask after successful process."""
+        pipeline = llmosafe.CognitivePipeline()
+        result = pipeline.process("text for stages test")
+        stages = llmosafe.get_stages_executed(pipeline.instance_id)
+        assert stages & 0x01 != 0  # SIFT
+        assert stages & 0x02 != 0  # MEMORY
+        assert stages & 0x04 != 0  # KERNEL
+        assert stages & 0x08 != 0  # DETECTION
+        assert stages & 0x10 != 0  # MONITOR
+
+    def test_get_stages_executed_invalid_instance(self) -> None:
+        """get_stages_executed raises LLMOSafeError for invalid instance_id."""
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_stages_executed failed"):
+            llmosafe.get_stages_executed(999)
+
+    def test_get_stages_executed_before_process(self) -> None:
+        """get_stages_executed raises LLMOSafeError when called before process."""
+        pipeline = llmosafe.CognitivePipeline()
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_stages_executed failed"):
+            llmosafe.get_stages_executed(pipeline.instance_id)
+
+    def test_get_step_count_success(self) -> None:
+        """get_step_count returns step count after successful process."""
+        pipeline = llmosafe.CognitivePipeline()
+        result = pipeline.process("text for step count test")
+        steps = llmosafe.get_step_count(pipeline.instance_id)
+        assert steps >= 1
+
+    def test_get_step_count_invalid_instance(self) -> None:
+        """get_step_count raises LLMOSafeError for invalid instance_id."""
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_step_count failed"):
+            llmosafe.get_step_count(999)
+
+    def test_get_step_count_before_process(self) -> None:
+        """get_step_count raises LLMOSafeError when called before process."""
+        pipeline = llmosafe.CognitivePipeline()
+        with pytest.raises(llmosafe.LLMOSafeError, match="get_step_count failed"):
+            llmosafe.get_step_count(pipeline.instance_id)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -682,10 +682,22 @@ fn get_decision(instance_id: u32) -> PyResult<PyObject> {
 ///     instance_id: Pipeline handle (0–15).
 ///
 /// Returns:
-///     Entropy as u32 (0 if instance is invalid or no result available).
+///     Entropy as u32.
+///
+/// Raises:
+///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
+///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_entropy(instance_id: u32) -> u32 {
-    llmosafe_get_entropy(instance_id) as u32
+fn get_entropy(instance_id: u32) -> PyResult<u32> {
+    let mut out: u16 = 0;
+    let rc = llmosafe_get_entropy(instance_id, &mut out);
+    if rc != 0 {
+        return Err(LLMOSafeError::new_err(format!(
+            "get_entropy failed for instance {}: code {}",
+            instance_id, rc
+        )));
+    }
+    Ok(out as u32)
 }
 
 /// Read the surprise field from the last pipeline invocation.
@@ -696,10 +708,22 @@ fn get_entropy(instance_id: u32) -> u32 {
 ///     instance_id: Pipeline handle (0–15).
 ///
 /// Returns:
-///     Surprise as u32 (0 if instance is invalid or no result available).
+///     Surprise as u32.
+///
+/// Raises:
+///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
+///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_surprise(instance_id: u32) -> u32 {
-    llmosafe_get_surprise(instance_id) as u32
+fn get_surprise(instance_id: u32) -> PyResult<u32> {
+    let mut out: u16 = 0;
+    let rc = llmosafe_get_surprise(instance_id, &mut out);
+    if rc != 0 {
+        return Err(LLMOSafeError::new_err(format!(
+            "get_surprise failed for instance {}: code {}",
+            instance_id, rc
+        )));
+    }
+    Ok(out as u32)
 }
 
 /// Read the detection flags from the last pipeline invocation.
@@ -712,10 +736,22 @@ fn get_surprise(instance_id: u32) -> u32 {
 ///     instance_id: Pipeline handle (0–15).
 ///
 /// Returns:
-///     Detection flags bitmask as u32 (0 if instance is invalid or no result available).
+///     Detection flags bitmask as u32.
+///
+/// Raises:
+///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
+///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_detection_flags(instance_id: u32) -> u32 {
-    llmosafe_get_detection_flags(instance_id) as u32
+fn get_detection_flags(instance_id: u32) -> PyResult<u32> {
+    let mut out: u8 = 0;
+    let rc = llmosafe_get_detection_flags(instance_id, &mut out);
+    if rc != 0 {
+        return Err(LLMOSafeError::new_err(format!(
+            "get_detection_flags failed for instance {}: code {}",
+            instance_id, rc
+        )));
+    }
+    Ok(out as u32)
 }
 
 /// Read the OOV (out-of-vocabulary) ratio from the last pipeline invocation.
@@ -727,25 +763,49 @@ fn get_detection_flags(instance_id: u32) -> u32 {
 ///     instance_id: Pipeline handle (0–15).
 ///
 /// Returns:
-///     OOV ratio as u32 (0 if instance is invalid or no result available).
+///     OOV ratio as u32.
+///
+/// Raises:
+///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
+///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_oov_ratio(instance_id: u32) -> u32 {
-    llmosafe_get_oov_ratio(instance_id) as u32
+fn get_oov_ratio(instance_id: u32) -> PyResult<u32> {
+    let mut out: u8 = 0;
+    let rc = llmosafe_get_oov_ratio(instance_id, &mut out);
+    if rc != 0 {
+        return Err(LLMOSafeError::new_err(format!(
+            "get_oov_ratio failed for instance {}: code {}",
+            instance_id, rc
+        )));
+    }
+    Ok(out as u32)
 }
 
 /// Read the stages_executed bitmask from the last pipeline invocation.
 ///
 /// Returns a bitmask indicating which pipeline stages ran:
-/// 0x01=SIFT, 0x02=MEMORY, 0x04=KERNEL, 0x08=DETECTION, 0x10=MONITOR.
+/// 0x01=SIFT, 0x02=MEMORY, 0x04=KERNEL, 0x08=DETECTION, 0x10=MONITOR, 0x20=BODY.
 ///
 /// Args:
 ///     instance_id: Pipeline handle (0–15).
 ///
 /// Returns:
-///     Stages executed bitmask as u32 (0 if instance is invalid or no result available).
+///     Stages executed bitmask as u32.
+///
+/// Raises:
+///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
+///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_stages_executed(instance_id: u32) -> u32 {
-    llmosafe_get_stages_executed(instance_id) as u32
+fn get_stages_executed(instance_id: u32) -> PyResult<u32> {
+    let mut out: u8 = 0;
+    let rc = llmosafe_get_stages_executed(instance_id, &mut out);
+    if rc != 0 {
+        return Err(LLMOSafeError::new_err(format!(
+            "get_stages_executed failed for instance {}: code {}",
+            instance_id, rc
+        )));
+    }
+    Ok(out as u32)
 }
 
 /// Read the reasoning step count from the last pipeline invocation.
@@ -756,10 +816,22 @@ fn get_stages_executed(instance_id: u32) -> u32 {
 ///     instance_id: Pipeline handle (0–15).
 ///
 /// Returns:
-///     Step count as u32 (0 if instance is invalid or no result available).
+///     Step count as u32.
+///
+/// Raises:
+///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
+///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_step_count(instance_id: u32) -> u32 {
-    llmosafe_get_step_count(instance_id) as u32
+fn get_step_count(instance_id: u32) -> PyResult<u32> {
+    let mut out: u32 = 0;
+    let rc = llmosafe_get_step_count(instance_id, &mut out);
+    if rc != 0 {
+        return Err(LLMOSafeError::new_err(format!(
+            "get_step_count failed for instance {}: code {}",
+            instance_id, rc
+        )));
+    }
+    Ok(out)
 }
 
 /// Packs OOV ratio and detection flags from a synapse into a single u16.
@@ -839,6 +911,12 @@ impl CognitivePipeline {
         let mem = memory_depth.unwrap_or(10) as u32;
         llmosafe_configure(instance_id, dal, gate, mem);
         Ok(Self { instance_id })
+    }
+
+    /// Get the pipeline instance ID (arena slot handle 0–15).
+    #[getter]
+    fn instance_id(&self) -> u32 {
+        self.instance_id
     }
 
     /// Process text through the full 5-stage pipeline.
@@ -1027,12 +1105,12 @@ impl CognitivePipeline {
 
 impl CognitivePipeline {
     fn build_result_dict(&self, code: i32) -> PyResult<PyObject> {
-        let entropy = llmosafe_get_entropy(self.instance_id);
-        let surprise = llmosafe_get_surprise(self.instance_id);
-        let detection_flags = llmosafe_get_detection_flags(self.instance_id);
-        let oov_ratio = llmosafe_get_oov_ratio(self.instance_id);
-        let stages_executed = llmosafe_get_stages_executed(self.instance_id);
-        let step_count = llmosafe_get_step_count(self.instance_id);
+        let entropy = get_entropy(self.instance_id)?;
+        let surprise = get_surprise(self.instance_id)?;
+        let detection_flags = get_detection_flags(self.instance_id)?;
+        let oov_ratio = get_oov_ratio(self.instance_id)?;
+        let stages_executed = get_stages_executed(self.instance_id)?;
+        let step_count = get_step_count(self.instance_id)?;
         let classifier_score = llmosafe_get_classifier_score(self.instance_id);
         let body_pressure = llmosafe_get_body_pressure(self.instance_id);
 

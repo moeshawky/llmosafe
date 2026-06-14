@@ -63,7 +63,7 @@ from llmosafe._llmosafe import (
     process_synapse,
 )
 
-__version__: str = "0.7.4"
+__version__: str = "0.7.5"
 
 # Nice names for Python users
 Synapse = PySynapse
