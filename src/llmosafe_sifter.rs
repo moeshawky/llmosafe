@@ -670,6 +670,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_negation_awareness() {
         let text = "The agent is not an expert.";
         let breakdown = get_bias_breakdown(text);
@@ -681,6 +682,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_halo_signal() {
         assert_eq!(
             calculate_halo_signal("The lead expert is certified and official."),
@@ -694,6 +696,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_halo_signal_all_categories_detected() {
         let text = "expert trending limited hurry incredible sophisticated";
         let breakdown = get_bias_breakdown(text);
@@ -707,6 +710,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_multi_word_phrases_detected() {
         // "as an ai" and "i cannot" both fire template_fitting
         // "instead of" fires semantic_traps
@@ -717,6 +721,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_template_fitting_phrases() {
         // Each multi-word phrase should fire independently
         let text = "As an AI, my purpose is to note that I am programmed to follow";
@@ -766,6 +771,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_halo_signal_keyword_density() {
         let text = "expert official government doctor scientist guaranteed certified proven experts officials scientists";
         let signal = calculate_halo_signal(text);
@@ -773,6 +779,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_halo_signal_metamorphic_monotonicity() {
         let text1 = "This is a normal observation.";
         let text2 = "This is an expert observation.";
@@ -822,6 +829,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_negation_ttl_covers_six_tokens() {
         // "not a very well known expert" — "expert" is 5 words after "not"
         let breakdown = get_bias_breakdown("not a very well known expert");
@@ -833,6 +841,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_phase2_negation_multi_word() {
         // "not as an ai" — negation should prevent template_fitting match
         let breakdown = get_bias_breakdown("not as an ai");
@@ -847,6 +856,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_while_not_a_semantic_trap() {
         // "while" was removed from SEMANTIC_TRAPS — should not trigger
         let breakdown = get_bias_breakdown("while processing data");
