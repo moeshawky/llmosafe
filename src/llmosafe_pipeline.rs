@@ -92,6 +92,26 @@ pub const STAGE_BODY: u8 = 0x20;
 /// Fields with `f32` values must be in `[0.0, 1.0]` and finite.
 /// Use `validate()` to check bounds before constructing a pipeline.
 ///
+/// # Dual-Calibration Architecture
+///
+/// `PipelineConfig` holds two independently calibrated decision frameworks:
+///
+/// 1. **EscalationPolicy** (`policy`) — operates in raw entropy space `[0, 65535]`.
+///    Thresholds `halt_entropy`, `escalate_entropy`, `warn_entropy` are compared
+///    directly against `u16` synapse entropy values. This is the innate immune
+///    backstop — simple, fast, threshold-based gating at every pipeline stage.
+///
+/// 2. **PidConfig** (`pid_config`) — operates in normalised risk space `[0.0, 1.0]`.
+///    Thresholds `halt_gain`, `warn_gain` are compared against a PID-computed
+///    risk score that fuses entropy, memory surprise, kernel stability, classifier
+///    probability, and trend into a single value. This is the adaptive control
+///    path — stateful, integrative, with anti-windup and sidechain modulation.
+///
+/// The PID normalises raw entropy via `entropy / U16_MAX_F32`, establishing a
+/// mapping between the two spaces. `validate()` checks cross-consistency of
+/// equivalent thresholds across the two frameworks (advisory, not a hard error).
+/// `validate_cross_consistency()` provides the detailed warning list.
+///
 /// Fields:
 /// - `policy: EscalationPolicy` — escalation policy thresholds (entropy warn/escalate/halt, surprise, bias).
 /// - `pid_config: PidConfig` — PID controller configuration. Must be valid.
@@ -151,9 +171,24 @@ impl Default for PipelineConfig {
 impl PipelineConfig {
     /// Validates all configuration fields are within safe bounds.
     ///
-    /// Rejects NaN, out-of-range floats, zero-valued integer parameters,
-    /// and the empty memory edge case. `validate()` is called by
-    /// `CognitivePipeline::with_config()` before construction.
+    /// Checks performed in order:
+    /// 1. `drift_threshold` — must be finite and in `[0.0, 1.0]`.
+    /// 2. `min_confidence` — must be finite and in `[0.0, 1.0]`.
+    /// 3. `monitor_k` — must be in `[1, 5]`.
+    /// 4. `max_repetitions` — must be `> 0`.
+    /// 5. `decay_threshold` — must be `> 0`.
+    /// 6. `pid_config.validate()` — delegates to `PidConfig::validate()` for
+    ///    NaN/out-of-range gain checks and `warn_gain < halt_gain` ordering.
+    /// 7. **Cross-consistency** (`validate_cross_consistency`) — compares
+    ///    `EscalationPolicy` entropy thresholds (mapped to risk via
+    ///    `threshold / U16_MAX_F32`) against `PidConfig` risk thresholds
+    ///    with ±15% tolerance. Advisory only: mismatches are logged to
+    ///    stderr but do NOT cause `validate()` to return `Err`. This is
+    ///    intentional — the two frameworks serve different safety layers
+    ///    and can be intentionally diverged.
+    ///
+    /// `validate()` is called by `CognitivePipeline::with_config()` before
+    /// construction.
     ///
     /// # Errors
     ///
@@ -181,9 +216,178 @@ impl PipelineConfig {
             return Err("decay_threshold must be > 0");
         }
         self.pid_config.validate()?;
+
+        // Cross-consistency check: compares EscalationPolicy entropy
+        // thresholds against PID risk thresholds. Advisory only —
+        // warnings are logged but validate() still returns Ok(()).
+        // Gated behind std because Vec<String> requires alloc.
+        #[cfg(feature = "std")]
+        {
+            #[allow(clippy::print_stderr)]
+            if let Err(warnings) = self.validate_cross_consistency() {
+                for w in &warnings {
+                    eprintln!("[llmosafe] {}", w);
+                }
+            }
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            let _ = &self.policy; // Silence unused field warnings in no_std
+        }
+
         Ok(())
     }
+
+    /// Validates cross-consistency between `EscalationPolicy` entropy thresholds
+    /// and `PidConfig` risk thresholds.
+    ///
+    /// # Dual-Calibration Mapping
+    ///
+    /// The PID normalises raw entropy `[0, 65535]` to risk `[0.0, 1.0]` via
+    /// `entropy / U16_MAX_F32`. This method computes the risk-equivalent of
+    /// each `EscalationPolicy` threshold and compares it against the
+    /// corresponding `PidConfig` threshold:
+    ///
+    /// | Policy threshold    | PID equivalent            | Tolerance |
+    /// |--------------------|--------------------------|-----------|
+    /// | `halt_entropy`     | `halt_gain`              | ±15%      |
+    /// | `escalate_entropy` | `halt_gain × 0.8`        | ±15%      |
+    /// | `warn_entropy`     | `warn_gain`              | ±15%      |
+    ///
+    /// The escalate mapping uses `halt_gain × 0.8` as a heuristic — escalate
+    /// is typically set at ~80% of the halt threshold in both frameworks.
+    ///
+    /// # Tolerance
+    ///
+    /// Relative tolerance of ±15% is used when both values are non-zero.
+    /// Falls back to absolute tolerance for near-zero thresholds. This
+    /// allows reasonable calibration divergence while flagging significant
+    /// misalignment.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())` — all three threshold pairs are within ±15% tolerance.
+    /// - `Err(warnings)` — one or more pairs exceed tolerance. Each warning
+    ///   is a human-readable string containing the policy threshold name,
+    ///   its risk-equivalent, the PID gain value, and the divergence
+    ///   percentage.
+    ///
+    /// # Why Soft, Not Hard
+    ///
+    /// The two frameworks serve different safety layers: `EscalationPolicy`
+    /// is the innate immune backstop (fast, stateless, threshold-gated),
+    /// while `PidConfig` drives the adaptive control path (stateful,
+    /// integrative, with anti-windup). Independent calibration is a valid
+    /// operational choice. This check makes inconsistency visible without
+    /// preventing deployment. Operators can tune thresholds to converge
+    /// or keep the divergence intentionally.
+    ///
+    /// Only available when the `std` feature is enabled (requires `Vec<String>`
+    /// for warning collection).
+    #[cfg(feature = "std")]
+    pub fn validate_cross_consistency(&self) -> Result<(), Vec<String>> {
+        let mut warnings: Vec<String> = Vec::new();
+
+        // ── Halt: halt_entropy → risk vs halt_gain ──
+        let halt_policy_risk = f32::from(self.policy.halt_entropy) / U16_MAX_F32;
+        Self::check_cross_pair(
+            halt_policy_risk,
+            self.pid_config.halt_gain,
+            "halt_entropy",
+            self.policy.halt_entropy,
+            "halt_gain",
+            &mut warnings,
+        );
+
+        // ── Escalate: escalate_entropy → risk vs halt_gain × 0.8 ──
+        let escalate_policy_risk = f32::from(self.policy.escalate_entropy) / U16_MAX_F32;
+        let escalate_pid_equiv = self.pid_config.halt_gain * 0.8_f32;
+        Self::check_cross_pair(
+            escalate_policy_risk,
+            escalate_pid_equiv,
+            "escalate_entropy",
+            self.policy.escalate_entropy,
+            "halt_gain × 0.8",
+            &mut warnings,
+        );
+
+        // ── Warn: warn_entropy → risk vs warn_gain ──
+        let warn_policy_risk = f32::from(self.policy.warn_entropy) / U16_MAX_F32;
+        Self::check_cross_pair(
+            warn_policy_risk,
+            self.pid_config.warn_gain,
+            "warn_entropy",
+            self.policy.warn_entropy,
+            "warn_gain",
+            &mut warnings,
+        );
+
+        if warnings.is_empty() {
+            Ok(())
+        } else {
+            Err(warnings)
+        }
+    }
+
+    /// Compares a policy threshold (mapped to risk space) against a PID gain.
+    ///
+    /// Uses relative tolerance (`CROSS_CONSISTENCY_TOLERANCE`) when both
+    /// values are above `f32::EPSILON`. Falls back to absolute tolerance
+    /// for near-zero thresholds to avoid division-by-zero in the ratio.
+    ///
+    /// If the pair exceeds tolerance, appends a human-readable warning
+    /// string to `warnings` containing:
+    /// - The severity level (halt/escalate/warn)
+    /// - The policy threshold field name and raw `u16` value
+    /// - The risk-equivalent (policy_threshold / 65535)
+    /// - The PID gain field name and value
+    /// - The divergence percentage
+    #[cfg(feature = "std")]
+    fn check_cross_pair(
+        policy_risk: f32,
+        pid_gain: f32,
+        policy_name: &str,
+        policy_raw: u16,
+        pid_name: &str,
+        warnings: &mut Vec<String>,
+    ) {
+        // Extract severity label from the field name (halt_entropy → "halt")
+        let severity = policy_name.split('_').next().unwrap_or(policy_name);
+
+        // Near-zero values: use absolute tolerance to avoid division blow-up
+        if policy_risk <= f32::EPSILON || pid_gain <= f32::EPSILON {
+            if (policy_risk - pid_gain).abs() <= CROSS_CONSISTENCY_TOLERANCE {
+                return;
+            }
+            let divergence_pct = (policy_risk - pid_gain).abs() * 100.0_f32;
+            warnings.push(format!(
+                "RC-DUAL {} mismatch: policy.{}={} → risk {:.4}, pid_config.{}={:.4} (divergence: {:.1}%, absolute)",
+                severity, policy_name, policy_raw, policy_risk, pid_name, pid_gain, divergence_pct
+            ));
+            return;
+        }
+
+        // Relative tolerance check
+        let ratio = policy_risk / pid_gain;
+        if (1.0_f32 - CROSS_CONSISTENCY_TOLERANCE..=1.0_f32 + CROSS_CONSISTENCY_TOLERANCE)
+            .contains(&ratio)
+        {
+            return;
+        }
+
+        let divergence_pct = (ratio - 1.0_f32).abs() * 100.0_f32;
+        warnings.push(format!(
+            "RC-DUAL {} mismatch: policy.{}={} → risk {:.4}, pid_config.{}={:.4} (divergence: {:.1}%)",
+            severity, policy_name, policy_raw, policy_risk, pid_name, pid_gain, divergence_pct
+        ));
+    }
 }
+
+/// Constant: ±15% relative tolerance for cross-consistency checks between
+/// EscalationPolicy entropy thresholds and PidConfig risk thresholds.
+/// Used by `PipelineConfig::validate_cross_consistency()`.
+#[cfg(feature = "std")]
+const CROSS_CONSISTENCY_TOLERANCE: f32 = 0.15_f32;
 
 /// Snapshot of working-memory statistics.
 ///
@@ -1520,5 +1724,116 @@ mod tests {
             config.validate().is_err(),
             "warn_gain >= halt_gain must be rejected by validate"
         );
+    }
+
+    // ── Cross-Consistency Tests ───────────────────────────────────
+
+    /// Default configs: validate() returns Ok (cross-consistency is soft).
+    /// validate_cross_consistency() returns Err because halt_entropy=50000
+    /// (risk 0.763) diverges from halt_gain=1.0 (31%), and
+    /// escalate_entropy=40000 (risk 0.610) diverges from halt_gain×0.8=0.8
+    /// (24%). warn_entropy=30000 (risk 0.458) is within 15% of
+    /// warn_gain=0.5 (8.4%).
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_pipelineconfig_cross_consistency_defaults() {
+        let config = PipelineConfig::default();
+        // Hard validation must still pass — cross-consistency is advisory.
+        assert!(config.validate().is_ok());
+
+        let result = config.validate_cross_consistency();
+        assert!(
+            result.is_err(),
+            "default configs have known divergence in halt and escalate thresholds"
+        );
+        let warnings = result.unwrap_err();
+        // Expect exactly 2 warnings: halt_entropy and escalate_entropy diverge.
+        // warn_entropy=30000 → risk 0.458 is within 15% of warn_gain=0.5.
+        assert_eq!(
+            warnings.len(),
+            2,
+            "expected 2 warnings for halt_entropy and escalate_entropy divergence, got: {:?}",
+            warnings
+        );
+        assert!(
+            warnings[0].contains("halt"),
+            "first warning should be about halt_entropy: {}",
+            warnings[0]
+        );
+        assert!(
+            warnings[1].contains("escalate"),
+            "second warning should be about escalate_entropy: {}",
+            warnings[1]
+        );
+    }
+
+    /// Aligned configs: EscalationPolicy thresholds map to the same
+    /// risk-equivalents as the PID gains. Cross-consistency should pass
+    /// (return Ok(())).
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_pipelineconfig_cross_consistency_aligned() {
+        let config = PipelineConfig {
+            policy: EscalationPolicy {
+                halt_entropy: 65535,     // 65535/65535 = 1.000  vs halt_gain=1.0
+                escalate_entropy: 52428, // 52428/65535 = 0.800  vs halt_gain×0.8=0.8
+                warn_entropy: 32768,     // 32768/65535 = 0.500  vs warn_gain=0.5
+                ..EscalationPolicy::default()
+            },
+            pid_config: PidConfig {
+                halt_gain: 1.0,
+                warn_gain: 0.5,
+                ..PidConfig::default()
+            },
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_ok());
+        assert!(
+            config.validate_cross_consistency().is_ok(),
+            "aligned thresholds should pass cross-consistency"
+        );
+    }
+
+    /// Intentionally misaligned configs: halt_entropy=10000 (risk 0.153)
+    /// vs halt_gain=1.0, escalate_entropy=1 (risk ~0) vs halt_gain×0.8=0.8,
+    /// warn_entropy=1 (risk ~0) vs warn_gain=0.99. All three pairs should
+    /// produce warnings.
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_pipelineconfig_cross_consistency_misaligned() {
+        let config = PipelineConfig {
+            policy: EscalationPolicy {
+                halt_entropy: 10000,
+                escalate_entropy: 1,
+                warn_entropy: 1,
+                ..EscalationPolicy::default()
+            },
+            pid_config: PidConfig {
+                halt_gain: 1.0,
+                warn_gain: 0.99,
+                ..PidConfig::default()
+            },
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_ok());
+        let result = config.validate_cross_consistency();
+        assert!(
+            result.is_err(),
+            "intentionally misaligned configs must produce warnings"
+        );
+        let warnings = result.unwrap_err();
+        assert!(
+            warnings.len() >= 2,
+            "expected at least 2 warnings for misaligned thresholds, got: {:?}",
+            warnings
+        );
+        // Each warning must identify the severity level (halt/escalate/warn).
+        for w in &warnings {
+            assert!(
+                w.contains("halt") || w.contains("escalate") || w.contains("warn"),
+                "warning must identify severity: {}",
+                w
+            );
+        }
     }
 }
