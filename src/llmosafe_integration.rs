@@ -343,57 +343,49 @@ impl EscalationPolicy {
         self
     }
 
-    /// Evaluate entropy, surprise, and bias flags to produce a decision.
+    /// Evaluate entropy, surprise, and bias flags to produce a DAL-gated decision.
     ///
-    /// Checks are ordered by severity: Halt conditions are checked first,
-    /// then Escalate, then Warn. This ensures higher-severity signals are never
-    /// masked by lower-severity ones (e.g., entropy Halt is NOT overridden by
-    /// bias Escalate).
+    /// Delegates to [`canonical_decision`] for threshold checks with universal
+    /// [`DesignAssuranceLevel`] gating. All return paths pass through
+    /// [`apply_dal_to_decision`] so DAL is enforced uniformly.
+    ///
+    /// # Inputs
+    /// * `entropy`: `u16` — raw entropy in `[0, 65535]`.
+    /// * `surprise`: `u16` — raw surprise in `[0, 65535]`.
+    /// * `has_bias`: `bool` — `true` if bias was detected.
+    ///
+    /// # Outputs
+    /// Returns a `SafetyDecision` gated by the configured DAL.
+    ///
+    /// # Threshold Semantics
+    /// All thresholds use inclusive comparison (`>=`) — entropy equal to
+    /// `halt_entropy` triggers Halt, entropy equal to `escalate_entropy`
+    /// triggers Escalate.
     pub fn decide(&self, entropy: u16, surprise: u16, has_bias: bool) -> SafetyDecision {
-        // Halt checks first (highest severity — must not be overridden).
-        // Uses >= to match escalate_entropy threshold semantics (inclusive).
-        if entropy >= self.halt_entropy {
-            return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
-        }
-
-        // Escalate checks (medium severity)
-        if has_bias && self.bias_escalates {
-            return SafetyDecision::Escalate {
-                entropy,
-                reason: EscalationReason::BiasDetected,
-                cooldown_ms: 5000,
-            };
-        }
-        if entropy >= self.escalate_entropy {
-            return SafetyDecision::Escalate {
-                entropy,
-                reason: EscalationReason::EntropyApproachingLimit,
-                cooldown_ms: 5000,
-            };
-        }
-        if surprise >= self.escalate_surprise {
-            return SafetyDecision::Escalate {
-                entropy,
-                reason: EscalationReason::SurpriseElevated,
-                cooldown_ms: 5000,
-            };
-        }
-
-        // Warn checks (lowest severity)
-        if entropy >= self.warn_entropy {
-            return SafetyDecision::Warn("entropy elevated");
-        }
-        if surprise >= self.warn_surprise {
-            return SafetyDecision::Warn("surprise elevated");
-        }
-
-        SafetyDecision::Proceed
+        self.canonical_decision(entropy, surprise, has_bias)
     }
 
-    /// Evaluate with pressure level.
+    /// Evaluate entropy/surprise/bias with a resource pressure signal.
     ///
-    /// Halt conditions always take priority over pressure escalation.
-    /// Pressure only escalates when no Halt-level signal exists.
+    /// Halt-entropy is checked first (inclusive `>=`, consistent with
+    /// [`canonical_decision`]). If not at the Halt threshold, resource
+    /// pressure that meets or exceeds `escalate_pressure` triggers an
+    /// `Escalate(ResourcePressure)` decision. When neither Halt nor
+    /// pressure escalation fires, delegates to [`canonical_decision`]
+    /// for the standard threshold ladder with universal DAL gating.
+    ///
+    /// # Inputs
+    /// * `entropy`: `u16` — raw entropy in `[0, 65535]`.
+    /// * `surprise`: `u16` — raw surprise in `[0, 65535]`.
+    /// * `has_bias`: `bool` — `true` if bias was detected.
+    /// * `pressure`: `PressureLevel` — resource pressure level.
+    ///
+    /// # Outputs
+    /// Returns a `SafetyDecision` gated by the configured DAL.
+    ///
+    /// # Threshold Semantics
+    /// All threshold comparisons use `>=` — entropy ≥ `halt_entropy`
+    /// triggers Halt, pressure ≥ `escalate_pressure` triggers Escalate.
     pub fn decide_with_pressure(
         &self,
         entropy: u16,
@@ -401,8 +393,9 @@ impl EscalationPolicy {
         has_bias: bool,
         pressure: PressureLevel,
     ) -> SafetyDecision {
-        // Halt takes priority over everything
-        if entropy > self.halt_entropy {
+        // Halt takes priority over everything — inclusive check
+        // matches canonical_decision semantics.
+        if entropy >= self.halt_entropy {
             return self.apply_dal_to_decision(SafetyDecision::Halt(
                 KernelError::CognitiveInstability,
                 30000,
@@ -418,7 +411,7 @@ impl EscalationPolicy {
             });
         }
 
-        self.apply_dal_to_decision(self.decide(entropy, surprise, has_bias))
+        self.canonical_decision(entropy, surprise, has_bias)
     }
 
     /// Evaluate from CognitiveStability.
@@ -430,6 +423,78 @@ impl EscalationPolicy {
                 SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)
             }
         }
+    }
+
+    /// Canonical decision engine — unified threshold ladder with universal DAL gating.
+    ///
+    /// Every public decision method routes through this single implementation.
+    /// Thresholds are evaluated in severity order (Halt → Escalate → Warn →
+    /// Proceed) using inclusive `>=` comparison at every boundary.  All return
+    /// paths pass through [`apply_dal_to_decision`] so the configured
+    /// [`DesignAssuranceLevel`] gates every decision uniformly — no call path
+    /// can bypass DAL.
+    ///
+    /// # Inputs
+    /// * `entropy`: `u16` — raw entropy in `[0, 65535]`.
+    /// * `surprise`: `u16` — raw surprise in `[0, 65535]`.
+    /// * `has_bias`: `bool` — `true` if bias was detected.
+    ///
+    /// # Outputs
+    /// Returns a `SafetyDecision` gated by the configured DAL.
+    ///
+    /// # Invariants
+    /// * Inclusive halt check: `entropy ≥ halt_entropy` triggers Halt.
+    /// * DAL gating is universal: every branch calls `apply_dal_to_decision`.
+    /// * Severity ordering is preserved: Halt > Escalate > Warn > Proceed.
+    /// * First-match-wins: higher-severity conditions are checked first and
+    ///   short-circuit lower-severity checks.
+    ///
+    /// # DAL Gating Contract
+    /// This method is the single point where threshold-based decisions meet
+    /// DAL enforcement.  Every return value has passed through
+    /// `apply_dal_to_decision`.  Callers that apply additional DAL wrapping
+    /// produce harmless double-gating (all DAL levels are idempotent).
+    fn canonical_decision(&self, entropy: u16, surprise: u16, has_bias: bool) -> SafetyDecision {
+        // Halt checks first (highest severity — must not be overridden).
+        if entropy >= self.halt_entropy {
+            return self.apply_dal_to_decision(SafetyDecision::Halt(
+                KernelError::CognitiveInstability,
+                30000,
+            ));
+        }
+
+        // Escalate checks (medium severity)
+        if has_bias && self.bias_escalates {
+            return self.apply_dal_to_decision(SafetyDecision::Escalate {
+                entropy,
+                reason: EscalationReason::BiasDetected,
+                cooldown_ms: 5000,
+            });
+        }
+        if entropy >= self.escalate_entropy {
+            return self.apply_dal_to_decision(SafetyDecision::Escalate {
+                entropy,
+                reason: EscalationReason::EntropyApproachingLimit,
+                cooldown_ms: 5000,
+            });
+        }
+        if surprise >= self.escalate_surprise {
+            return self.apply_dal_to_decision(SafetyDecision::Escalate {
+                entropy,
+                reason: EscalationReason::SurpriseElevated,
+                cooldown_ms: 5000,
+            });
+        }
+
+        // Warn checks (lowest severity)
+        if entropy >= self.warn_entropy {
+            return self.apply_dal_to_decision(SafetyDecision::Warn("entropy elevated"));
+        }
+        if surprise >= self.warn_surprise {
+            return self.apply_dal_to_decision(SafetyDecision::Warn("surprise elevated"));
+        }
+
+        self.apply_dal_to_decision(SafetyDecision::Proceed)
     }
 
     /// Apply runtime DAL gating to a raw decision.
@@ -531,8 +596,8 @@ impl EscalationPolicy {
             return self.apply_dal_to_decision(SafetyDecision::Warn("Low model confidence"));
         }
 
-        // Fall through to standard decide()
-        self.apply_dal_to_decision(self.decide(entropy, surprise, false))
+        // Fall through to canonical threshold ladder
+        self.canonical_decision(entropy, surprise, false)
     }
 }
 
