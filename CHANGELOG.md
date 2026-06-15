@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **PID F-term sign**: Feed-forward term corrected from inverted `(1.0 - classifier_prob)` to direct `classifier_prob` — higher manipulation confidence now correctly increases risk (Bug 5)
 - **DynamicStabilityMonitor low-side blindness**: Fixed guard to prevent permanent undetectability of silent agents when low envelope adapts below k (Bug 6)
 - **halt_entropy threshold**: Changed from strict `>` to inclusive `>=` for consistency with escalate/warn thresholds (Bug 10)
+- **EscalationPolicy threshold protocol unified**: Created `canonical_decision()` as single-source-of-truth threshold ladder. Eliminated copy-paste fragmentation across `decide()`, `decide_with_pressure()`, and `decide_from_detection()`. All 8 return paths now pass through universal DAL (Design Assurance Level) gating — `decide()` previously returned bare Halt without DAL authority check. At exact halt_entropy boundary with critical pressure, Halt now correctly fires before pressure escalation per documented invariant "Halt conditions always take priority."
+- **Cross-consistency validation**: `PipelineConfig::validate()` now checks cross-consistency between PID thresholds (risk space [0,1]) and EscalationPolicy thresholds (entropy space [0,65535]) with ±15% tolerance. Warnings logged to stderr; advisory only (backward compatible). Detects the dual-calibration gap where tuning one threshold set had zero effect on the other.
 - **FFI signature mismatch**: `tests/ffi_roundtrip.rs` extern declarations corrected from `u64` to `u128`, `#[allow(improper_ctypes)]` removed (Bug 1)
 - **witness_token invariants**: 14 tests now run by default (were gated behind `#[cfg(feature = "testing")]`) (Bug 7)
 - **Empty test**: `test_same_synapse_cannot_be_updated_twice` now has assertions; double-update behavior documented as intentional (Bug 8)
@@ -24,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - C header (`include/llmosafe.h`) regenerated via cbindgen
+- `U16_MAX_F32` constant replaces 18 magic `65535.0_f32` literals across 4 modules
+- `From<KernelError> for i32` centralizes error code mapping (4 duplicate sites eliminated)
+- 5 new `tracing::warn!` calls for RSS measurement failure, /proc unavailability, and parse errors
+- Test suite expanded: 431 → 537 tests (fault injection, corruption proptest, concurrent stress, NaN guards, integer boundaries)
 
 ## [0.7.5] — 2026-06-14
 
