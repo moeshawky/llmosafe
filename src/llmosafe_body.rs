@@ -80,6 +80,14 @@ impl EnvironmentalVitals {
         }
     }
 
+    /// Reads the IO wait field from `/proc/stat` (column 5 of the first `cpu` line).
+    ///
+    /// Returns `Some(iowait_ticks)` on success, or `None` if `/proc/stat` is
+    /// unreadable, the `cpu` line is missing, or the iowait field is unparseable.
+    /// The internal `.ok()` at the parse site discards error details — callers
+    /// receive `None` with no distinction between "field not found" and
+    /// "field contained non-numeric data." Upstream callers handle `None`
+    /// via fail-closed defaults (`iowait = 0` in `EnvironmentalVitals::capture()`).
     #[cfg(target_os = "linux")]
     fn read_iowait() -> Option<u64> {
         // Optimization: fs::read_to_string avoids BufReader allocation for single-line pseudo-files.
@@ -98,6 +106,14 @@ impl EnvironmentalVitals {
         None
     }
 
+    /// Reads the 1-minute load average from `/proc/loadavg` (first field).
+    ///
+    /// Returns `Some(load_avg)` on success, or `None` if `/proc/loadavg` is
+    /// unreadable, the line is empty, or the first field is unparseable.
+    /// The internal `.ok()` at the parse site discards error details — callers
+    /// receive `None` with no distinction between "file not found" and
+    /// "field contained non-numeric data." Upstream callers handle `None`
+    /// via fail-closed defaults (`load_avg = 0.0` in `EnvironmentalVitals::capture()`).
     #[cfg(target_os = "linux")]
     fn read_loadavg() -> Option<f64> {
         // Optimization: fs::read_to_string avoids BufReader allocation for single-line pseudo-files.
@@ -211,12 +227,27 @@ impl ResourceGuard {
     /// uses strict greater-than (> self.halt_entropy), so resource entropy at
     /// the cap (1000) triggers Escalate, not Halt. Use Halt for entropy values
     /// > 1000 from composite/synthetic sources outside the resource body.
+    ///
+    /// # Observability
+    ///
+    /// Emits a `tracing::warn!` (target: `llmosafe::body`) when RSS measurement
+    /// is unavailable (ceiling substituted as fail-closed value) or when
+    /// environmental vitals (`/proc`) are unreachable (worst-case defaults
+    /// applied). These warnings help operators distinguish transient I/O
+    /// failures from persistent platform unsuitability.
     pub fn raw_entropy(&self) -> u16 {
         #[cfg(any(test, feature = "testing"))]
         if let Some(v) = self.raw_entropy_override {
             return v;
         }
-        let current_rss = Self::try_current_rss_bytes().unwrap_or(self.memory_ceiling_bytes);
+        let current_rss = Self::try_current_rss_bytes().unwrap_or_else(|| {
+            tracing::warn!(
+                target: "llmosafe::body",
+                "RSS measurement unavailable in raw_entropy(); substituting memory_ceiling_bytes ({}) as fail-closed value",
+                self.memory_ceiling_bytes
+            );
+            self.memory_ceiling_bytes
+        });
         let rss_ratio = if self.memory_ceiling_bytes > 0 {
             (current_rss as f64 / self.memory_ceiling_bytes as f64).min(1.0)
         } else {
@@ -229,6 +260,10 @@ impl ResourceGuard {
         let load_ratio = if vitals.vitals_available {
             (vitals.load_avg / 10.0).min(1.0)
         } else {
+            tracing::warn!(
+                target: "llmosafe::body",
+                "Environmental vitals unavailable (no /proc access) in raw_entropy(); using fail-closed load_ratio=1.0"
+            );
             1.0
         };
 
@@ -531,6 +566,31 @@ impl ResourceGuard {
     }
 
     /// Returns current RSS memory usage in bytes.
+    ///
+    /// # Platform Behaviour
+    ///
+    /// | Platform | Source | Units |
+    /// |----------|--------|-------|
+    /// | Linux/BSD | `getrusage(RUSAGE_SELF)` → `ru_maxrss` | KB → bytes |
+    /// | macOS/iOS | `getrusage(RUSAGE_SELF)` → `ru_maxrss` | bytes (native) |
+    /// | Windows | `GetProcessMemoryInfo` → `WorkingSetSize` | bytes |
+    /// | Other | N/A | returns `0` |
+    ///
+    /// Falls back to `/proc/self/status` (VmRSS) on Linux when `getrusage` fails.
+    ///
+    /// # Ambiguity
+    ///
+    /// A return value of `0` is **ambiguous**: it may mean the process genuinely
+    /// uses zero RSS, or it may mean RSS measurement is unavailable (unsupported
+    /// platform, `/proc` unmounted, syscall failure, permission denied).
+    ///
+    /// **Safety-critical callers** should prefer `try_current_rss_bytes()`,
+    /// which returns `Option<usize>` — `None` unambiguously signals measurement
+    /// failure and is mapped to `ResourceExhaustion` by internal fail-closed
+    /// paths (`check()`, `check_ctrl()`, `pressure()`).
+    ///
+    /// **Diagnostic/logging callers** should treat `0` as "possibly unavailable"
+    /// and cross-reference platform availability when interpreting the value.
     #[cfg(unix)]
     pub fn current_rss_bytes() -> usize {
         // SAFETY: libc::rusage is a repr(C) struct suitable for zero-initialization.
@@ -564,7 +624,15 @@ impl ResourceGuard {
                 usage.ru_maxrss as usize
             }
         } else {
-            Self::read_rss_from_proc().unwrap_or(0)
+            // getrusage failed — attempt /proc/self/status fallback.
+            let rss = Self::read_rss_from_proc();
+            if rss.is_none() {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "current_rss_bytes(): getrusage failed and /proc/self/status fallback also failed. Returning 0 — this may mean RSS measurement is unavailable, not zero physical memory use"
+                );
+            }
+            rss.unwrap_or(0)
         }
     }
 
@@ -661,20 +729,39 @@ impl ResourceGuard {
         None
     }
 
-    /// Helper: parse RSS from /proc/self/status (Linux fallback)
+    /// Helper: parse RSS from `/proc/self/status` (Linux fallback).
+    ///
+    /// Returns `Some(rss_bytes)` on success, or `None` if `/proc/self/status`
+    /// cannot be opened, the VmRSS line is not found, or the size field is
+    /// unparseable. Emits a `tracing::warn!` (target: `llmosafe::body`) on
+    /// each failure path so operators can distinguish transient I/O errors
+    /// from persistent `/proc` unavailability.
     #[cfg(target_os = "linux")]
     fn read_rss_from_proc() -> Option<usize> {
-        if let Ok(file) = fs::File::open("/proc/self/status") {
-            for line in BufReader::new(file).lines().map_while(Result::ok) {
-                if line.starts_with("VmRSS:") {
-                    if let Some(size_str) = line.split_whitespace().nth(1) {
-                        if let Ok(kb) = size_str.parse::<usize>() {
-                            return Some(kb.saturating_mul(1024));
-                        }
+        let file = match fs::File::open("/proc/self/status") {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "Cannot open /proc/self/status for RSS measurement: {}",
+                    e
+                );
+                return None;
+            }
+        };
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if line.starts_with("VmRSS:") {
+                if let Some(size_str) = line.split_whitespace().nth(1) {
+                    if let Ok(kb) = size_str.parse::<usize>() {
+                        return Some(kb.saturating_mul(1024));
                     }
                 }
             }
         }
+        tracing::warn!(
+            target: "llmosafe::body",
+            "VmRSS line not found or unparseable in /proc/self/status"
+        );
         None
     }
 

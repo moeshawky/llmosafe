@@ -229,7 +229,17 @@ pub enum StabilityResult {
 }
 
 pub const STABILITY_THRESHOLD: i128 = 50000;
+/// Instability pressure threshold: entropy above this value triggers
+/// `CognitiveInstability` in `validate()` and `next_step()`.  This is
+/// distinct from `STABILITY_THRESHOLD` (50000) which gates `stability()`.
+/// Both thresholds operate in the `[0, 65535]` entropy range.
 pub const PRESSURE_THRESHOLD: i128 = 40000;
+
+/// `u16::MAX` as `f32` (65535.0).  Centralised constant for normalising
+/// entropy values from `[0, 65535]` to `[0.0, 1.0]`.  Replaces 18
+/// scattered `65535.0_f32` literals across the sifter, PID, and
+/// pipeline modules.
+pub(crate) const U16_MAX_F32: f32 = u16::MAX as f32;
 
 /// Detection flag: repetition count exceeded max_repetitions.
 pub const FLAG_STUCK: u8 = 0x01;
@@ -463,7 +473,8 @@ impl Synapse {
     /// # Errors
     ///
     /// Returns `BiasHaloDetected` if the synapse has bias set.
-    /// Returns `CognitiveInstability` if entropy exceeds the stability threshold.
+    /// Returns `CognitiveInstability` if entropy exceeds the instability
+    /// pressure threshold (`PRESSURE_THRESHOLD = 40000`).
     ///
     /// # Examples
     ///
@@ -990,7 +1001,10 @@ impl core::fmt::Display for KernelError {
         match self {
             Self::DepthExceeded => write!(f, "reasoning cascade depth exceeded"),
             Self::CognitiveInstability => {
-                write!(f, "cognitive entropy exceeds stability threshold")
+                write!(
+                    f,
+                    "cognitive entropy exceeds instability pressure threshold"
+                )
             }
             Self::BiasHaloDetected => write!(f, "bias halo signal detected in perceptual input"),
             Self::HallucinationDetected => {
@@ -1005,6 +1019,38 @@ impl core::fmt::Display for KernelError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for KernelError {}
+
+/// Canonical C-ABI error-code mapping for `KernelError`.
+///
+/// Every variant maps to a stable negative `i32` code used by all FFI
+/// entry points and internal error-to-code conversion sites.  This is
+/// the **single source of truth** — adding a new variant to `KernelError`
+/// requires only adding the corresponding arm here.
+///
+/// # Mapping
+///
+/// | Variant                | Code |
+/// |------------------------|------|
+/// | `DepthExceeded`        |  -1  |
+/// | `CognitiveInstability` |  -2  |
+/// | `BiasHaloDetected`     |  -3  |
+/// | `HallucinationDetected`|  -4  |
+/// | `ResourceExhaustion`   |  -5  |
+/// | `SelfMemoryExceeded`   |  -6  |
+/// | `DeadlineExceeded`     |  -7  |
+impl From<KernelError> for i32 {
+    fn from(err: KernelError) -> Self {
+        match err {
+            KernelError::DepthExceeded => -1,
+            KernelError::CognitiveInstability => -2,
+            KernelError::BiasHaloDetected => -3,
+            KernelError::HallucinationDetected => -4,
+            KernelError::ResourceExhaustion => -5,
+            KernelError::SelfMemoryExceeded => -6,
+            KernelError::DeadlineExceeded => -7,
+        }
+    }
+}
 
 /// SiftedSynapse: Output of Tier 3 (Sifter).
 /// Only constructible by sift_perceptions() - users cannot create this type directly.

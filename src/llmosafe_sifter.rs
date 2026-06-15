@@ -52,6 +52,7 @@ use crate::llmosafe_classifier::{classify_text, ClassificationResult};
 use crate::llmosafe_kernel::SiftedProof;
 use crate::llmosafe_kernel::SiftedSynapse;
 use crate::llmosafe_kernel::Synapse;
+use crate::llmosafe_kernel::U16_MAX_F32;
 
 /// Sifter Control Loop output.
 ///
@@ -103,7 +104,7 @@ impl SifterOutput {
     /// DAL A/E: error_sift = classifier_prob (setpoint=0).
     pub fn from_classification(classification: &ClassificationResult) -> Self {
         // entropy = 0 when safe (p→0), 65535 when manipulation (p→1)
-        let entropy = (65535.0_f32 * classification.probability.clamp(0.0, 1.0)) as u16;
+        let entropy = (U16_MAX_F32 * classification.probability.clamp(0.0, 1.0)) as u16;
         Self {
             error_sift: classification.probability,
             raw_entropy: entropy,
@@ -506,7 +507,7 @@ pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedP
     let classification = classify_text(observation);
     let bias = get_bias_breakdown(observation);
 
-    let classifier_entropy = (65535.0_f32 * classification.probability.clamp(0.0, 1.0)) as u16;
+    let classifier_entropy = (U16_MAX_F32 * classification.probability.clamp(0.0, 1.0)) as u16;
     let keyword_boost = if bias.total() > 0 {
         ((bias.total() as u32).saturating_mul(65535) / 9000).min(65535) as u16
     } else {
@@ -514,7 +515,7 @@ pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedP
     };
     let entropy = classifier_entropy.max(keyword_boost);
 
-    let surprise = (65535.0_f32 * classification.oov_ratio.clamp(0.0, 1.0)) as u16;
+    let surprise = (U16_MAX_F32 * classification.oov_ratio.clamp(0.0, 1.0)) as u16;
     let has_bias = classification.is_manipulation || bias.total() > 0;
 
     let mut synapse = Synapse::new();
@@ -574,7 +575,7 @@ pub fn sift_observation(
 ) -> (SiftedSynapse, SiftedProof) {
     let bias = get_bias_breakdown(observation);
 
-    let classifier_entropy = (65535.0_f32 * classification.probability.clamp(0.0, 1.0)) as u16;
+    let classifier_entropy = (U16_MAX_F32 * classification.probability.clamp(0.0, 1.0)) as u16;
     let keyword_boost = if bias.total() > 0 {
         ((bias.total() as u32).saturating_mul(65535) / 9000).min(65535) as u16
     } else {
@@ -582,7 +583,7 @@ pub fn sift_observation(
     };
     let entropy = classifier_entropy.max(keyword_boost);
 
-    let surprise = (65535.0_f32 * classification.oov_ratio.clamp(0.0, 1.0)) as u16;
+    let surprise = (U16_MAX_F32 * classification.oov_ratio.clamp(0.0, 1.0)) as u16;
     let has_bias = classification.is_manipulation || bias.total() > 0;
 
     let mut synapse = Synapse::new();

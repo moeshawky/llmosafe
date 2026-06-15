@@ -33,6 +33,7 @@ use crate::control_types::{OverrideFlags, PidInput};
 use crate::llmosafe_integration::{EscalationReason, SafetyDecision};
 use crate::llmosafe_kernel::{
     KernelError, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING, FLAG_LOW_CONFIDENCE, FLAG_STUCK,
+    U16_MAX_F32,
 };
 
 /// PID controller configuration.
@@ -225,7 +226,7 @@ fn modulate_gains(config: &PidConfig, flags: u8) -> EffectiveGains {
 /// config from `config` (PidConfig), and mutates `state` (PidState).
 fn compute_pid_score_inner(input: &PidInput, config: &PidConfig, state: &mut PidState) -> f32 {
     let entropy_norm = input.e_sift.clamp(0.0, 1.0);
-    let trend_abs_norm = ((input.trend.abs() as f32) / 65535.0_f32).clamp(0.0, 1.0);
+    let trend_abs_norm = ((input.trend.abs() as f32) / U16_MAX_F32).clamp(0.0, 1.0);
     let pressure_norm = (f32::from(input.pressure) / 100.0_f32).clamp(0.0, 1.0);
     // Feed-forward: higher classifier_prob (more confident manipulation)
     // contributes MORE risk. Previously inverted with (1.0 - prob).
@@ -741,7 +742,7 @@ mod tests {
         let _ = compute_pid_score(
             &PidInput::new(
                 0.0,
-                f32::from(1000u16) / 65535.0_f32,
+                f32::from(1000u16) / U16_MAX_F32,
                 0.0,
                 0.0,
                 0.0,
@@ -756,7 +757,7 @@ mod tests {
         let _ = compute_pid_score(
             &PidInput::new(
                 0.0,
-                f32::from(1000u16) / 65535.0_f32,
+                f32::from(1000u16) / U16_MAX_F32,
                 0.0,
                 0.0,
                 0.0,
@@ -772,7 +773,7 @@ mod tests {
         let risk_low = compute_pid_score(
             &PidInput::new(
                 0.0,
-                f32::from(5000u16) / 65535.0_f32,
+                f32::from(5000u16) / U16_MAX_F32,
                 0.0,
                 0.0,
                 0.0,
@@ -787,7 +788,7 @@ mod tests {
         let risk_high = compute_pid_score(
             &PidInput::new(
                 0.0,
-                f32::from(50000u16) / 65535.0_f32,
+                f32::from(50000u16) / U16_MAX_F32,
                 0.0,
                 0.0,
                 0.0,
@@ -955,7 +956,7 @@ mod tests {
         let risk_a = compute_pid_score(
             &PidInput::new(
                 0.0,
-                f32::from(10000u16) / 65535.0_f32,
+                f32::from(10000u16) / U16_MAX_F32,
                 0.0,
                 0.0,
                 5000.0,
@@ -970,7 +971,7 @@ mod tests {
         let risk_b = compute_pid_score(
             &PidInput::new(
                 0.0,
-                f32::from(10000u16) / 65535.0_f32,
+                f32::from(10000u16) / U16_MAX_F32,
                 0.0,
                 0.0,
                 5000.0,

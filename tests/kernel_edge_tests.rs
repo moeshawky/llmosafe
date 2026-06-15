@@ -251,4 +251,229 @@ mod tests {
             "lo_idx(3) > k(2) AND idx(0) < lo_idx(3)-k(2)=1 → must be Low"
         );
     }
+
+    // ── Test 5: Integer Boundary (Confession 47) ──────────────────
+
+    /// Verifies `DynamicStabilityMonitor::get_thresholds()` at the hi_idx=31
+    /// boundary where (1u32 << (31 + 1)) would overflow a u32 shift.
+    /// At hi_idx=31, high must equal u32::MAX (explicit guard prevents overflow).
+    #[test]
+    fn test_dynamic_stability_monitor_hi_idx_31_boundary() {
+        let mut monitor = DynamicStabilityMonitor::new(2);
+
+        // Push hi_idx to 31 by feeding a value whose msb_idx is 31.
+        // u32::MAX has msb_idx=31. Feed it once to initialise, then again.
+        monitor.update(u32::MAX); // msb_idx(MAX) = 31
+        let (high, low, pressure) = monitor.get_thresholds();
+        assert_eq!(
+            high,
+            u32::MAX,
+            "hi_idx=31 must yield u32::MAX as high threshold"
+        );
+        // low is always ≤ u32::MAX by type; no redundant check needed
+        let _ = low;
+        // pressure = (u64::from(u32::MAX) * 4 / 5) as u32 = 3,435,973,836
+        assert!(pressure > 0, "pressure must be positive at hi_idx=31");
+        // pressure is u32, so ≤ u32::MAX by construction — no redundant check
+    }
+
+    /// Verifies `DynamicStabilityMonitor::get_thresholds()` when unseen
+    /// (freshly constructed, no updates), returns safe defaults.
+    #[test]
+    fn test_dynamic_stability_monitor_unseen_defaults() {
+        let monitor = DynamicStabilityMonitor::new(3);
+        let (high, low, pressure) = monitor.get_thresholds();
+        assert_eq!(
+            high,
+            u32::MAX,
+            "unseen monitor: high must be u32::MAX (permissive)"
+        );
+        assert_eq!(low, 0, "unseen monitor: low must be 0 (permissive)");
+        assert_eq!(pressure, 0, "unseen monitor: pressure must be 0 (no data)");
+    }
+
+    /// Verifies `DynamicStabilityMonitor::get_thresholds()` at hi_idx boundary
+    /// values: 0 (minimum after update), 30 (just below overflow guard), 31 (guard).
+    #[test]
+    fn test_dynamic_stability_monitor_threshold_boundaries() {
+        // hi_idx = 0: msb_idx(1) = 0
+        let mut monitor = DynamicStabilityMonitor::new(2);
+        monitor.update(1);
+        let (high, _low, _pressure) = monitor.get_thresholds();
+        assert_eq!(high, (1u32 << 1) - 1, "hi_idx=0: high = 2^1 - 1 = 1");
+        // pressure is u32 — no check against u32::MAX needed by type
+
+        // hi_idx = 30: msb_idx(2^30) = 30
+        let mut monitor = DynamicStabilityMonitor::new(2);
+        monitor.update(1u32 << 30);
+        let (high, _low, pressure) = monitor.get_thresholds();
+        assert_eq!(high, (1u32 << 31) - 1, "hi_idx=30: high = 2^31 - 1");
+        let expected_pressure = (u64::from((1u32 << 31) - 1) * 4 / 5) as u32;
+        assert_eq!(pressure, expected_pressure, "pressure at hi_idx=30");
+
+        // hi_idx = 31: guard triggers, high = u32::MAX
+        let mut monitor = DynamicStabilityMonitor::new(2);
+        monitor.update(u32::MAX);
+        let (high, _low, pressure) = monitor.get_thresholds();
+        assert_eq!(high, u32::MAX, "hi_idx=31: guard returns u32::MAX");
+        assert_eq!(
+            pressure,
+            (u64::from(u32::MAX) * 4 / 5) as u32,
+            "pressure at hi_idx=31"
+        );
+    }
+
+    /// Verifies `calculate_utility` saturating_mul clamp at u16::MAX boundary.
+    /// When `count * 100` exceeds u16::MAX (65535), the result must clamp,
+    /// not overflow or wrap.
+    #[test]
+    fn test_calculate_utility_saturating_mul_clamp() {
+        use llmosafe::calculate_utility;
+
+        // count = 0 → utility = 0
+        let u0 = calculate_utility("no match here", "target");
+        assert_eq!(u0, 0, "zero matching words → zero utility");
+
+        // count = 1 → utility = 100
+        let u1 = calculate_utility("target", "target");
+        assert_eq!(u1, 100, "one matching word → utility = 100");
+
+        // count = 655 → 655 * 100 = 65500 (< u16::MAX=65535)
+        // Build a long observation with repeated objective words
+        let obs_655: String = "x ".repeat(655);
+        let objective_655: String = "x ".to_owned();
+        let u655 = calculate_utility(&obs_655, &objective_655);
+        assert_eq!(
+            u655, 65500,
+            "655 matches → utility = 65500 (below u16::MAX)"
+        );
+
+        // count = 656 → 656 * 100 = 65600 → clamped to u16::MAX = 65535
+        let obs_656: String = "x ".repeat(656);
+        let objective_656: String = "x ".to_owned();
+        let u656 = calculate_utility(&obs_656, &objective_656);
+        assert_eq!(
+            u656, 65535,
+            "656 matches → saturating_mul(65600).min(65535) = 65535"
+        );
+
+        // count = 1000 → 1000 * 100 = 100000 → clamped to u16::MAX = 65535
+        let obs_1000: String = "x ".repeat(1000);
+        let objective_1000: String = "x ".to_owned();
+        let u1000 = calculate_utility(&obs_1000, &objective_1000);
+        assert_eq!(u1000, 65535, "1000 matches → clamped to u16::MAX = 65535");
+    }
+
+    // ── Test 7: Guard Branch Coverage (Confession 49) ─────────────
+
+    /// `sigmoid(f32::NAN)` must return 0.5 (the NaN guard), preventing
+    /// infinite recursion via sigmoid(-NaN) = sigmoid(NaN).
+    #[test]
+    fn test_sigmoid_nan_guard_returns_neutral() {
+        use llmosafe::llmosafe_classifier::sigmoid;
+        let result = sigmoid(f32::NAN);
+        assert_eq!(
+            result, 0.5,
+            "sigmoid(NaN) must return 0.5 (neutral probability, guard value)"
+        );
+    }
+
+    /// `pid_risk_to_decision(f32::NAN, ...)` must return `Halt(CognitiveInstability, 0)`.
+    /// NaN indicates sensor failure — must NOT return Proceed.
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_pid_risk_to_decision_nan_guard_returns_halt() {
+        use llmosafe::llmosafe_pid::pid_risk_to_decision;
+        use llmosafe::{KernelError, PidConfig, SafetyDecision};
+        let config = PidConfig::default();
+        let decision = pid_risk_to_decision(f32::NAN, &config);
+        assert!(
+            matches!(
+                decision,
+                SafetyDecision::Halt(KernelError::CognitiveInstability, 0)
+            ),
+            "NaN risk must trigger Halt(CognitiveInstability, 0), got {:?}",
+            decision
+        );
+    }
+
+    /// `pid_risk_to_decision` with valid finite inputs must NOT Halt at
+    /// low risk levels.
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_pid_risk_to_decision_valid_inputs_normal_operation() {
+        use llmosafe::llmosafe_pid::pid_risk_to_decision;
+        use llmosafe::{PidConfig, SafetyDecision};
+        let config = PidConfig::default();
+        // Low risk → Proceed
+        let d = pid_risk_to_decision(0.1, &config);
+        assert!(matches!(d, SafetyDecision::Proceed));
+        // Medium risk → Escalate
+        let d = pid_risk_to_decision(0.6, &config);
+        assert!(matches!(d, SafetyDecision::Escalate { .. }));
+        // High risk → Halt
+        let d = pid_risk_to_decision(1.0, &config);
+        assert!(matches!(d, SafetyDecision::Halt(..)));
+    }
+
+    // ── Test 1: Fault Injection (Confession 43) ───────────────────
+
+    /// Demonstrates the mutex poison recovery pattern used by
+    /// `process_state_update()` in `llmosafe_memory::cognitive_memory`.
+    ///
+    /// The -8 return code at `src/llmosafe_memory.rs:439` guards against
+    /// poisoned `GLOBAL_MEMORY` mutex. Since `GLOBAL_MEMORY` is crate-private,
+    /// this test verifies:
+    /// 1. The poison recovery pattern (`lock().unwrap_or_else(PoisonError::into_inner)`)
+    ///    correctly handles a poisoned mutex and returns the inner value.
+    /// 2. `process_state_update()` returns 0 for valid input (non-poisoned path).
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_mutex_poison_recovery_pattern() {
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+
+        // 1. Poison a local Mutex by panicking in a spawned thread while holding the lock
+        let mutex = Arc::new(Mutex::new(42i32));
+        let m_clone = Arc::clone(&mutex);
+        let handle = thread::spawn(move || {
+            let _guard = m_clone.lock().unwrap();
+            panic!("intentional panic to poison the mutex");
+        });
+        let _unused = handle.join(); // thread panicked — mutex is now poisoned
+
+        // 2. Verify the mutex IS poisoned
+        assert!(
+            mutex.lock().is_err(),
+            "mutex must be poisoned after thread panic"
+        );
+
+        // 3. Use poison recovery pattern (matching lock_memory() at llmosafe_memory.rs:420-428)
+        let recovered = mutex
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(*recovered, 42, "poison recovery must return inner value");
+
+        // 4. Verify process_state_update() works normally with valid input
+        // (GLOBAL_MEMORY is NOT poisoned from our test — this tests the happy path)
+        let result = llmosafe::llmosafe_memory::cognitive_memory::process_state_update(0);
+        assert_eq!(
+            result, 0,
+            "process_state_update(0) must return 0 for valid input"
+        );
+
+        // 5. Verify process_state_update() at boundary — low-entropy valid synapse
+        let valid_bits = 500u128; // entropy=500 (< STABILITY_THRESHOLD), no bias
+        let result = llmosafe::llmosafe_memory::cognitive_memory::process_state_update(valid_bits);
+        assert_eq!(
+            result, 0,
+            "process_state_update(500) must return 0 for valid low-entropy synapse"
+        );
+
+        // The -8 poison path (src/llmosafe_memory.rs:439) cannot be triggered
+        // from integration tests because GLOBAL_MEMORY is crate-private.
+        // It is structurally verified: `Err(_) => return -8` guards the
+        // lock acquisition. Full verification requires a concurrent test
+        // that panics inside GLOBAL_MEMORY.lock() — see concurrent_stress.rs.
+    }
 }

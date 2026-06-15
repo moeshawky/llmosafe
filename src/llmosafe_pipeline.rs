@@ -62,7 +62,7 @@ use crate::llmosafe_integration::SafetyDecision;
 use crate::llmosafe_kernel::{
     DynamicStabilityMonitor, KernelError, KernelOutput, ReasoningLoop, StabilityResult, Synapse,
     ValidatedSynapse, FLAG_ADVERSARIAL, FLAG_ANOMALY, FLAG_DECAYING, FLAG_DRIFTING,
-    FLAG_LOW_CONFIDENCE, FLAG_STUCK,
+    FLAG_LOW_CONFIDENCE, FLAG_STUCK, U16_MAX_F32,
 };
 use crate::llmosafe_memory::WorkingMemory;
 use crate::llmosafe_pid::{PidConfig, PidState};
@@ -639,7 +639,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         stages |= STAGE_DETECTION;
         self.repetition.observe(observation);
         self.drift.observe(observation);
-        let classifier_prob = f32::from(entropy) / 65535.0_f32;
+        let classifier_prob = f32::from(entropy) / U16_MAX_F32;
         self.confidence.observe(classifier_prob);
         let _cusum_anomaly = self.cusum.update(f64::from(entropy));
 
@@ -695,7 +695,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
                 stages |= STAGE_MONITOR;
                 let monitor_state = self.monitor.update(u32::from(entropy));
                 let kernel_output = Some(KernelOutput {
-                    error_kernel: f32::from(kernel_entropy) / 65535.0_f32,
+                    error_kernel: f32::from(kernel_entropy) / U16_MAX_F32,
                     is_stable: u32::from(kernel_entropy)
                         < crate::llmosafe_kernel::STABILITY_THRESHOLD as u32,
                     depth: self.step_count,
@@ -727,12 +727,12 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         // e_kernel: kernel stability error = kernel_entropy / 65535
         // Both clamped to [0.0, 1.0].
         let mem_mean = self.memory.mean_entropy();
-        let e_mem = ((f64::from(entropy) - mem_mean).abs() as f32 / 65535.0_f32).clamp(0.0, 1.0);
-        let e_kernel = (f32::from(kernel_entropy) / 65535.0_f32).clamp(0.0, 1.0);
+        let e_mem = ((f64::from(entropy) - mem_mean).abs() as f32 / U16_MAX_F32).clamp(0.0, 1.0);
+        let e_kernel = (f32::from(kernel_entropy) / U16_MAX_F32).clamp(0.0, 1.0);
 
         let pid_input = crate::control_types::PidInput::new(
             e_body,
-            f32::from(entropy) / 65535.0_f32,
+            f32::from(entropy) / U16_MAX_F32,
             e_mem,
             e_kernel,
             trend,
@@ -771,7 +771,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         let decision = crate::llmosafe_pid::pid_risk_to_decision(limited_risk, &self.pid_config);
 
         let kernel_output = Some(KernelOutput {
-            error_kernel: f32::from(kernel_entropy) / 65535.0_f32,
+            error_kernel: f32::from(kernel_entropy) / U16_MAX_F32,
             is_stable: u32::from(kernel_entropy)
                 < crate::llmosafe_kernel::STABILITY_THRESHOLD as u32,
             depth: self.step_count,

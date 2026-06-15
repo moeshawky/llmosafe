@@ -156,7 +156,8 @@ pub use llmosafe_kernel::{
 pub use llmosafe_memory::MemoryOutput;
 pub use llmosafe_memory::WorkingMemory;
 pub use llmosafe_pid::{
-    apply_safety_overrides, compute_pid_score, compute_pid_score_pure, PidConfig, PidState,
+    apply_safety_overrides, compute_pid_score, compute_pid_score_pure, pid_risk_to_decision,
+    PidConfig, PidState,
 };
 #[cfg(feature = "std")]
 pub use llmosafe_pipeline::STAGE_BODY;
@@ -184,7 +185,6 @@ pub mod c_abi {
 
     use crate::llmosafe_body::ResourceGuard;
     use crate::llmosafe_integration::SafetyDecision;
-    use crate::llmosafe_kernel::KernelError;
     use crate::llmosafe_kernel::Synapse;
     use crate::llmosafe_memory;
     use crate::llmosafe_pipeline::{CognitivePipeline, PipelineConfig, PipelineResult};
@@ -257,15 +257,7 @@ pub mod c_abi {
             SafetyDecision::Proceed => 0,
             SafetyDecision::Warn(_) => 1,
             SafetyDecision::Escalate { .. } => 2,
-            SafetyDecision::Halt(err, _) => match err {
-                KernelError::DepthExceeded => -1,
-                KernelError::CognitiveInstability => -2,
-                KernelError::BiasHaloDetected => -3,
-                KernelError::HallucinationDetected => -4,
-                KernelError::ResourceExhaustion => -5,
-                KernelError::SelfMemoryExceeded => -6,
-                KernelError::DeadlineExceeded => -7,
-            },
+            SafetyDecision::Halt(err, _) => i32::from(*err),
             SafetyDecision::Exit(_) => -8,
         }
     }
@@ -530,19 +522,11 @@ pub mod c_abi {
         let guard = ResourceGuard::new(ceiling_bytes);
 
         // Only ResourceExhaustion (-5) is reachable from ResourceGuard::check().
-        // The other arms are forward-compatibility: if check() is extended to
-        // return other errors (e.g., system-call failures mapped to KernelError),
-        // this match will handle them without silent default.
+        // The From<KernelError> for i32 impl covers all 7 error codes for forward
+        // compatibility if check() is extended to return other errors.
         match guard.check() {
             Ok(_) => 0,
-            Err(KernelError::ResourceExhaustion) => -5,
-            // Forward-compatibility arms — currently unreachable:
-            Err(KernelError::DepthExceeded) => -1,
-            Err(KernelError::CognitiveInstability) => -2,
-            Err(KernelError::BiasHaloDetected) => -3,
-            Err(KernelError::HallucinationDetected) => -4,
-            Err(KernelError::SelfMemoryExceeded) => -6,
-            Err(KernelError::DeadlineExceeded) => -7,
+            Err(e) => i32::from(e),
         }
     }
 
@@ -571,13 +555,7 @@ pub mod c_abi {
         let synapse = Synapse::from_raw_u128(synapse_bits);
         match synapse.validate() {
             Ok(()) => 0,
-            Err(KernelError::CognitiveInstability) => -2,
-            Err(KernelError::BiasHaloDetected) => -3,
-            Err(KernelError::DepthExceeded) => -1,
-            Err(KernelError::HallucinationDetected) => -4,
-            Err(KernelError::ResourceExhaustion) => -5,
-            Err(KernelError::SelfMemoryExceeded) => -6,
-            Err(KernelError::DeadlineExceeded) => -7,
+            Err(e) => i32::from(e),
         }
     }
 

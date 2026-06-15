@@ -270,9 +270,181 @@ mod std_tests {
 
 #[cfg(not(feature = "std"))]
 mod no_std_tests {
+    use llmosafe::{ReasoningLoop, SiftedProof, SiftedSynapse, Synapse, WorkingMemory};
+
+    /// Test 4 (Confession 46): no_std behavioral test — exercises the full
+    /// safety chain (construct → sift → memory → kernel → step) without std.
+    /// Replaces the previous `assert!(true)` stub with actual behavioral
+    /// verification.
+    #[test]
+    fn no_std_full_pipeline_behavioral() {
+        // Construct a clean synapse
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(100);
+        synapse.set_raw_surprise(50);
+        synapse.set_has_bias(false);
+
+        let sifted = SiftedSynapse::from_synapse(synapse);
+
+        // Working memory update
+        let mut memory = WorkingMemory::<64>::new(1000);
+        let result = memory.update(sifted, SiftedProof::for_testing());
+        assert!(
+            result.is_ok(),
+            "clean synapse must pass WorkingMemory update"
+        );
+
+        let (validated, vproof) = result.unwrap();
+
+        // Reasoning loop — must accept first step
+        let mut loop_guard = ReasoningLoop::<10>::new();
+        let step_result = loop_guard.next_step(validated, vproof);
+        assert!(step_result.is_ok(), "first reasoning step must succeed");
+    }
+
+    /// Verify that the no_std path compiles and produces correct type
+    /// behavior. Synapse construction and validation must work without std.
+    #[test]
+    fn no_std_synapse_construction_and_validation() {
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(0);
+        synapse.set_raw_surprise(0);
+        synapse.set_has_bias(false);
+
+        assert_eq!(synapse.raw_entropy(), 0);
+        assert_eq!(synapse.raw_surprise(), 0);
+        assert!(!synapse.has_bias());
+        assert!(synapse.validate().is_ok());
+
+        // Bias detection must work in no_std
+        synapse.set_has_bias(true);
+        assert!(synapse.has_bias());
+        assert!(synapse.validate().is_err());
+    }
+
+    /// Verify that entropy stability checks work in no_std context.
+    #[test]
+    fn no_std_entropy_stability_check() {
+        use llmosafe::{CognitiveEntropy, STABILITY_THRESHOLD};
+
+        let stable = CognitiveEntropy::<28, 2>::new(100);
+        assert!(stable.is_stable(STABILITY_THRESHOLD));
+
+        let unstable = CognitiveEntropy::<28, 2>::new(STABILITY_THRESHOLD + 1);
+        assert!(!unstable.is_stable(STABILITY_THRESHOLD));
+    }
+
+    // Keep the compilation-verification test as a backup
     #[test]
     fn no_std_compiles() {
-        // This test just verifies no_std compilation works
         assert!(true);
+    }
+}
+
+// ── Test 4: End-to-End DAL feature path (Confession 46) ──────────
+
+#[cfg(all(feature = "std", feature = "testing"))]
+#[cfg(test)]
+mod dal_end_to_end_tests {
+    /// Tests that `apply_safety_overrides()` combined with `pid_risk_to_decision()`
+    /// enforces Halt when BIAS, EXHAUSTED, and KERNEL_UNSTABLE override flags are set.
+    /// This is an end-to-end test of the safety override chain:
+    ///   apply_safety_overrides → pid_risk_to_decision → SafetyDecision::Halt
+    #[test]
+    #[cfg(feature = "dal")]
+    fn dal_safety_overrides_enforce_halt_end_to_end() {
+        use llmosafe::llmosafe_pid::pid_risk_to_decision;
+        use llmosafe::{apply_safety_overrides, OverrideFlags, PidConfig, SafetyDecision};
+        let config = PidConfig::default();
+
+        // BIAS override: zero risk + BIAS flag → risk >= halt_gain → Halt
+        let risk_bias = apply_safety_overrides(0.0, OverrideFlags::BIAS, &config);
+        assert!(
+            risk_bias >= config.halt_gain,
+            "BIAS override must force risk >= halt_gain ({})",
+            config.halt_gain
+        );
+        let decision_bias = pid_risk_to_decision(risk_bias, &config);
+        assert!(
+            matches!(decision_bias, SafetyDecision::Halt(..)),
+            "BIAS override must produce Halt, got {:?}",
+            decision_bias
+        );
+
+        // EXHAUSTED override: zero risk + EXHAUSTED flag → risk = 1.0 → Halt
+        let risk_exhausted = apply_safety_overrides(0.0, OverrideFlags::EXHAUSTED, &config);
+        assert!(
+            (risk_exhausted - 1.0).abs() < 0.001,
+            "EXHAUSTED override must force risk = 1.0"
+        );
+        let decision_exhausted = pid_risk_to_decision(risk_exhausted, &config);
+        assert!(
+            matches!(decision_exhausted, SafetyDecision::Halt(..)),
+            "EXHAUSTED override must produce Halt, got {:?}",
+            decision_exhausted
+        );
+
+        // KERNEL_UNSTABLE override: zero risk + KERNEL_UNSTABLE flag → risk >= halt_gain → Halt
+        let risk_kernel = apply_safety_overrides(0.0, OverrideFlags::KERNEL_UNSTABLE, &config);
+        assert!(
+            risk_kernel >= config.halt_gain,
+            "KERNEL_UNSTABLE override must force risk >= halt_gain ({})",
+            config.halt_gain
+        );
+        let decision_kernel = pid_risk_to_decision(risk_kernel, &config);
+        assert!(
+            matches!(decision_kernel, SafetyDecision::Halt(..)),
+            "KERNEL_UNSTABLE override must produce Halt, got {:?}",
+            decision_kernel
+        );
+
+        // Combined BIAS + EXHAUSTED: EXHAUSTED takes priority → risk = 1.0 → Halt
+        let risk_combined =
+            apply_safety_overrides(0.0, OverrideFlags::BIAS | OverrideFlags::EXHAUSTED, &config);
+        assert!(
+            (risk_combined - 1.0).abs() < 0.001,
+            "BIAS+EXHAUSTED combined: EXHAUSTED must force risk = 1.0"
+        );
+        let decision_combined = pid_risk_to_decision(risk_combined, &config);
+        assert!(
+            matches!(decision_combined, SafetyDecision::Halt(..)),
+            "BIAS+EXHAUSTED combined must produce Halt"
+        );
+    }
+
+    /// Tests that without the `dal` feature, `apply_safety_overrides()`
+    /// is a passthrough — risk values are unchanged.
+    #[test]
+    #[cfg(not(feature = "dal"))]
+    fn dal_disabled_passthrough_end_to_end() {
+        use llmosafe::llmosafe_pid::pid_risk_to_decision;
+        use llmosafe::{apply_safety_overrides, OverrideFlags, PidConfig, SafetyDecision};
+        let config = PidConfig::default();
+
+        // Without dal, BIAS override is a passthrough
+        let risk_bias = apply_safety_overrides(0.1, OverrideFlags::BIAS, &config);
+        assert!(
+            (risk_bias - 0.1).abs() < 0.001,
+            "Without dal, BIAS override must be passthrough"
+        );
+        let decision = pid_risk_to_decision(risk_bias, &config);
+        assert!(
+            matches!(decision, SafetyDecision::Proceed),
+            "Without dal, low risk + BIAS flag must still Proceed"
+        );
+
+        // Without dal, EXHAUSTED override is a passthrough
+        let risk_exhausted = apply_safety_overrides(0.1, OverrideFlags::EXHAUSTED, &config);
+        assert!(
+            (risk_exhausted - 0.1).abs() < 0.001,
+            "Without dal, EXHAUSTED override must be passthrough"
+        );
+
+        // Without dal, KERNEL_UNSTABLE override is a passthrough
+        let risk_kernel = apply_safety_overrides(0.1, OverrideFlags::KERNEL_UNSTABLE, &config);
+        assert!(
+            (risk_kernel - 0.1).abs() < 0.001,
+            "Without dal, KERNEL_UNSTABLE override must be passthrough"
+        );
     }
 }
