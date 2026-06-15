@@ -134,3 +134,9 @@ training_metrics.jsonl
 # --- IDE/tool state ---
 .antigravitycli/
 .moeinclude
+
+# --- Agent infrastructure artifacts (never published) ---
+.moegraph/
+.maat/
+.workflows/
+MAAT_REPORT.md

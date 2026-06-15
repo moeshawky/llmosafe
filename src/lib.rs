@@ -1,3 +1,6 @@
+#![doc = include_str!("../README.md")]
+// TODO: migrate to #![deny(missing_docs)] after documenting all public items
+#![allow(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 // Test code uses unwrap/expect for assertions, raw indexing for fixed arrays,
 // and arithmetic operations on controlled test inputs — all safe in test context.

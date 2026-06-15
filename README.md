@@ -51,7 +51,7 @@ The `CognitivePipeline` wires sifter, working memory, kernel, escalation policy,
 
 ```toml
 [dependencies]
-llmosafe = "0.7.1"
+llmosafe = "0.7.5"
 ```
 
 **Arch Linux (AUR):**
@@ -93,7 +93,7 @@ match result.decision {
 
 ## Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │ PERCEPTUAL SIFTER (Tier 3) — Dual-Path: Classifier + Keyword │
 │                                                              │
@@ -120,7 +120,7 @@ match result.decision {
 ┌──────────────────────────────────────────────────────────────┐
 │ DETERMINISTIC KERNEL (Tier 1) — Entropy Stability            │
 │                                                              │
-│  • Cognitive entropy: [0,65535] range                        │
+│  • Cognitive entropy: 0–65535 range                        │
 │  • Binary entropy: H(p) = 4p(1-p), peaks at p=0.5           │
 │  • Bounded loops: ReasoningLoop<MAX_STEPS>                   │
 │  • STABILITY_THRESHOLD: 50000                                │
@@ -194,7 +194,7 @@ if !result.is_safe() {
 
 ### 1. Entropy Gauge (The "Temperature Gauge")
 
-Entropy measures cognitive uncertainty using **binary entropy**: H(p) = 4p(1-p), scaled to [0,65535].
+Entropy measures cognitive uncertainty using **binary entropy**: H(p) = 4p(1-p), scaled to 0–65535.
 
 The formula peaks at p=0.5 (maximum uncertainty — classifier can't decide) and drops to 0 at both extremes (p=0 = confident it's safe, p=1 = confident it's dangerous). Unlike the old linear complement (1-p), binary entropy correctly treats both safety-confidence and danger-confidence as **low-entropy states**.
 
@@ -209,7 +209,7 @@ Catches: genuine classifier uncertainty, distribution shift, out-of-domain input
 
 ### 2. Surprise Gauge (The "Spam Filter")
 
-Classifies how "surprising" an input is — high probability of manipulation → high surprise. Scaled to [0,65535].
+Classifies how "surprising" an input is — high probability of manipulation → high surprise. Scaled to 0–65535.
 
 ```rust
 let (sifted, sifted_proof) = sift_text("observation text");
@@ -329,7 +329,7 @@ except ResourceExhaustedError:
 
 The type system enforces a three-stage pipeline via zero-cost witness tokens:
 
-```
+```text
 sift_text() → (SiftedSynapse, SiftedProof)
         ↓
 WorkingMemory::update(sifted, proof) → (ValidatedSynapse, ValidatedProof)
@@ -386,7 +386,7 @@ gcc -o my_app main.c -L./target/release -lllmosafe
 
 ### From Control Theory
 
-```
+```text
 Safe Zone   ([0, 40000))  → Normal operation
 Pressure    ([40000, 50000]) → Monitor closely
 Unstable    (> 50000)     → Halt execution
@@ -450,4 +450,4 @@ let mut adv = AdversarialDetector::new();
 
 ---
 
-*llmosafe v0.7.1 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*
+*llmosafe v0.7.5 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*
