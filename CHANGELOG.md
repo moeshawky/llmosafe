@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-06-16
+
 ### Fixed
 - **C-ABI sentinel ambiguity**: `llmosafe_get_classifier_score` error sentinel changed from `-1.0` to `NaN` (Bug 4a)
 - **C-ABI sentinel ambiguity**: `llmosafe_calculate_halo` error sentinel changed from `0` to `u16::MAX` (Bug 4b)
