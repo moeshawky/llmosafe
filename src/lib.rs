@@ -399,24 +399,25 @@ pub mod c_abi {
     /// on the given handle.
     ///
     /// Negative = safe, positive = manipulation signal. Unbounded f32
-    /// returned as f64 for C-ABI compatibility. Returns -1.0 if the handle
+    /// returned as f64 for C-ABI compatibility. Returns NaN if the handle
     /// is invalid, the slot is uninitialized, or no result is available.
+    /// (Previously returned -1.0 which collides with a legitimate classifier score.)
     #[no_mangle]
     pub extern "C" fn llmosafe_get_classifier_score(instance_id: u32) -> f64 {
         let arena = lock_arena();
         let (index, generation) = unpack_handle(instance_id as usize);
         if index >= ARENA_SIZE {
-            return -1.0;
+            return f64::NAN;
         }
         arena[index]
             .as_ref()
             .filter(|s| s.generation == generation)
             .map_or_else(
-                || -1.0,
+                || f64::NAN,
                 |slot| {
                     slot.last_result
                         .as_ref()
-                        .map_or_else(|| -1.0, |r| f64::from(r.classifier_score))
+                        .map_or_else(|| f64::NAN, |r| f64::from(r.classifier_score))
                 },
             )
     }
@@ -496,6 +497,9 @@ pub mod c_abi {
 
     #[no_mangle]
     // C-ABI entry point — raw pointer safety is the caller's responsibility.
+    // Error sentinel: u16::MAX (65535). 0 is valid entropy for perfectly safe text
+    // and cannot serve as an error indicator. u16::MAX is maximum entropy and
+    // unambiguously distinguishable from a valid response.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub extern "C" fn llmosafe_calculate_halo(text_ptr: *const u8, text_len: usize) -> u16 {
         let max_text_len = 10 * 1024 * 1024;
@@ -504,7 +508,7 @@ pub mod c_abi {
             || text_len > isize::MAX as usize
             || text_len > max_text_len
         {
-            return 0;
+            return u16::MAX;
         }
         // SAFETY: text_ptr is validated non-null and text_len is bounded to
         // [1, 10 MiB] on lines 97-103 above. The slice lives only for the duration of
@@ -522,9 +526,14 @@ pub mod c_abi {
         let ceiling_bytes = (ceiling_mb as usize).saturating_mul(1024 * 1024);
         let guard = ResourceGuard::new(ceiling_bytes);
 
+        // Only ResourceExhaustion (-5) is reachable from ResourceGuard::check().
+        // The other arms are forward-compatibility: if check() is extended to
+        // return other errors (e.g., system-call failures mapped to KernelError),
+        // this match will handle them without silent default.
         match guard.check() {
             Ok(_) => 0,
             Err(KernelError::ResourceExhaustion) => -5,
+            // Forward-compatibility arms — currently unreachable:
             Err(KernelError::DepthExceeded) => -1,
             Err(KernelError::CognitiveInstability) => -2,
             Err(KernelError::BiasHaloDetected) => -3,
@@ -1008,7 +1017,11 @@ mod tests {
     #[test]
     fn test_c_abi_calculate_halo_null_pointer() {
         let result = crate::c_abi::llmosafe_calculate_halo(std::ptr::null(), 10);
-        assert_eq!(result, 0);
+        assert_eq!(
+            result,
+            u16::MAX,
+            "null pointer should return u16::MAX error sentinel"
+        );
     }
 
     #[cfg(feature = "std")]
@@ -1016,7 +1029,11 @@ mod tests {
     fn test_c_abi_calculate_halo_zero_length() {
         let data = b"Hello";
         let result = crate::c_abi::llmosafe_calculate_halo(data.as_ptr(), 0);
-        assert_eq!(result, 0);
+        assert_eq!(
+            result,
+            u16::MAX,
+            "zero length should return u16::MAX error sentinel"
+        );
     }
 
     #[cfg(feature = "std")]
@@ -1025,7 +1042,11 @@ mod tests {
         let data = b"Hello";
         let result =
             crate::c_abi::llmosafe_calculate_halo(data.as_ptr(), (isize::MAX as usize) + 1);
-        assert_eq!(result, 0);
+        assert_eq!(
+            result,
+            u16::MAX,
+            "overflow length should return u16::MAX error sentinel"
+        );
     }
 
     #[cfg(feature = "std")]
@@ -1307,6 +1328,647 @@ mod tests {
         let safe_text = b"the weather forecast indicates mild temperatures";
         let code =
             crate::c_abi::llmosafe_sift_and_process(handle, safe_text.as_ptr(), safe_text.len());
+        assert!((-8..=2).contains(&code));
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── Phase 6: Untested C-ABI function tests ────────
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_classifier_score_invalid_handle() {
+        let score = crate::c_abi::llmosafe_get_classifier_score(u32::MAX);
+        assert!(
+            score.is_nan(),
+            "invalid handle should return NaN, got {score}"
+        );
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_classifier_score_no_result() {
+        let objective = b"classifier test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let score = crate::c_abi::llmosafe_get_classifier_score(handle as u32);
+        assert!(score.is_nan(), "no result should return NaN, got {score}");
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_classifier_score_valid() {
+        let objective = b"classifier valid test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"checking classifier scoring for this input text here";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let score = crate::c_abi::llmosafe_get_classifier_score(handle as u32);
+        assert!(score.is_finite());
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_get_pid_state ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_pid_state_null_pointer() {
+        let mut acute = 0.0f64;
+        let result = crate::c_abi::llmosafe_get_pid_state(
+            0,
+            std::ptr::null_mut(),
+            &raw mut acute,
+            &raw mut acute,
+        );
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_pid_state_invalid_handle() {
+        let mut acute = 0.0f64;
+        let mut chronic = 0.0f64;
+        let mut pressure = 0.0f64;
+        let result = crate::c_abi::llmosafe_get_pid_state(
+            u32::MAX,
+            &raw mut acute,
+            &raw mut chronic,
+            &raw mut pressure,
+        );
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_pid_state_valid() {
+        let objective = b"pid state test str";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"testing pid state retrieval from pipeline after processing";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let mut acute = -999.0f64;
+        let mut chronic = -999.0f64;
+        let mut pressure = -999.0f64;
+        let result = crate::c_abi::llmosafe_get_pid_state(
+            handle as u32,
+            &raw mut acute,
+            &raw mut chronic,
+            &raw mut pressure,
+        );
+        assert_eq!(result, 0);
+        assert!(acute > -999.0);
+        assert!(chronic > -999.0);
+        assert!(pressure != -999.0);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_get_memory_stats ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_memory_stats_null_pointer() {
+        let mut mean = 0.0f64;
+        let result = crate::c_abi::llmosafe_get_memory_stats(
+            0,
+            std::ptr::null_mut(),
+            &raw mut mean,
+            &raw mut mean,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_memory_stats_invalid_handle() {
+        let mut mean = 0.0f64;
+        let mut var = 0.0f64;
+        let mut trend = 0.0f64;
+        let mut drifting = 0u32;
+        let result = crate::c_abi::llmosafe_get_memory_stats(
+            u32::MAX,
+            &raw mut mean,
+            &raw mut var,
+            &raw mut trend,
+            &raw mut drifting,
+        );
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_memory_stats_valid() {
+        let objective = b"memory stats test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"testing memory statistics after pipeline processing";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let mut mean = f64::NAN;
+        let mut var = f64::NAN;
+        let mut trend = f64::NAN;
+        let mut drifting = u32::MAX;
+        let result = crate::c_abi::llmosafe_get_memory_stats(
+            handle as u32,
+            &raw mut mean,
+            &raw mut var,
+            &raw mut trend,
+            &raw mut drifting,
+        );
+        assert_eq!(result, 0);
+        assert!(mean.is_finite());
+        assert!(var.is_finite());
+        assert!(trend.is_finite());
+        assert_ne!(drifting, u32::MAX);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_get_kernel_output ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_kernel_output_null_pointer() {
+        let mut err = 0.0f32;
+        let mut depth = 0u32;
+        let result = crate::c_abi::llmosafe_get_kernel_output(
+            0,
+            &raw mut err,
+            std::ptr::null_mut(),
+            &raw mut depth,
+        );
+        assert_eq!(result, -9);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_kernel_output_invalid_handle() {
+        let mut err = 0.0f32;
+        let mut stable = 0u8;
+        let mut depth = 0u32;
+        let result = crate::c_abi::llmosafe_get_kernel_output(
+            u32::MAX,
+            &raw mut err,
+            &raw mut stable,
+            &raw mut depth,
+        );
+        assert_eq!(result, -9);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_kernel_output_valid() {
+        let objective = b"kernel output test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"testing kernel output retrieval with pipeline execution";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let mut err = f32::NAN;
+        let mut stable = 99u8;
+        let mut depth = u32::MAX;
+        let result = crate::c_abi::llmosafe_get_kernel_output(
+            handle as u32,
+            &raw mut err,
+            &raw mut stable,
+            &raw mut depth,
+        );
+        if result == 0 {
+            assert!(err.is_finite());
+            assert!(stable <= 1);
+            assert_ne!(depth, u32::MAX);
+        } else {
+            assert_eq!(result, -9);
+        }
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_get_body_pressure ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_body_pressure_invalid_handle() {
+        let p = crate::c_abi::llmosafe_get_body_pressure(u32::MAX);
+        assert_eq!(p, u32::MAX);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_body_pressure_no_result() {
+        let objective = b"body pressure test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let p = crate::c_abi::llmosafe_get_body_pressure(handle as u32);
+        assert_eq!(p, u32::MAX);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_body_pressure_valid() {
+        let objective = b"body pressure valid";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"checking body pressure readings after processing";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let p = crate::c_abi::llmosafe_get_body_pressure(handle as u32);
+        assert!(p == u32::MAX || p <= 100);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_combined_risk_bits ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_combined_risk_bits_valid() {
+        let bits = crate::c_abi::llmosafe_combined_risk_bits(400u128);
+        let _ = bits;
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_combined_risk_bits_zero() {
+        let bits = crate::c_abi::llmosafe_combined_risk_bits(0u128);
+        let _ = bits;
+    }
+
+    // ── llmosafe_get_entropy ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_entropy_null_pointer() {
+        let result = crate::c_abi::llmosafe_get_entropy(0, std::ptr::null_mut());
+        assert_eq!(result, 2);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_entropy_invalid_handle() {
+        let mut out = 0u16;
+        let result = crate::c_abi::llmosafe_get_entropy(u32::MAX, &raw mut out);
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_entropy_no_result() {
+        let objective = b"entropy no result test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let mut out = 0u16;
+        let result = crate::c_abi::llmosafe_get_entropy(handle as u32, &raw mut out);
+        assert_eq!(result, 3);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_entropy_valid() {
+        let objective = b"entropy valid test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"validating entropy field retrieval from pipeline result";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let mut out = u16::MAX;
+        let result = crate::c_abi::llmosafe_get_entropy(handle as u32, &raw mut out);
+        assert_eq!(result, 0);
+        assert_ne!(out, u16::MAX);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_get_surprise ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_surprise_null_pointer() {
+        let result = crate::c_abi::llmosafe_get_surprise(0, std::ptr::null_mut());
+        assert_eq!(result, 2);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_surprise_invalid_handle() {
+        let mut out = 0u16;
+        let result = crate::c_abi::llmosafe_get_surprise(u32::MAX, &raw mut out);
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_surprise_no_result() {
+        let objective = b"surprise no result test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let mut out = 0u16;
+        let result = crate::c_abi::llmosafe_get_surprise(handle as u32, &raw mut out);
+        assert_eq!(result, 3);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_surprise_valid() {
+        let objective = b"surprise valid test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"retrieving surprise field from latest processing result";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let mut out = u16::MAX;
+        let result = crate::c_abi::llmosafe_get_surprise(handle as u32, &raw mut out);
+        assert_eq!(result, 0);
+        assert_ne!(out, u16::MAX);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_get_detection_flags ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_detection_flags_null_pointer() {
+        let result = crate::c_abi::llmosafe_get_detection_flags(0, std::ptr::null_mut());
+        assert_eq!(result, 2);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_detection_flags_invalid_handle() {
+        let mut out = 0u8;
+        let result = crate::c_abi::llmosafe_get_detection_flags(u32::MAX, &raw mut out);
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_detection_flags_no_result() {
+        let objective = b"detection flags no res";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let mut out = 0u8;
+        let result = crate::c_abi::llmosafe_get_detection_flags(handle as u32, &raw mut out);
+        assert_eq!(result, 3);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_detection_flags_valid() {
+        let objective = b"detection flags valid";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"testing detection flags retrieval from pipeline run";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let mut out = 0xFFu8;
+        let result = crate::c_abi::llmosafe_get_detection_flags(handle as u32, &raw mut out);
+        assert_eq!(result, 0);
+        assert_ne!(out, 0xFF);
+        assert!(out <= 0x3F);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_get_oov_ratio ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_oov_ratio_null_pointer() {
+        let result = crate::c_abi::llmosafe_get_oov_ratio(0, std::ptr::null_mut());
+        assert_eq!(result, 2);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_oov_ratio_invalid_handle() {
+        let mut out = 0u8;
+        let result = crate::c_abi::llmosafe_get_oov_ratio(u32::MAX, &raw mut out);
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_oov_ratio_no_result() {
+        let objective = b"oov ratio no result";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let mut out = 0u8;
+        let result = crate::c_abi::llmosafe_get_oov_ratio(handle as u32, &raw mut out);
+        assert_eq!(result, 3);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_oov_ratio_valid() {
+        let objective = b"oov ratio valid test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"checking out of vocabulary ratio after text analysis";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let mut out = 0xFFu8;
+        let result = crate::c_abi::llmosafe_get_oov_ratio(handle as u32, &raw mut out);
+        assert_eq!(result, 0);
+        assert_ne!(out, 0xFF);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_get_stages_executed ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_stages_executed_null_pointer() {
+        let result = crate::c_abi::llmosafe_get_stages_executed(0, std::ptr::null_mut());
+        assert_eq!(result, 2);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_stages_executed_invalid_handle() {
+        let mut out = 0u8;
+        let result = crate::c_abi::llmosafe_get_stages_executed(u32::MAX, &raw mut out);
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_stages_executed_no_result() {
+        let objective = b"stages no result test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let mut out = 0u8;
+        let result = crate::c_abi::llmosafe_get_stages_executed(handle as u32, &raw mut out);
+        assert_eq!(result, 3);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_stages_executed_valid() {
+        let objective = b"stages executed valid";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"verifying stages executed bitmask after pipeline completes";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let mut out = 0u8;
+        let result = crate::c_abi::llmosafe_get_stages_executed(handle as u32, &raw mut out);
+        assert_eq!(result, 0);
+        assert!(out & 0x01 != 0);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_get_step_count ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_step_count_null_pointer() {
+        let result = crate::c_abi::llmosafe_get_step_count(0, std::ptr::null_mut());
+        assert_eq!(result, 2);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_step_count_invalid_handle() {
+        let mut out = 0u32;
+        let result = crate::c_abi::llmosafe_get_step_count(u32::MAX, &raw mut out);
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_step_count_no_result() {
+        let objective = b"step count no result";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let mut out = 0u32;
+        let result = crate::c_abi::llmosafe_get_step_count(handle as u32, &raw mut out);
+        assert_eq!(result, 3);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_get_step_count_valid() {
+        let objective = b"step count valid test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"counting reasoning steps after pipeline processed this text";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let mut out = u32::MAX;
+        let result = crate::c_abi::llmosafe_get_step_count(handle as u32, &raw mut out);
+        assert_eq!(result, 0);
+        assert_ne!(out, u32::MAX);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_process_with_pressure ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_process_with_pressure_null_pointer() {
+        let objective = b"pressure null test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let code =
+            crate::c_abi::llmosafe_process_with_pressure(handle, std::ptr::null(), 10, 50u16, 25u8);
+        assert_eq!(code, -9);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_process_with_pressure_zero_length() {
+        let objective = b"pressure zero len";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"some text";
+        let code =
+            crate::c_abi::llmosafe_process_with_pressure(handle, text.as_ptr(), 0, 50u16, 25u8);
+        assert_eq!(code, -9);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_process_with_pressure_invalid_handle() {
+        let text = b"testing pressure processing with invalid handle";
+        let code = crate::c_abi::llmosafe_process_with_pressure(
+            usize::MAX,
+            text.as_ptr(),
+            text.len(),
+            50u16,
+            25u8,
+        );
+        assert_eq!(code, -9);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_process_with_pressure_valid() {
+        let objective = b"pressure valid test str";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"testing the process with pressure function using valid data";
+        let code = crate::c_abi::llmosafe_process_with_pressure(
+            handle,
+            text.as_ptr(),
+            text.len(),
+            400u16,
+            30u8,
+        );
+        assert!((-8..=2).contains(&code));
+        let bp = crate::c_abi::llmosafe_get_body_pressure(handle as u32);
+        assert!(bp <= 100);
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_reset_detectors ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_reset_detectors_invalid_handle() {
+        let result = crate::c_abi::llmosafe_reset_detectors(usize::MAX);
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_reset_detectors_valid() {
+        let objective = b"reset detectors test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"test observation for reset detectors function test";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let result = crate::c_abi::llmosafe_reset_detectors(handle);
+        assert_eq!(result, 0);
+        let text2 = b"another observation after resetting pipeline detectors";
+        let code = crate::c_abi::llmosafe_sift_and_process(handle, text2.as_ptr(), text2.len());
+        assert!((-8..=2).contains(&code));
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_reset_full ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_reset_full_invalid_handle() {
+        let result = crate::c_abi::llmosafe_reset_full(usize::MAX);
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_reset_full_valid() {
+        let objective = b"reset full test str";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let text = b"first observation for full reset of the pipeline test";
+        let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
+        let result = crate::c_abi::llmosafe_reset_full(handle);
+        assert_eq!(result, 0);
+        let text2 = b"another observation after a full reset of pipeline";
+        let code = crate::c_abi::llmosafe_sift_and_process(handle, text2.as_ptr(), text2.len());
+        assert!((-8..=2).contains(&code));
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── llmosafe_configure ──
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_configure_invalid_handle() {
+        let result = crate::c_abi::llmosafe_configure(u32::MAX, 2, 1, 64);
+        assert_eq!(result, 1);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_configure_valid() {
+        let objective = b"configure test str";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        let result = crate::c_abi::llmosafe_configure(handle as u32, 2, 1, 64);
+        assert_eq!(result, 0);
+        let text = b"testing pipeline operation after runtime configuration change";
+        let code = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
         assert!((-8..=2).contains(&code));
         crate::c_abi::llmosafe_destroy(handle);
     }

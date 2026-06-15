@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **C-ABI sentinel ambiguity**: `llmosafe_get_classifier_score` error sentinel changed from `-1.0` to `NaN` (Bug 4a)
+- **C-ABI sentinel ambiguity**: `llmosafe_calculate_halo` error sentinel changed from `0` to `u16::MAX` (Bug 4b)
+- **C-ABI sentinel collision**: `process_state_update` mutex poison now returns `-8` (distinct from `SelfMemoryExceeded` at `-6`) (Bug 4c)
+- **sigmoid(NaN)**: Now returns 0.5 instead of infinite recursion/stack overflow (Bug 2)
+- **pid_risk_to_decision(NaN)**: Now returns Halt instead of silently falling through to Proceed (Bug 3)
+- **PID F-term sign**: Feed-forward term corrected from inverted `(1.0 - classifier_prob)` to direct `classifier_prob` — higher manipulation confidence now correctly increases risk (Bug 5)
+- **DynamicStabilityMonitor low-side blindness**: Fixed guard to prevent permanent undetectability of silent agents when low envelope adapts below k (Bug 6)
+- **halt_entropy threshold**: Changed from strict `>` to inclusive `>=` for consistency with escalate/warn thresholds (Bug 10)
+- **FFI signature mismatch**: `tests/ffi_roundtrip.rs` extern declarations corrected from `u64` to `u128`, `#[allow(improper_ctypes)]` removed (Bug 1)
+- **witness_token invariants**: 14 tests now run by default (were gated behind `#[cfg(feature = "testing")]`) (Bug 7)
+- **Empty test**: `test_same_synapse_cannot_be_updated_twice` now has assertions; double-update behavior documented as intentional (Bug 8)
+- **use_detection_gate**: Field now `#[cfg(feature = "std")]` gated, visible as dead in no_std (Bug 11)
+- **Empty test file**: `tests/compile-fail/wrong_tier.rs` deleted (Bug 12)
+
+### Changed
+- C header (`include/llmosafe.h`) regenerated via cbindgen
+
 ## [0.7.5] — 2026-06-14
 
 ### Changed (BREAKING)

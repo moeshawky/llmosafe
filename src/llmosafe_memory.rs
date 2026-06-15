@@ -322,6 +322,60 @@ mod tests {
             KernelError::HallucinationDetected
         );
     }
+
+    // ── entropy_variance() edge cases ─────────────────────────────
+
+    #[test]
+    fn test_entropy_variance_size_one() {
+        let mut memory = WorkingMemory::<1>::new(1000);
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(500);
+        let sifted = SiftedSynapse::new(synapse);
+        memory.update(sifted, SiftedProof::for_testing()).unwrap();
+        // SIZE=1: variance must be 0.0 (single value = mean)
+        let variance = memory.entropy_variance();
+        assert!(
+            variance < 0.001,
+            "variance for SIZE=1 must be 0.0: got {}",
+            variance
+        );
+    }
+
+    #[test]
+    fn test_entropy_variance_all_identical() {
+        let mut memory = WorkingMemory::<4>::new(1000);
+        for _ in 0..4 {
+            let mut synapse = Synapse::new();
+            synapse.set_raw_entropy(300);
+            let sifted = SiftedSynapse::new(synapse);
+            memory.update(sifted, SiftedProof::for_testing()).unwrap();
+        }
+        let variance = memory.entropy_variance();
+        assert!(
+            variance < 0.001,
+            "variance for identical values must be 0.0: got {}",
+            variance
+        );
+    }
+
+    // ── trend() edge cases ────────────────────────────────────────
+
+    #[test]
+    fn test_trend_size_two_identical() {
+        let mut memory = WorkingMemory::<2>::new(1000);
+        for _ in 0..2 {
+            let mut synapse = Synapse::new();
+            synapse.set_raw_entropy(200);
+            let sifted = SiftedSynapse::new(synapse);
+            memory.update(sifted, SiftedProof::for_testing()).unwrap();
+        }
+        let trend = memory.trend();
+        assert!(
+            trend.abs() < 0.001,
+            "trend for two identical values must be 0.0: got {}",
+            trend
+        );
+    }
 }
 
 #[cfg(test)]
@@ -378,9 +432,11 @@ pub mod cognitive_memory {
         let sifted = SiftedSynapse::new(synapse);
         let proof = SiftedProof::from_raw_bits_bypass();
 
+        // Mutex poison returns -8 (distinct from all KernelError codes,
+        // including SelfMemoryExceeded=-6 which previously collided).
         let mut memory = match GLOBAL_MEMORY.lock() {
             Ok(guard) => guard,
-            Err(_) => return -6,
+            Err(_) => return -8,
         };
 
         match memory.update(sifted, proof) {

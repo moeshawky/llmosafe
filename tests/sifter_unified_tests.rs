@@ -12,7 +12,6 @@
 #![cfg_attr(test, allow(clippy::shadow_reuse))]
 #![cfg_attr(test, allow(clippy::shadow_same))]
 #![cfg_attr(test, allow(clippy::shadow_unrelated))]
-#![allow(deprecated)]
 
 use llmosafe::sift_text;
 

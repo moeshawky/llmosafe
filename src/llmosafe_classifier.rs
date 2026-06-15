@@ -186,6 +186,11 @@ const SIGMOID_LUT: [f32; 256] = [
 /// `[-8.0, 0.0]` linearly onto `[0, 255]` with `LUT[0]` ≈ 0.000335 and `LUT[255]` = 0.5.
 #[inline]
 pub fn sigmoid(x: f32) -> f32 {
+    // NaN produces neutral probability — prevents infinite recursion
+    // (NaN.is_sign_positive() is true, which would trigger sigmoid(-NaN) = sigmoid(NaN)).
+    if x.is_nan() {
+        return 0.5;
+    }
     if x.is_sign_positive() {
         if x == 0.0 {
             return 0.5;
@@ -436,5 +441,15 @@ mod tests {
         let result = classify_text("");
         assert_eq!(result.tokens_total, 0);
         assert_eq!(result.tokens_matched, 0);
+    }
+
+    #[test]
+    fn sigmoid_f32_max_returns_one() {
+        let result = sigmoid(f32::MAX);
+        assert!(
+            (result - 1.0).abs() < 0.001,
+            "sigmoid(f32::MAX) must return 1.0: got {}",
+            result
+        );
     }
 }

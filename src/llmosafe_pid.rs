@@ -227,7 +227,9 @@ fn compute_pid_score_inner(input: &PidInput, config: &PidConfig, state: &mut Pid
     let entropy_norm = input.e_sift.clamp(0.0, 1.0);
     let trend_abs_norm = ((input.trend.abs() as f32) / 65535.0_f32).clamp(0.0, 1.0);
     let pressure_norm = (f32::from(input.pressure) / 100.0_f32).clamp(0.0, 1.0);
-    let f_norm = (1.0_f32 - input.classifier_prob).clamp(0.0, 1.0);
+    // Feed-forward: higher classifier_prob (more confident manipulation)
+    // contributes MORE risk. Previously inverted with (1.0 - prob).
+    let f_norm = input.classifier_prob.clamp(0.0, 1.0);
 
     // Multi-channel integrator input blend for the 4-tier cascade.
     // Acute (fast) integrator: e_sift (primary entropy) + e_body (resource
@@ -292,7 +294,7 @@ fn compute_pid_score_inner(input: &PidInput, config: &PidConfig, state: &mut Pid
 /// | `e_kernel`         | I (both)   | `[0, 1]`, kernel stability to both integrators |
 /// | `trend`            | D          | `abs(trend) / 65535`                         |
 /// | `pressure`         | P          | `pressure / 100`                             |
-/// | `classifier_prob`  | F          | `1.0 - classifier_prob`                      |
+/// | `classifier_prob`  | F          | `classifier_prob`                             |
 /// | `detection_flags`  | sidechain  | Gain modulation                              |
 /// | `has_bias`         | override   | Forces `≥ halt_gain`                         |
 pub fn compute_pid_score(input: &PidInput, config: &PidConfig, state: &mut PidState) -> f32 {
@@ -323,7 +325,7 @@ pub fn compute_pid_score(input: &PidInput, config: &PidConfig, state: &mut PidSt
 /// | `e_kernel`         | I (both)   | `[0, 1]`, kernel stability to both integrators |
 /// | `trend`            | D          | `abs(trend) / 65535`                         |
 /// | `pressure`         | P          | `pressure / 100`                             |
-/// | `classifier_prob`  | F          | `1.0 - classifier_prob`                      |
+/// | `classifier_prob`  | F          | `classifier_prob`                             |
 /// | `detection_flags`  | sidechain  | Gain modulation                              |
 ///
 /// # DAL A
@@ -399,9 +401,13 @@ pub fn apply_safety_overrides(risk: f32, flags: OverrideFlags, config: &PidConfi
 /// * `warn_gain ≤ risk < halt_gain` → `Escalate` (carries entropy=0)
 /// * `risk ≥ halt_gain` → `Halt(CognitiveInstability, 30000)`
 pub fn pid_risk_to_decision(risk: f32, config: &PidConfig) -> SafetyDecision {
-    // Enforce [0, 1] bounds at runtime — debug_assert! is stripped in
-    // release builds. NaN is clamped to 0.0 (Proceed) since a NaN risk
-    // signal indicates sensor failure, not elevated danger.
+    // NaN risk indicates sensor failure — treat as Halt, not Proceed.
+    // f32::clamp(0.0, 1.0) returns NaN when input is NaN because
+    // all NaN comparisons are false, so the NaN passes through.
+    // Without this check, NaN → Proceed (the lowest-severity decision).
+    if risk.is_nan() {
+        return SafetyDecision::Halt(KernelError::CognitiveInstability, 0);
+    }
     let risk = risk.clamp(0.0, 1.0);
 
     if risk >= config.halt_gain {
@@ -576,12 +582,12 @@ mod tests {
     fn zero_input_produces_low_risk() {
         let config = PidConfig::default();
         let mut state = PidState::new();
+        // classifier_prob=0.0 → F_term = kf * 0.0 = 0. All other terms zero.
         let risk = compute_pid_score(
-            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false, 0, 0),
             &config,
             &mut state,
         );
-        // At prob=1.0, F_term = kf * (1 - 1) = 0. All other terms are zero.
         assert!((risk - 0.0).abs() < 0.01, "risk={}", risk);
     }
 
@@ -647,9 +653,10 @@ mod tests {
         let config = PidConfig::default();
         let mut state = PidState::new();
         // Start with prev_pressure_norm = 0.0 (default)
-        // Feed pressure 80 → delta = 0.8 > 0.5 → Kp doubled
+        // Feed pressure 80 → delta = 0.8 > 0.5 → Kp doubled.
+        // classifier_prob=0.0 keeps F_term=0.
         let risk_with_step = compute_pid_score(
-            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 80),
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false, 0, 80),
             &config,
             &mut state,
         );
@@ -662,13 +669,15 @@ mod tests {
 
         // Next cycle with same pressure: delta = 0.0 → no step change
         let risk_no_step = compute_pid_score(
-            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 80),
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false, 0, 80),
             &config,
             &mut state,
         ); // P_term = kp * 0.8 = 1.0 * 0.8 = 0.8 (no doubling)
         assert!(
             risk_no_step < risk_with_step,
-            "step-change risk should be higher"
+            "step-change risk should be higher (with_step={}, no_step={})",
+            risk_with_step,
+            risk_no_step
         );
     }
 
@@ -881,18 +890,19 @@ mod tests {
         let config = PidConfig::default();
         let mut state_clean = PidState::new();
         let mut state_anomaly = PidState::new();
-        // Give both the same trend input
+        // Use trend=10000 (norm≈0.153) so D_term stays below 1.0 clamp.
+        // classifier_prob=0.0 keeps F_term=0 to isolate Kd boost.
         let risk_clean = compute_pid_score(
-            &PidInput::new(0.0, 0.0, 0.0, 0.0, 32767.0, 1.0, false, 0, 0),
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 10000.0, 0.0, false, 0, 0),
             &config,
             &mut state_clean,
         );
         let risk_anomaly = compute_pid_score(
-            &PidInput::new(0.0, 0.0, 0.0, 0.0, 32767.0, 1.0, false, FLAG_ANOMALY, 0),
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 10000.0, 0.0, false, FLAG_ANOMALY, 0),
             &config,
             &mut state_anomaly,
         );
-        // Anomaly doubles Kd, so D_term should be higher
+        // Anomaly boosts Kd by 1.5, so D_term should be higher
         assert!(
             risk_anomaly > risk_clean,
             "FLAG_ANOMALY should boost Kd: clean={}, anomaly={}",
@@ -906,26 +916,26 @@ mod tests {
         let config = PidConfig::default();
         let mut state_clean = PidState::new();
         let mut state_stuck = PidState::new();
-        // Pre-seed integrators
+        // Pre-seed integrators. classifier_prob=0.0 keeps F_term=0.
         for _ in 0..3 {
             compute_pid_score(
-                &PidInput::new(0.0, 0.5, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+                &PidInput::new(0.0, 0.3, 0.0, 0.0, 0.0, 0.0, false, 0, 0),
                 &config,
                 &mut state_clean,
             );
             compute_pid_score(
-                &PidInput::new(0.0, 0.5, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+                &PidInput::new(0.0, 0.3, 0.0, 0.0, 0.0, 0.0, false, 0, 0),
                 &config,
                 &mut state_stuck,
             );
         }
         let risk_clean = compute_pid_score(
-            &PidInput::new(0.0, 0.5, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+            &PidInput::new(0.0, 0.3, 0.0, 0.0, 0.0, 0.0, false, 0, 0),
             &config,
             &mut state_clean,
         );
         let risk_stuck = compute_pid_score(
-            &PidInput::new(0.0, 0.5, 0.0, 0.0, 0.0, 1.0, false, FLAG_STUCK, 0),
+            &PidInput::new(0.0, 0.3, 0.0, 0.0, 0.0, 0.0, false, FLAG_STUCK, 0),
             &config,
             &mut state_stuck,
         );
@@ -989,18 +999,17 @@ mod tests {
         // After two cycles: acute = 0.5*0.9 + 0.5 = 0.95, chronic = 0.5*0.99 + 0.5 = 0.995
         // Chronic remembers MORE, so chronic > acute during accumulation.
         // The DIFFERENCE is in decay speed, tested in acute_integrator_decays_faster_than_chronic.
+        // classifier_prob=0.0 keeps F_term=0 so anti-windup doesn't bleed integrators.
         state.acute_entropy = 0.5;
         state.chronic_entropy = 0.5;
-        // Feed moderate entropy: the acute converges to steady-state faster
         for _ in 0..5 {
             compute_pid_score(
-                &PidInput::new(0.0, 0.5, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+                &PidInput::new(0.0, 0.5, 0.0, 0.0, 0.0, 0.0, false, 0, 0),
                 &config,
                 &mut state,
             );
         }
         // Both should be near saturation (steady-state > 1.0 for both, clamped to 1.0)
-        // The key test: after 5 cycles of max input, both integrators approach 1.0
         assert!(
             (state.acute_entropy - 1.0).abs() < 0.01,
             "acute should be near 1.0: {}",
@@ -1100,9 +1109,10 @@ mod tests {
     fn pure_score_no_bias_override() {
         let config = PidConfig::default();
         let mut state = PidState::new();
-        // Pure version must return ~0 for clean input regardless of has_bias
+        // Pure version must return ~0 for clean input regardless of has_bias.
+        // classifier_prob=0.0 so F_term = kf * 0.0 = 0.
         let risk = compute_pid_score_pure(
-            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false, 0, 0),
             &config,
             &mut state,
         );
@@ -1209,5 +1219,243 @@ mod tests {
             r_exhausted
         );
         assert!(r_none < r_kernel, "none={} < kernel={}", r_none, r_kernel);
+    }
+
+    // ── Multi-channel integrator tests ────────────────────────────
+
+    #[test]
+    fn multi_channel_body_signal_increases_risk() {
+        let config = PidConfig::default();
+        let mut state_clean = PidState::new();
+        let mut state_body = PidState::new();
+        // Clean: zero body
+        let risk_clean = compute_pid_score(
+            &PidInput::new(0.0, 0.3, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+            &config,
+            &mut state_clean,
+        );
+        // Body signal: e_body=0.5 added to acute_input
+        let risk_body = compute_pid_score(
+            &PidInput::new(0.5, 0.3, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+            &config,
+            &mut state_body,
+        );
+        assert!(
+            risk_body > risk_clean,
+            "e_body=0.5 must increase risk: clean={}, body={}",
+            risk_clean,
+            risk_body
+        );
+    }
+
+    #[test]
+    fn multi_channel_memory_signal_increases_risk() {
+        let config = PidConfig::default();
+        let mut state_clean = PidState::new();
+        let mut state_mem = PidState::new();
+        let risk_clean = compute_pid_score(
+            &PidInput::new(0.0, 0.3, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+            &config,
+            &mut state_clean,
+        );
+        let risk_mem = compute_pid_score(
+            &PidInput::new(0.0, 0.3, 0.4, 0.0, 0.0, 1.0, false, 0, 0),
+            &config,
+            &mut state_mem,
+        );
+        assert!(
+            risk_mem > risk_clean,
+            "e_mem=0.4 must increase risk: clean={}, mem={}",
+            risk_clean,
+            risk_mem
+        );
+    }
+
+    #[test]
+    fn multi_channel_kernel_signal_increases_risk() {
+        let config = PidConfig::default();
+        let mut state_clean = PidState::new();
+        let mut state_kernel = PidState::new();
+        let risk_clean = compute_pid_score(
+            &PidInput::new(0.0, 0.3, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+            &config,
+            &mut state_clean,
+        );
+        let risk_kernel = compute_pid_score(
+            &PidInput::new(0.0, 0.3, 0.0, 0.6, 0.0, 1.0, false, 0, 0),
+            &config,
+            &mut state_kernel,
+        );
+        assert!(
+            risk_kernel > risk_clean,
+            "e_kernel=0.6 must increase risk: clean={}, kernel={}",
+            risk_clean,
+            risk_kernel
+        );
+    }
+
+    // ── Sidechain flag isolation tests ────────────────────────────
+
+    #[test]
+    fn sidechain_drifting_boosts_kd() {
+        let config = PidConfig::default();
+        let mut state_clean = PidState::new();
+        let mut state_drift = PidState::new();
+        // Use trend=10000 (norm≈0.153) so D_term stays below 1.0 clamp.
+        // classifier_prob=0.0 keeps F_term=0 to isolate Kd boost.
+        let risk_clean = compute_pid_score(
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 10000.0, 0.0, false, 0, 0),
+            &config,
+            &mut state_clean,
+        );
+        let risk_drift = compute_pid_score(
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 10000.0, 0.0, false, FLAG_DRIFTING, 0),
+            &config,
+            &mut state_drift,
+        );
+        assert!(
+            risk_drift > risk_clean,
+            "FLAG_DRIFTING must boost Kd by 1.2: clean={}, drift={}",
+            risk_clean,
+            risk_drift
+        );
+    }
+
+    #[test]
+    fn sidechain_decaying_boosts_ki_fast() {
+        let config = PidConfig::default();
+        let mut state_clean = PidState::new();
+        let mut state_decay = PidState::new();
+        // Pre-seed integrators so ki_fast matters.
+        // classifier_prob=0.0 keeps F_term=0 to avoid saturation.
+        for _ in 0..3 {
+            compute_pid_score(
+                &PidInput::new(0.0, 0.3, 0.0, 0.0, 0.0, 0.0, false, 0, 0),
+                &config,
+                &mut state_clean,
+            );
+            compute_pid_score(
+                &PidInput::new(0.0, 0.3, 0.0, 0.0, 0.0, 0.0, false, 0, 0),
+                &config,
+                &mut state_decay,
+            );
+        }
+        let risk_clean = compute_pid_score(
+            &PidInput::new(0.0, 0.3, 0.0, 0.0, 0.0, 0.0, false, 0, 0),
+            &config,
+            &mut state_clean,
+        );
+        let risk_decay = compute_pid_score(
+            &PidInput::new(0.0, 0.3, 0.0, 0.0, 0.0, 0.0, false, FLAG_DECAYING, 0),
+            &config,
+            &mut state_decay,
+        );
+        assert!(
+            risk_decay > risk_clean,
+            "FLAG_DECAYING must boost ki_fast by 1.3: clean={}, decay={}",
+            risk_clean,
+            risk_decay
+        );
+    }
+
+    #[test]
+    fn sidechain_low_confidence_boosts_kf() {
+        let config = PidConfig::default();
+        let mut state_clean = PidState::new();
+        let mut state_lc = PidState::new();
+        // Use classifier_prob=0.5 to give kf a non-zero F-term (kf * p).
+        // BUG 5 FIX (v0.8.1): F-term was previously inverted as kf * (1-p);
+        // now uses kf * p directly — higher classifier_prob → MORE risk.
+        let risk_clean = compute_pid_score(
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.5, false, 0, 0),
+            &config,
+            &mut state_clean,
+        );
+        let risk_lc = compute_pid_score(
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.5, false, FLAG_LOW_CONFIDENCE, 0),
+            &config,
+            &mut state_lc,
+        );
+        assert!(
+            risk_lc > risk_clean,
+            "FLAG_LOW_CONFIDENCE must boost kf by 1.5: clean={}, lc={}",
+            risk_clean,
+            risk_lc
+        );
+    }
+
+    #[test]
+    fn sidechain_anomaly_wins_over_drifting() {
+        let config = PidConfig::default();
+        let mut state_anomaly = PidState::new();
+        let mut state_drift = PidState::new();
+        let mut state_both = PidState::new();
+        // Use small trend=8000 so Kd*trend_norm stays well below 1.0 clamp
+        // trend_norm = 8000/65535 ≈ 0.122, Kd*2.0*0.122=0.244 (no flags)
+        // drifting: Kd*2.4*0.122=0.293, anomaly: Kd*3.0*0.122=0.366
+        let risk_anomaly = compute_pid_score(
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 8000.0, 1.0, false, FLAG_ANOMALY, 0),
+            &config,
+            &mut state_anomaly,
+        );
+        let risk_drift = compute_pid_score(
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 8000.0, 1.0, false, FLAG_DRIFTING, 0),
+            &config,
+            &mut state_drift,
+        );
+        let risk_both = compute_pid_score(
+            &PidInput::new(
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                8000.0,
+                1.0,
+                false,
+                FLAG_ANOMALY | FLAG_DRIFTING,
+                0,
+            ),
+            &config,
+            &mut state_both,
+        );
+        // Anomaly (×1.5) > Drifting (×1.2), so anomaly alone should equal both together
+        assert!(
+            (risk_anomaly - risk_both).abs() < 0.001,
+            "FLAG_ANOMALY+DRIFTING must equal FLAG_ANOMALY alone (anomaly wins): anomaly={}, both={}",
+            risk_anomaly,
+            risk_both
+        );
+        assert!(
+            risk_anomaly > risk_drift,
+            "FLAG_ANOMALY (×1.5 Kd) must be > FLAG_DRIFTING (×1.2 Kd): anomaly={}, drift={}",
+            risk_anomaly,
+            risk_drift
+        );
+    }
+
+    // ── PidConfig::validate() boundary tests ──────────────────────
+
+    #[test]
+    fn pid_config_rejects_integrator_decay_at_0_899() {
+        let config = PidConfig {
+            integrator_decay: 0.899,
+            ..PidConfig::default()
+        };
+        assert!(
+            config.validate().is_err(),
+            "integrator_decay=0.899 must be rejected (<= 0.899)"
+        );
+    }
+
+    #[test]
+    fn pid_config_accepts_integrator_decay_at_0_9() {
+        let config = PidConfig {
+            integrator_decay: 0.9,
+            ..PidConfig::default()
+        };
+        assert!(
+            config.validate().is_ok(),
+            "integrator_decay=0.9 must be valid (> 0.899)"
+        );
     }
 }

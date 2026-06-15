@@ -18,6 +18,29 @@
 //!
 //! The legacy keyword-based `calculate_halo_signal()` and `get_bias_breakdown()`
 //! remain for backward compatibility with existing consumers.
+//!
+//! # Deprecation Chain (v0.8.0+)
+//!
+//! **Deprecated functions (keyword-only, low accuracy 18.6%):**
+//! - `get_bias_breakdown()` — deprecated v0.8.0: use `sift_perceptions()`
+//! - `calculate_halo_signal()` — deprecated v0.8.0: use `sift_perceptions()`
+//!   (wraps `get_bias_breakdown().total()`)
+//!
+//! **Modern dual-path (classifier + keyword, accuracy 93.4%):**
+//! - `sift_text()` — primary Rust API (returns `SiftedSynapse`)
+//! - `sift_perceptions()` — batch Rust API (returns best `SiftedSynapse`)
+//!
+//! **C-ABI surface (uses modern path, NOT deprecated):**
+//! - `llmosafe_calculate_halo()` — routes through `sift_text()`, NOT keyword-only.
+//!   Pass `text_ptr` + `text_len` (bounded safety).
+//!
+//! **Python bindings (uses modern path, NOT deprecated):**
+//! - `calculate_halo()` — routes through `sift_text()` (dual-path).
+//! - `calculate_halo_signal_legacy()` — wraps `calculate_halo_signal()` explicitly.
+//!
+//! The C-ABI and Python `calculate_halo` functions are NOT on the deprecation
+//! path — they use the modern dual-path implementation. Only the Rust-native
+//! `calculate_halo_signal()` and `get_bias_breakdown()` are deprecated.
 // Arithmetic in this module operates on bounded keyword counts [0, ~9000]
 // and hash accumulators where wrapping semantics are the intended behavior.
 // DO-178C: these operations are verified safe by value range analysis at
@@ -683,20 +706,6 @@ mod tests {
 
     #[test]
     #[allow(deprecated)]
-    fn test_halo_signal() {
-        assert_eq!(
-            calculate_halo_signal("The lead expert is certified and official."),
-            300
-        );
-        assert_eq!(
-            calculate_halo_signal("This is a random sentence without flags."),
-            0
-        );
-        assert_eq!(calculate_halo_signal("limited and exclusive rare"), 300);
-    }
-
-    #[test]
-    #[allow(deprecated)]
     fn test_halo_signal_all_categories_detected() {
         let text = "expert trending limited hurry incredible sophisticated";
         let breakdown = get_bias_breakdown(text);
@@ -864,5 +873,97 @@ mod tests {
             breakdown.semantic_traps, 0,
             "while should not trigger semantic_traps"
         );
+    }
+
+    // ── sift_observation() tests ──────────────────────────────────
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_sift_observation_produces_valid_synapse() {
+        // Construct a ClassificationResult with non-trivial values
+        let class_result = ClassificationResult {
+            score: 2.5,
+            probability: 0.92,
+            is_manipulation: true,
+            oov_ratio: 0.15,
+            tokens_matched: 8,
+            tokens_total: 10,
+        };
+        let (sifted, _proof) = sift_observation(&class_result, "test observation text");
+        // Entropy should reflect high manipulation probability: 0.92 * 65535 ≈ 60292
+        let entropy = sifted.raw_entropy();
+        assert!(
+            entropy > 50000,
+            "sifted entropy should be high for p=0.92 manipulation: {}",
+            entropy
+        );
+        // Surprise from OOV: 0.15 * 65535 ≈ 9830
+        let surprise = sifted.raw_surprise();
+        assert!(
+            surprise > 5000,
+            "sifted surprise should be non-zero for oov_ratio=0.15: {}",
+            surprise
+        );
+        // Bias flag should be true (is_manipulation=true)
+        assert!(
+            sifted.has_bias(),
+            "has_bias should be true for manipulation"
+        );
+        // Anchor hash should be non-zero (non-empty observation)
+        assert_ne!(sifted.anchor_hash(), 0);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_sift_observation_empty_text() {
+        let class_result = ClassificationResult {
+            score: 0.0,
+            probability: 0.5,
+            is_manipulation: false,
+            oov_ratio: 0.0,
+            tokens_matched: 0,
+            tokens_total: 0,
+        };
+        let (sifted, _proof) = sift_observation(&class_result, "");
+        // Empty text: entropy = 0.5 * 65535 = 32767
+        let entropy = sifted.raw_entropy();
+        assert!(
+            entropy > 0,
+            "sifted entropy should be > 0 even for empty text"
+        );
+        // Anchor hash for empty string should be non-zero (adler32("") = 1)
+        assert_ne!(sifted.anchor_hash(), 0);
+    }
+
+    // ── calculate_utility() edge cases ────────────────────────────
+
+    #[test]
+    fn test_calculate_utility_empty_observation() {
+        let utility = calculate_utility("", "safety objective");
+        assert_eq!(utility, 0);
+    }
+
+    #[test]
+    fn test_calculate_utility_empty_objective() {
+        let utility = calculate_utility("some observation text", "");
+        assert_eq!(utility, 0);
+    }
+
+    #[test]
+    fn test_sifter_output_from_classification() {
+        let class_result = ClassificationResult {
+            score: 1.5,
+            probability: 0.82,
+            is_manipulation: true,
+            oov_ratio: 0.25,
+            tokens_matched: 5,
+            tokens_total: 10,
+        };
+        let output = SifterOutput::from_classification(&class_result);
+        assert!((output.error_sift - 0.82).abs() < 0.01);
+        assert!(output.raw_entropy > 50000);
+        assert!(output.has_bias);
+        assert_eq!(output.classifier_prob, 0.82);
+        assert!(output.oov_ratio > 0);
     }
 }

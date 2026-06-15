@@ -769,4 +769,62 @@ mod tests {
         }
         assert!(detector.detected());
     }
+
+    #[test]
+    fn test_cusum_detector_s_low_path() {
+        // mu_ref=500, k=50, h=200. Feed values well below mu_ref to trigger s_low.
+        let mut detector = CusumDetector::new(500.0, 50.0, 200.0);
+        for _ in 0..10 {
+            // val=400, delta=400-500=-100, s_low += -(-100) - 50 = 50 → s_low rises
+            detector.update(400.0);
+        }
+        assert!(detector.detected(), "s_low path must detect downward shift");
+        assert!(
+            detector.s_low() > detector.h(),
+            "s_low ({}) must exceed h ({})",
+            detector.s_low(),
+            detector.h(),
+        );
+    }
+
+    // ── AdversarialDetector edge cases ────────────────────────────
+
+    #[test]
+    fn test_adversarial_detector_empty_input() {
+        let mut det = AdversarialDetector::new();
+        det.add_pattern("ignore previous");
+        assert!(!det.is_adversarial(""));
+    }
+
+    #[test]
+    fn test_adversarial_detector_ring_buffer_wrap() {
+        let mut det = AdversarialDetector::new();
+        // Add more than MAX_CONTEXT_LEN=8 patterns — should wrap without panic
+        for i in 0..12 {
+            det.add_pattern(&format!("pattern{}", i));
+        }
+        // After wrapping, the latest patterns should be present
+        // (hash comparison is deterministic, so we test the last pattern added)
+        assert!(det.is_adversarial("pattern11"));
+        // Early ones may have been overwritten
+        // Just verify no panic and the detector still works
+        assert!(!det.is_adversarial("normal input"));
+    }
+
+    // ── ConfidenceTracker::reset() ────────────────────────────────
+
+    #[test]
+    fn test_confidence_tracker_reset() {
+        let mut tracker = ConfidenceTracker::new(0.5, 2);
+        tracker.observe(0.8);
+        tracker.observe(0.6);
+        tracker.observe(0.4);
+        assert!(tracker.is_decaying());
+        assert_eq!(tracker.current(), Some(0.4));
+
+        tracker.reset();
+        assert_eq!(tracker.current(), None);
+        assert!(!tracker.is_decaying());
+        assert!(!tracker.is_low());
+    }
 }

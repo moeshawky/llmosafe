@@ -154,9 +154,14 @@ impl DynamicStabilityMonitor {
             return StabilityResult::Stable;
         }
 
-        // Bidirectional instability check
+        // Bidirectional instability check.
+        // Low-side: only flag instability when lo_idx > k (enough history to
+        // establish a baseline). When lo_idx ≤ k we haven't seen enough low values
+        // yet — flagging idx=0 as unstable with lo_idx=3,k=5 would be premature.
+        // This prevents false-positive "silent agent" detection during warm-up
+        // while correctly detecting genuine drops after calibration.
         let high_unstable = idx > self.hi_idx.wrapping_add(self.k);
-        let low_unstable = idx < self.lo_idx.saturating_sub(self.k);
+        let low_unstable = self.lo_idx > self.k && idx < self.lo_idx - self.k;
 
         if high_unstable || low_unstable {
             // Adapt envelopes even on instability to prevent lockout

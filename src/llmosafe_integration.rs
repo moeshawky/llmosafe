@@ -350,8 +350,9 @@ impl EscalationPolicy {
     /// masked by lower-severity ones (e.g., entropy Halt is NOT overridden by
     /// bias Escalate).
     pub fn decide(&self, entropy: u16, surprise: u16, has_bias: bool) -> SafetyDecision {
-        // Halt checks first (highest severity — must not be overridden)
-        if entropy > self.halt_entropy {
+        // Halt checks first (highest severity — must not be overridden).
+        // Uses >= to match escalate_entropy threshold semantics (inclusive).
+        if entropy >= self.halt_entropy {
             return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
         }
 
@@ -980,10 +981,14 @@ mod tests {
             SafetyDecision::Escalate { .. }
         ));
 
-        // halt_entropy is 50000. Test below, equal, above
+        // halt_entropy is 50000 (>= inclusive). Test below, equal, above
+        assert!(matches!(
+            policy.decide(49999, 100, false),
+            SafetyDecision::Escalate { .. }
+        ));
         assert!(matches!(
             policy.decide(50000, 100, false),
-            SafetyDecision::Escalate { .. }
+            SafetyDecision::Halt(..)
         ));
         assert!(matches!(
             policy.decide(50001, 100, false),
@@ -1049,5 +1054,219 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // ── decide_from_detection() tests ─────────────────────────────
+
+    #[test]
+    fn test_decide_from_detection_adversarial_halt() {
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        let detection = DetectionResult {
+            is_stuck: false,
+            is_drifting: false,
+            is_low_confidence: false,
+            is_decaying: false,
+            adversarial_patterns: vec!["ignore previous"],
+            risk_score: 0.1,
+        };
+        let decision = policy.decide_from_detection(&detection, 100, 100);
+        assert!(
+            matches!(decision, SafetyDecision::Halt(..)),
+            "adversarial patterns must cause Halt"
+        );
+    }
+
+    #[test]
+    fn test_decide_from_detection_high_risk_halt() {
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        let detection = DetectionResult {
+            is_stuck: false,
+            is_drifting: false,
+            is_low_confidence: false,
+            is_decaying: false,
+            adversarial_patterns: vec![],
+            risk_score: 0.9, // > 0.85
+        };
+        let decision = policy.decide_from_detection(&detection, 100, 100);
+        assert!(
+            matches!(decision, SafetyDecision::Halt(..)),
+            "high risk (>0.85) must cause Halt"
+        );
+    }
+
+    #[test]
+    fn test_decide_from_detection_stuck_escalate() {
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        let detection = DetectionResult {
+            is_stuck: true,
+            is_drifting: false,
+            is_low_confidence: false,
+            is_decaying: false,
+            adversarial_patterns: vec![],
+            risk_score: 0.1,
+        };
+        let decision = policy.decide_from_detection(&detection, 40000, 100);
+        assert!(
+            matches!(
+                decision,
+                SafetyDecision::Escalate {
+                    reason: EscalationReason::StuckAgent,
+                    ..
+                }
+            ),
+            "stuck agent must cause Escalate"
+        );
+    }
+
+    #[test]
+    fn test_decide_from_detection_drifting_escalate() {
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        let detection = DetectionResult {
+            is_stuck: false,
+            is_drifting: true,
+            is_low_confidence: false,
+            is_decaying: false,
+            adversarial_patterns: vec![],
+            risk_score: 0.1,
+        };
+        let decision = policy.decide_from_detection(&detection, 100, 100);
+        assert!(
+            matches!(
+                decision,
+                SafetyDecision::Escalate {
+                    reason: EscalationReason::GoalDriftDetected,
+                    ..
+                }
+            ),
+            "goal drift must cause Escalate"
+        );
+    }
+
+    #[test]
+    fn test_decide_from_detection_decaying_warn() {
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        let detection = DetectionResult {
+            is_stuck: false,
+            is_drifting: false,
+            is_low_confidence: false,
+            is_decaying: true,
+            adversarial_patterns: vec![],
+            risk_score: 0.1,
+        };
+        let decision = policy.decide_from_detection(&detection, 100, 100);
+        assert!(
+            matches!(decision, SafetyDecision::Warn(_)),
+            "decaying confidence must cause Warn"
+        );
+    }
+
+    #[test]
+    fn test_decide_from_detection_low_confidence_warn() {
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        let detection = DetectionResult {
+            is_stuck: false,
+            is_drifting: false,
+            is_low_confidence: true,
+            is_decaying: false,
+            adversarial_patterns: vec![],
+            risk_score: 0.1,
+        };
+        let decision = policy.decide_from_detection(&detection, 100, 100);
+        assert!(
+            matches!(decision, SafetyDecision::Warn(_)),
+            "low confidence must cause Warn"
+        );
+    }
+
+    #[test]
+    fn test_decide_from_detection_all_false_falls_through() {
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        let detection = DetectionResult {
+            is_stuck: false,
+            is_drifting: false,
+            is_low_confidence: false,
+            is_decaying: false,
+            adversarial_patterns: vec![],
+            risk_score: 0.1,
+        };
+        // Low entropy/surprise → Proceed via fall-through decide()
+        let decision = policy.decide_from_detection(&detection, 100, 100);
+        assert!(
+            matches!(decision, SafetyDecision::Proceed),
+            "all false with low signals must Proceed"
+        );
+        // High entropy → Escalate via fall-through decide()
+        let decision = policy.decide_from_detection(&detection, 41000, 100);
+        assert!(
+            matches!(decision, SafetyDecision::Escalate { .. }),
+            "all false with high entropy must Escalate via decide()"
+        );
+    }
+
+    // ── decide_with_pressure() edge cases ─────────────────────────
+
+    #[test]
+    fn test_decide_with_pressure_elevated_no_halt() {
+        // Elevated pressure (35%) with low entropy — falls through to decide()
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        let decision = policy.decide_with_pressure(100, 100, false, PressureLevel::Elevated);
+        // default escalate_pressure is Critical, so Elevated < Critical → no pressure escalation
+        assert!(
+            matches!(decision, SafetyDecision::Proceed),
+            "Elevated pressure below escalate_pressure must not halt"
+        );
+    }
+
+    #[test]
+    fn test_decide_with_pressure_emergency_halt() {
+        // Emergency pressure (90%) — should Escalate via pressure escalation
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        let decision = policy.decide_with_pressure(100, 100, false, PressureLevel::Emergency);
+        assert!(
+            matches!(decision, SafetyDecision::Escalate { .. }),
+            "Emergency pressure must escalate (via pressure escalation)"
+        );
+    }
+
+    #[test]
+    fn test_decide_with_pressure_custom_escalate_pressure() {
+        // Set escalate_pressure to Elevated directly (no builder exists)
+        let policy = EscalationPolicy {
+            escalate_pressure: PressureLevel::Elevated,
+            ..EscalationPolicy::default()
+        }
+        .with_dal(DesignAssuranceLevel::A);
+        // Elevated pressure (35%) now triggers escalation
+        let decision = policy.decide_with_pressure(100, 100, false, PressureLevel::Elevated);
+        assert!(
+            matches!(decision, SafetyDecision::Escalate { .. }),
+            "custom escalate_pressure=Elevated must escalate at Elevated pressure"
+        );
+        // Nominal pressure still proceeds
+        let decision = policy.decide_with_pressure(100, 100, false, PressureLevel::Nominal);
+        assert!(
+            matches!(decision, SafetyDecision::Proceed),
+            "custom escalate_pressure=Elevated must not escalate at Nominal"
+        );
+    }
+
+    // ── SafetyDecision Exit edge cases ────────────────────────────
+
+    #[test]
+    fn test_exit_is_blocking() {
+        let exit = SafetyDecision::Exit(KernelError::ResourceExhaustion);
+        assert!(exit.is_blocking());
+    }
+
+    #[test]
+    fn test_exit_status_label() {
+        let exit = SafetyDecision::Exit(KernelError::ResourceExhaustion);
+        assert_eq!(exit.status_label(), "exit");
+    }
+
+    #[test]
+    fn test_exit_recommended_cooldown_ms() {
+        let exit = SafetyDecision::Exit(KernelError::ResourceExhaustion);
+        assert_eq!(exit.recommended_cooldown_ms(), 0);
     }
 }

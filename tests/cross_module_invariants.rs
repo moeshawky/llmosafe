@@ -467,10 +467,11 @@ fn pid_sidechain_flags_effect_different_risk() {
 fn pid_dual_rate_integrator_time_scale_separation() {
     let config = PidConfig::default();
     let mut state = PidState::new();
-    // Build up integrators
+    // Build up integrators with classifier_prob=0.0 so F_term=0
+    // (anti-windup threshold is reached purely from entropy, not F-term).
     for _ in 0..100 {
         compute_pid_score(
-            &PidInput::new(0.0, 1.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+            &PidInput::new(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, false, 0, 0),
             &config,
             &mut state,
         );
@@ -479,7 +480,7 @@ fn pid_dual_rate_integrator_time_scale_separation() {
     // Feed clean for many cycles
     for _ in 0..30 {
         compute_pid_score(
-            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, false, 0, 0),
+            &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false, 0, 0),
             &config,
             &mut state,
         );

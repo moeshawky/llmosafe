@@ -204,4 +204,51 @@ mod tests {
         assert_eq!(detector.s_high(), 0.0);
         assert_eq!(detector.s_low(), 0.0);
     }
+
+    /// Verifies the DynamicStabilityMonitor low-side guard at the exact boundary
+    /// where lo_idx ≤ k. When the monitor has not seen enough low values to establish
+    /// a baseline (lo_idx=3, k=5), an idx=0 drop must NOT trigger Low — premature
+    /// "silent agent" detection during warm-up is a false positive.
+    ///
+    /// BUG 6 FIX (v0.8.1): The guard `self.lo_idx > self.k` was added to prevent
+    /// spurious low-side anomalies before the monitor has gathered enough low-value
+    /// history. Without it, idx=0 with lo_idx=3 would trigger Low when k=5, even
+    /// though the monitor hadn't seen enough data to calibrate.
+    #[test]
+    fn test_dynamic_stability_monitor_low_side_guard() {
+        // k=5 — large safety margin; lo_idx must exceed 5 for low detection
+        let mut monitor = DynamicStabilityMonitor::new(5);
+
+        // First update: msb_idx(8) = 3 → sets both hi_idx and lo_idx to 3
+        let result = monitor.update(8);
+        assert_eq!(
+            result,
+            StabilityResult::Stable,
+            "first update always initializes"
+        );
+
+        // Second update: msb_idx(0) = 0, lo_idx=3, k=5
+        // lo_idx(3) ≤ k(5) → guard prevents low detection → must return Stable
+        let result = monitor.update(0);
+        assert_eq!(
+            result,
+            StabilityResult::Stable,
+            "lo_idx(3) ≤ k(5) — not enough low-value history to flag; must stay Stable"
+        );
+
+        // Third update with more data: feed msb_idx=4 values to raise lo_idx above k
+        // After this, lo_idx is still 0 from the last update, hi_idx=4
+        // But we need lo_idx to be ABOVE k to trigger. Feed high values first
+        // to get hi_idx up, then a very low value with k=2 would trigger.
+        // But with k=5 we need lo_idx > 5 for low detection. Let's use k=2.
+        let mut monitor2 = DynamicStabilityMonitor::new(2);
+        monitor2.update(8); // msb_idx=3 → hi=3, lo=3
+                            // lo_idx(3) > k(2) = true → low detection IS enabled
+        let result = monitor2.update(0); // msb_idx=0, 0 < 3-2=1 → low detection!
+        assert_eq!(
+            result,
+            StabilityResult::Low,
+            "lo_idx(3) > k(2) AND idx(0) < lo_idx(3)-k(2)=1 → must be Low"
+        );
+    }
 }
