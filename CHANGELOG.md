@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.7] — 2026-06-18
+
+### Fixed (BREAKING)
+- **C-ABI handle truncation (IDOR)**: All 12 C-ABI functions and their Python bindings changed `instance_id` parameter type from `u32` to `usize` to prevent generation-counter truncation across FFI boundaries. On 64-bit platforms, `u32` dropped the upper 32 bits of the packed handle (index + generation counter), bypassing stale-handle checks and creating an Insecure Direct Object Reference vulnerability. Affected functions: `llmosafe_get_classifier_score`, `llmosafe_get_pid_state`, `llmosafe_get_memory_stats`, `llmosafe_get_kernel_output`, `llmosafe_get_body_pressure`, `llmosafe_get_entropy`, `llmosafe_get_surprise`, `llmosafe_get_detection_flags`, `llmosafe_get_oov_ratio`, `llmosafe_get_stages_executed`, `llmosafe_get_step_count`, `llmosafe_configure`. Python `CognitivePipeline.instance_id` field and getter also changed from `u32` to `usize`.
+
+### Changed
+- All internal `instance_id as usize` / `handle as u32` casts removed — handles now flow un-truncated through all boundaries
+- 344 lib + integration tests pass; `no_std` and release builds verified
+
 ## [0.7.6] — 2026-06-16
 
 ### Fixed
