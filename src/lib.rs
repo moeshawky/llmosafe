@@ -398,9 +398,9 @@ pub mod c_abi {
     /// is invalid, the slot is uninitialized, or no result is available.
     /// (Previously returned -1.0 which collides with a legitimate classifier score.)
     #[no_mangle]
-    pub extern "C" fn llmosafe_get_classifier_score(instance_id: u32) -> f64 {
+    pub extern "C" fn llmosafe_get_classifier_score(instance_id: usize) -> f64 {
         let arena = lock_arena();
-        let (index, generation) = unpack_handle(instance_id as usize);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return f64::NAN;
         }
@@ -426,7 +426,7 @@ pub mod c_abi {
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub extern "C" fn llmosafe_get_pid_state(
-        instance_id: u32,
+        instance_id: usize,
         acute: *mut f64,
         chronic: *mut f64,
         pressure: *mut f64,
@@ -435,7 +435,7 @@ pub mod c_abi {
             return 1;
         }
         let arena = lock_arena();
-        let handle = instance_id as usize;
+        let handle = instance_id;
         let (index, generation) = unpack_handle(handle);
         if index >= ARENA_SIZE {
             return 1;
@@ -562,7 +562,7 @@ pub mod c_abi {
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub extern "C" fn llmosafe_get_memory_stats(
-        instance_id: u32,
+        instance_id: usize,
         mean: *mut f64,
         variance: *mut f64,
         trend: *mut f64,
@@ -572,7 +572,7 @@ pub mod c_abi {
             return 1;
         }
         let arena = lock_arena();
-        let handle = instance_id as usize;
+        let handle = instance_id;
         let (index, generation) = unpack_handle(handle);
         if index >= ARENA_SIZE {
             return 1;
@@ -609,7 +609,7 @@ pub mod c_abi {
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub extern "C" fn llmosafe_get_kernel_output(
-        instance_id: u32,
+        instance_id: usize,
         error_out: *mut f32,
         is_stable_out: *mut u8,
         depth_out: *mut u32,
@@ -618,7 +618,7 @@ pub mod c_abi {
             return -9;
         }
         let arena = lock_arena();
-        let (index, generation) = unpack_handle(instance_id as usize);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return -9;
         }
@@ -645,9 +645,9 @@ pub mod c_abi {
     /// Returns `u32::MAX` if handle is invalid, slot is uninitialized, or
     /// no result is available.
     #[no_mangle]
-    pub extern "C" fn llmosafe_get_body_pressure(instance_id: u32) -> u32 {
+    pub extern "C" fn llmosafe_get_body_pressure(instance_id: usize) -> u32 {
         let arena = lock_arena();
-        let (index, generation) = unpack_handle(instance_id as usize);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return u32::MAX;
         }
@@ -684,12 +684,12 @@ pub mod c_abi {
     /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub extern "C" fn llmosafe_get_entropy(instance_id: u32, out: *mut u16) -> i32 {
+    pub extern "C" fn llmosafe_get_entropy(instance_id: usize, out: *mut u16) -> i32 {
         if out.is_null() {
             return 2;
         }
         let arena = lock_arena();
-        let (index, generation) = unpack_handle(instance_id as usize);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return 1;
         }
@@ -717,12 +717,12 @@ pub mod c_abi {
     /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub extern "C" fn llmosafe_get_surprise(instance_id: u32, out: *mut u16) -> i32 {
+    pub extern "C" fn llmosafe_get_surprise(instance_id: usize, out: *mut u16) -> i32 {
         if out.is_null() {
             return 2;
         }
         let arena = lock_arena();
-        let (index, generation) = unpack_handle(instance_id as usize);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return 1;
         }
@@ -750,12 +750,12 @@ pub mod c_abi {
     /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub extern "C" fn llmosafe_get_detection_flags(instance_id: u32, out: *mut u8) -> i32 {
+    pub extern "C" fn llmosafe_get_detection_flags(instance_id: usize, out: *mut u8) -> i32 {
         if out.is_null() {
             return 2;
         }
         let arena = lock_arena();
-        let (index, generation) = unpack_handle(instance_id as usize);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return 1;
         }
@@ -783,12 +783,12 @@ pub mod c_abi {
     /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub extern "C" fn llmosafe_get_oov_ratio(instance_id: u32, out: *mut u8) -> i32 {
+    pub extern "C" fn llmosafe_get_oov_ratio(instance_id: usize, out: *mut u8) -> i32 {
         if out.is_null() {
             return 2;
         }
         let arena = lock_arena();
-        let (index, generation) = unpack_handle(instance_id as usize);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return 1;
         }
@@ -817,12 +817,12 @@ pub mod c_abi {
     /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub extern "C" fn llmosafe_get_stages_executed(instance_id: u32, out: *mut u8) -> i32 {
+    pub extern "C" fn llmosafe_get_stages_executed(instance_id: usize, out: *mut u8) -> i32 {
         if out.is_null() {
             return 2;
         }
         let arena = lock_arena();
-        let (index, generation) = unpack_handle(instance_id as usize);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return 1;
         }
@@ -850,12 +850,12 @@ pub mod c_abi {
     /// * `3` if no result available (sift_and_process not called yet)
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub extern "C" fn llmosafe_get_step_count(instance_id: u32, out: *mut u32) -> i32 {
+    pub extern "C" fn llmosafe_get_step_count(instance_id: usize, out: *mut u32) -> i32 {
         if out.is_null() {
             return 2;
         }
         let arena = lock_arena();
-        let (index, generation) = unpack_handle(instance_id as usize);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return 1;
         }
@@ -953,7 +953,7 @@ pub mod c_abi {
     /// Returns 0 on success, 1 if handle is invalid or slot is uninitialized.
     #[no_mangle]
     pub extern "C" fn llmosafe_configure(
-        instance_id: u32,
+        instance_id: usize,
         dal_level: u8,
         use_detection_gate: u32,
         _memory_depth: u32,
@@ -968,7 +968,7 @@ pub mod c_abi {
         let mut arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let handle = instance_id as usize;
+        let handle = instance_id;
         let (index, generation) = unpack_handle(handle);
         if index >= ARENA_SIZE {
             return 1;
@@ -1318,7 +1318,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn test_c_abi_get_classifier_score_invalid_handle() {
-        let score = crate::c_abi::llmosafe_get_classifier_score(u32::MAX);
+        let score = crate::c_abi::llmosafe_get_classifier_score(usize::MAX);
         assert!(
             score.is_nan(),
             "invalid handle should return NaN, got {score}"
@@ -1331,7 +1331,7 @@ mod tests {
         let objective = b"classifier test";
         let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
         assert!(handle != usize::MAX);
-        let score = crate::c_abi::llmosafe_get_classifier_score(handle as u32);
+        let score = crate::c_abi::llmosafe_get_classifier_score(handle);
         assert!(score.is_nan(), "no result should return NaN, got {score}");
         crate::c_abi::llmosafe_destroy(handle);
     }
@@ -1344,7 +1344,7 @@ mod tests {
         assert!(handle != usize::MAX);
         let text = b"checking classifier scoring for this input text here";
         let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
-        let score = crate::c_abi::llmosafe_get_classifier_score(handle as u32);
+        let score = crate::c_abi::llmosafe_get_classifier_score(handle);
         assert!(score.is_finite());
         crate::c_abi::llmosafe_destroy(handle);
     }
@@ -1370,7 +1370,7 @@ mod tests {
         let mut chronic = 0.0f64;
         let mut pressure = 0.0f64;
         let result = crate::c_abi::llmosafe_get_pid_state(
-            u32::MAX,
+            usize::MAX,
             &raw mut acute,
             &raw mut chronic,
             &raw mut pressure,
@@ -1390,7 +1390,7 @@ mod tests {
         let mut chronic = -999.0f64;
         let mut pressure = -999.0f64;
         let result = crate::c_abi::llmosafe_get_pid_state(
-            handle as u32,
+            handle,
             &raw mut acute,
             &raw mut chronic,
             &raw mut pressure,
@@ -1425,7 +1425,7 @@ mod tests {
         let mut trend = 0.0f64;
         let mut drifting = 0u32;
         let result = crate::c_abi::llmosafe_get_memory_stats(
-            u32::MAX,
+            usize::MAX,
             &raw mut mean,
             &raw mut var,
             &raw mut trend,
@@ -1447,7 +1447,7 @@ mod tests {
         let mut trend = f64::NAN;
         let mut drifting = u32::MAX;
         let result = crate::c_abi::llmosafe_get_memory_stats(
-            handle as u32,
+            handle,
             &raw mut mean,
             &raw mut var,
             &raw mut trend,
@@ -1483,7 +1483,7 @@ mod tests {
         let mut stable = 0u8;
         let mut depth = 0u32;
         let result = crate::c_abi::llmosafe_get_kernel_output(
-            u32::MAX,
+            usize::MAX,
             &raw mut err,
             &raw mut stable,
             &raw mut depth,
@@ -1503,7 +1503,7 @@ mod tests {
         let mut stable = 99u8;
         let mut depth = u32::MAX;
         let result = crate::c_abi::llmosafe_get_kernel_output(
-            handle as u32,
+            handle,
             &raw mut err,
             &raw mut stable,
             &raw mut depth,
@@ -1522,7 +1522,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn test_c_abi_get_body_pressure_invalid_handle() {
-        let p = crate::c_abi::llmosafe_get_body_pressure(u32::MAX);
+        let p = crate::c_abi::llmosafe_get_body_pressure(usize::MAX);
         assert_eq!(p, u32::MAX);
     }
 
@@ -1532,7 +1532,7 @@ mod tests {
         let objective = b"body pressure test";
         let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
         assert!(handle != usize::MAX);
-        let p = crate::c_abi::llmosafe_get_body_pressure(handle as u32);
+        let p = crate::c_abi::llmosafe_get_body_pressure(handle);
         assert_eq!(p, u32::MAX);
         crate::c_abi::llmosafe_destroy(handle);
     }
@@ -1545,7 +1545,7 @@ mod tests {
         assert!(handle != usize::MAX);
         let text = b"checking body pressure readings after processing";
         let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
-        let p = crate::c_abi::llmosafe_get_body_pressure(handle as u32);
+        let p = crate::c_abi::llmosafe_get_body_pressure(handle);
         assert!(p == u32::MAX || p <= 100);
         crate::c_abi::llmosafe_destroy(handle);
     }
@@ -1577,7 +1577,7 @@ mod tests {
     #[test]
     fn test_c_abi_get_entropy_invalid_handle() {
         let mut out = 0u16;
-        let result = crate::c_abi::llmosafe_get_entropy(u32::MAX, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_entropy(usize::MAX, &raw mut out);
         assert_eq!(result, 1);
     }
 
@@ -1588,7 +1588,7 @@ mod tests {
         let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
         assert!(handle != usize::MAX);
         let mut out = 0u16;
-        let result = crate::c_abi::llmosafe_get_entropy(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_entropy(handle, &raw mut out);
         assert_eq!(result, 3);
         crate::c_abi::llmosafe_destroy(handle);
     }
@@ -1602,7 +1602,7 @@ mod tests {
         let text = b"validating entropy field retrieval from pipeline result";
         let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
         let mut out = u16::MAX;
-        let result = crate::c_abi::llmosafe_get_entropy(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_entropy(handle, &raw mut out);
         assert_eq!(result, 0);
         assert_ne!(out, u16::MAX);
         crate::c_abi::llmosafe_destroy(handle);
@@ -1620,7 +1620,7 @@ mod tests {
     #[test]
     fn test_c_abi_get_surprise_invalid_handle() {
         let mut out = 0u16;
-        let result = crate::c_abi::llmosafe_get_surprise(u32::MAX, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_surprise(usize::MAX, &raw mut out);
         assert_eq!(result, 1);
     }
 
@@ -1631,7 +1631,7 @@ mod tests {
         let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
         assert!(handle != usize::MAX);
         let mut out = 0u16;
-        let result = crate::c_abi::llmosafe_get_surprise(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_surprise(handle, &raw mut out);
         assert_eq!(result, 3);
         crate::c_abi::llmosafe_destroy(handle);
     }
@@ -1645,7 +1645,7 @@ mod tests {
         let text = b"retrieving surprise field from latest processing result";
         let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
         let mut out = u16::MAX;
-        let result = crate::c_abi::llmosafe_get_surprise(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_surprise(handle, &raw mut out);
         assert_eq!(result, 0);
         assert_ne!(out, u16::MAX);
         crate::c_abi::llmosafe_destroy(handle);
@@ -1663,7 +1663,7 @@ mod tests {
     #[test]
     fn test_c_abi_get_detection_flags_invalid_handle() {
         let mut out = 0u8;
-        let result = crate::c_abi::llmosafe_get_detection_flags(u32::MAX, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_detection_flags(usize::MAX, &raw mut out);
         assert_eq!(result, 1);
     }
 
@@ -1674,7 +1674,7 @@ mod tests {
         let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
         assert!(handle != usize::MAX);
         let mut out = 0u8;
-        let result = crate::c_abi::llmosafe_get_detection_flags(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_detection_flags(handle, &raw mut out);
         assert_eq!(result, 3);
         crate::c_abi::llmosafe_destroy(handle);
     }
@@ -1688,7 +1688,7 @@ mod tests {
         let text = b"testing detection flags retrieval from pipeline run";
         let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
         let mut out = 0xFFu8;
-        let result = crate::c_abi::llmosafe_get_detection_flags(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_detection_flags(handle, &raw mut out);
         assert_eq!(result, 0);
         assert_ne!(out, 0xFF);
         assert!(out <= 0x3F);
@@ -1707,7 +1707,7 @@ mod tests {
     #[test]
     fn test_c_abi_get_oov_ratio_invalid_handle() {
         let mut out = 0u8;
-        let result = crate::c_abi::llmosafe_get_oov_ratio(u32::MAX, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_oov_ratio(usize::MAX, &raw mut out);
         assert_eq!(result, 1);
     }
 
@@ -1718,7 +1718,7 @@ mod tests {
         let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
         assert!(handle != usize::MAX);
         let mut out = 0u8;
-        let result = crate::c_abi::llmosafe_get_oov_ratio(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_oov_ratio(handle, &raw mut out);
         assert_eq!(result, 3);
         crate::c_abi::llmosafe_destroy(handle);
     }
@@ -1732,7 +1732,7 @@ mod tests {
         let text = b"checking out of vocabulary ratio after text analysis";
         let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
         let mut out = 0xFFu8;
-        let result = crate::c_abi::llmosafe_get_oov_ratio(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_oov_ratio(handle, &raw mut out);
         assert_eq!(result, 0);
         assert_ne!(out, 0xFF);
         crate::c_abi::llmosafe_destroy(handle);
@@ -1750,7 +1750,7 @@ mod tests {
     #[test]
     fn test_c_abi_get_stages_executed_invalid_handle() {
         let mut out = 0u8;
-        let result = crate::c_abi::llmosafe_get_stages_executed(u32::MAX, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_stages_executed(usize::MAX, &raw mut out);
         assert_eq!(result, 1);
     }
 
@@ -1761,7 +1761,7 @@ mod tests {
         let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
         assert!(handle != usize::MAX);
         let mut out = 0u8;
-        let result = crate::c_abi::llmosafe_get_stages_executed(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_stages_executed(handle, &raw mut out);
         assert_eq!(result, 3);
         crate::c_abi::llmosafe_destroy(handle);
     }
@@ -1775,7 +1775,7 @@ mod tests {
         let text = b"verifying stages executed bitmask after pipeline completes";
         let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
         let mut out = 0u8;
-        let result = crate::c_abi::llmosafe_get_stages_executed(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_stages_executed(handle, &raw mut out);
         assert_eq!(result, 0);
         assert!(out & 0x01 != 0);
         crate::c_abi::llmosafe_destroy(handle);
@@ -1793,7 +1793,7 @@ mod tests {
     #[test]
     fn test_c_abi_get_step_count_invalid_handle() {
         let mut out = 0u32;
-        let result = crate::c_abi::llmosafe_get_step_count(u32::MAX, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_step_count(usize::MAX, &raw mut out);
         assert_eq!(result, 1);
     }
 
@@ -1804,7 +1804,7 @@ mod tests {
         let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
         assert!(handle != usize::MAX);
         let mut out = 0u32;
-        let result = crate::c_abi::llmosafe_get_step_count(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_step_count(handle, &raw mut out);
         assert_eq!(result, 3);
         crate::c_abi::llmosafe_destroy(handle);
     }
@@ -1818,7 +1818,7 @@ mod tests {
         let text = b"counting reasoning steps after pipeline processed this text";
         let _ = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());
         let mut out = u32::MAX;
-        let result = crate::c_abi::llmosafe_get_step_count(handle as u32, &raw mut out);
+        let result = crate::c_abi::llmosafe_get_step_count(handle, &raw mut out);
         assert_eq!(result, 0);
         assert_ne!(out, u32::MAX);
         crate::c_abi::llmosafe_destroy(handle);
@@ -1879,7 +1879,7 @@ mod tests {
             30u8,
         );
         assert!((-8..=2).contains(&code));
-        let bp = crate::c_abi::llmosafe_get_body_pressure(handle as u32);
+        let bp = crate::c_abi::llmosafe_get_body_pressure(handle);
         assert!(bp <= 100);
         crate::c_abi::llmosafe_destroy(handle);
     }
@@ -1936,7 +1936,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn test_c_abi_configure_invalid_handle() {
-        let result = crate::c_abi::llmosafe_configure(u32::MAX, 2, 1, 64);
+        let result = crate::c_abi::llmosafe_configure(usize::MAX, 2, 1, 64);
         assert_eq!(result, 1);
     }
 
@@ -1946,7 +1946,7 @@ mod tests {
         let objective = b"configure test str";
         let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
         assert!(handle != usize::MAX);
-        let result = crate::c_abi::llmosafe_configure(handle as u32, 2, 1, 64);
+        let result = crate::c_abi::llmosafe_configure(handle, 2, 1, 64);
         assert_eq!(result, 0);
         let text = b"testing pipeline operation after runtime configuration change";
         let code = crate::c_abi::llmosafe_sift_and_process(handle, text.as_ptr(), text.len());

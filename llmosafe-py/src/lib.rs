@@ -543,7 +543,7 @@ fn process_synapse(synapse_bits: u128) -> i32 {
 ///     >>> get_pid_state(0)
 ///     {'acute_entropy': 0.0, 'chronic_entropy': 0.0, 'prev_pressure_norm': 0.0}
 #[pyfunction]
-fn get_pid_state(instance_id: u32) -> PyResult<PyObject> {
+fn get_pid_state(instance_id: usize) -> PyResult<PyObject> {
     let mut acute: f64 = 0.0;
     let mut chronic: f64 = 0.0;
     let mut pressure: f64 = 0.0;
@@ -583,7 +583,7 @@ fn get_pid_state(instance_id: u32) -> PyResult<PyObject> {
 /// Returns:
 ///     Classifier logit score as float, or -1.0 on error.
 #[pyfunction]
-fn get_classifier_score(instance_id: u32) -> f64 {
+fn get_classifier_score(instance_id: usize) -> f64 {
     ::llmosafe::c_abi::llmosafe_get_classifier_score(instance_id)
 }
 
@@ -608,7 +608,7 @@ fn get_classifier_score(instance_id: u32) -> f64 {
 ///     LLMOSafeError: If `instance_id` is invalid or no kernel output
 ///     is available (pipeline halted before kernel stage).
 #[pyfunction]
-fn get_kernel_output(instance_id: u32) -> PyResult<(f32, u8, u32)> {
+fn get_kernel_output(instance_id: usize) -> PyResult<(f32, u8, u32)> {
     let mut error: f32 = 0.0;
     let mut is_stable: u8 = 0;
     let mut depth: u32 = 0;
@@ -640,7 +640,7 @@ fn get_kernel_output(instance_id: u32) -> PyResult<(f32, u8, u32)> {
 /// Returns:
 ///     Body pressure percentage [0, 100], or 4294967295 on error.
 #[pyfunction]
-fn get_body_pressure(instance_id: u32) -> u32 {
+fn get_body_pressure(instance_id: usize) -> u32 {
     ::llmosafe::c_abi::llmosafe_get_body_pressure(instance_id)
 }
 
@@ -660,8 +660,8 @@ fn get_body_pressure(instance_id: u32) -> u32 {
 /// Raises:
 ///     LLMOSafeError: If `instance_id` is invalid or no result is available.
 #[pyfunction]
-fn get_decision(instance_id: u32) -> PyResult<PyObject> {
-    let code = llmosafe_get_decision(instance_id as usize);
+fn get_decision(instance_id: usize) -> PyResult<PyObject> {
+    let code = llmosafe_get_decision(instance_id);
     if code == -9 {
         return Err(LLMOSafeError::new_err(format!(
             "instance {} not found or no result available",
@@ -688,7 +688,7 @@ fn get_decision(instance_id: u32) -> PyResult<PyObject> {
 ///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
 ///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_entropy(instance_id: u32) -> PyResult<u32> {
+fn get_entropy(instance_id: usize) -> PyResult<u32> {
     let mut out: u16 = 0;
     let rc = llmosafe_get_entropy(instance_id, &mut out);
     if rc != 0 {
@@ -714,7 +714,7 @@ fn get_entropy(instance_id: u32) -> PyResult<u32> {
 ///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
 ///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_surprise(instance_id: u32) -> PyResult<u32> {
+fn get_surprise(instance_id: usize) -> PyResult<u32> {
     let mut out: u16 = 0;
     let rc = llmosafe_get_surprise(instance_id, &mut out);
     if rc != 0 {
@@ -742,7 +742,7 @@ fn get_surprise(instance_id: u32) -> PyResult<u32> {
 ///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
 ///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_detection_flags(instance_id: u32) -> PyResult<u32> {
+fn get_detection_flags(instance_id: usize) -> PyResult<u32> {
     let mut out: u8 = 0;
     let rc = llmosafe_get_detection_flags(instance_id, &mut out);
     if rc != 0 {
@@ -769,7 +769,7 @@ fn get_detection_flags(instance_id: u32) -> PyResult<u32> {
 ///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
 ///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_oov_ratio(instance_id: u32) -> PyResult<u32> {
+fn get_oov_ratio(instance_id: usize) -> PyResult<u32> {
     let mut out: u8 = 0;
     let rc = llmosafe_get_oov_ratio(instance_id, &mut out);
     if rc != 0 {
@@ -796,7 +796,7 @@ fn get_oov_ratio(instance_id: u32) -> PyResult<u32> {
 ///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
 ///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_stages_executed(instance_id: u32) -> PyResult<u32> {
+fn get_stages_executed(instance_id: usize) -> PyResult<u32> {
     let mut out: u8 = 0;
     let rc = llmosafe_get_stages_executed(instance_id, &mut out);
     if rc != 0 {
@@ -822,7 +822,7 @@ fn get_stages_executed(instance_id: u32) -> PyResult<u32> {
 ///     LLMOSafeError: If `instance_id` is invalid, slot uninitialized,
 ///     stale handle, or no result available (sift_and_process not called).
 #[pyfunction]
-fn get_step_count(instance_id: u32) -> PyResult<u32> {
+fn get_step_count(instance_id: usize) -> PyResult<u32> {
     let mut out: u32 = 0;
     let rc = llmosafe_get_step_count(instance_id, &mut out);
     if rc != 0 {
@@ -882,7 +882,7 @@ fn combined_risk_bits(synapse_bits: u128) -> u16 {
 ///     >>> print(result["decision"], result["entropy"])
 #[pyclass]
 struct CognitivePipeline {
-    instance_id: u32,
+    instance_id: usize,
 }
 
 #[pymethods]
@@ -905,7 +905,7 @@ impl CognitivePipeline {
                 "Failed to create pipeline — arena full (max 16 instances)"
             ));
         }
-        let instance_id = handle as u32;
+        let instance_id = handle;
         let dal = dal_level.unwrap_or(4);
         let gate = if use_detection_gate.unwrap_or(false) { 1u32 } else { 0u32 };
         let mem = memory_depth.unwrap_or(10) as u32;
@@ -915,7 +915,7 @@ impl CognitivePipeline {
 
     /// Get the pipeline instance ID (arena slot handle 0–15).
     #[getter]
-    fn instance_id(&self) -> u32 {
+    fn instance_id(&self) -> usize {
         self.instance_id
     }
 
@@ -926,7 +926,7 @@ impl CognitivePipeline {
     /// oov_ratio, stages_executed, step_count, body_pressure,
     /// kernel_error, kernel_is_stable, kernel_depth.
     fn process(&mut self, text: &str) -> PyResult<PyObject> {
-        let code = llmosafe_sift_and_process(self.instance_id as usize, text.as_ptr(), text.len());
+        let code = llmosafe_sift_and_process(self.instance_id, text.as_ptr(), text.len());
         if code == -9 {
             return Err(LLMOSafeError::new_err("Invalid pipeline instance"));
         }
@@ -941,7 +941,7 @@ impl CognitivePipeline {
     ///     pressure: RSS memory pressure [0, 100].
     fn process_with_pressure(&mut self, text: &str, entropy: u16, pressure: u8) -> PyResult<PyObject> {
         let code = llmosafe_process_with_pressure(
-            self.instance_id as usize,
+            self.instance_id,
             text.as_ptr(),
             text.len(),
             entropy,
@@ -981,7 +981,7 @@ impl CognitivePipeline {
         match guard.check_with_deadline(deadline) {
             Ok(_) => {
                 let code = llmosafe_sift_and_process(
-                    self.instance_id as usize,
+                    self.instance_id,
                     text.as_ptr(),
                     text.len(),
                 );
@@ -994,7 +994,7 @@ impl CognitivePipeline {
                 let entropy = guard.raw_entropy();
                 let pressure = guard.pressure();
                 let code = llmosafe_process_with_pressure(
-                    self.instance_id as usize,
+                    self.instance_id,
                     text.as_ptr(),
                     text.len(),
                     entropy,
@@ -1014,7 +1014,7 @@ impl CognitivePipeline {
 
     /// Reset PID state and working memory (full reset).
     fn reset(&mut self) -> PyResult<()> {
-        let rc = llmosafe_reset_full(self.instance_id as usize);
+        let rc = llmosafe_reset_full(self.instance_id);
         if rc != 0 {
             return Err(LLMOSafeError::new_err("Invalid pipeline instance"));
         }
@@ -1023,7 +1023,7 @@ impl CognitivePipeline {
 
     /// Reset only the detectors (not PID/memory).
     fn reset_detectors(&mut self) -> PyResult<()> {
-        let rc = llmosafe_reset_detectors(self.instance_id as usize);
+        let rc = llmosafe_reset_detectors(self.instance_id);
         if rc != 0 {
             return Err(LLMOSafeError::new_err("Invalid pipeline instance"));
         }
@@ -1149,7 +1149,7 @@ impl CognitivePipeline {
 
 impl Drop for CognitivePipeline {
     fn drop(&mut self) {
-        llmosafe_destroy(self.instance_id as usize);
+        llmosafe_destroy(self.instance_id);
     }
 }
 
