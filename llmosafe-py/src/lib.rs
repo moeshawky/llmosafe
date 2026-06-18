@@ -574,14 +574,15 @@ fn get_pid_state(instance_id: usize) -> PyResult<PyObject> {
 /// Negative values indicate a safe-text classification; positive values
 /// indicate manipulation signal.  The score is unbounded.
 ///
-/// Returns -1.0 if the instance_id is invalid, the slot is uninitialized,
-/// or no result is available yet.
+/// Returns NaN if the instance_id is invalid, the slot is uninitialized,
+/// or no result is available yet.  (Previously returned -1.0 which collides
+/// with a legitimate classifier score.)
 ///
 /// Args:
 ///     instance_id: Pipeline handle (returned by llmosafe_create).
 ///
 /// Returns:
-///     Classifier logit score as float, or -1.0 on error.
+///     Classifier logit score as float, or NaN on error.
 #[pyfunction]
 fn get_classifier_score(instance_id: usize) -> f64 {
     ::llmosafe::c_abi::llmosafe_get_classifier_score(instance_id)
@@ -1112,7 +1113,17 @@ impl CognitivePipeline {
         let stages_executed = get_stages_executed(self.instance_id)?;
         let step_count = get_step_count(self.instance_id)?;
         let classifier_score = llmosafe_get_classifier_score(self.instance_id);
+        if classifier_score.is_nan() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "invalid instance_id or no classifier score available (got NaN sentinel)",
+            ));
+        }
         let body_pressure = llmosafe_get_body_pressure(self.instance_id);
+        if body_pressure == u32::MAX {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "invalid instance_id or no body pressure available (got u32::MAX sentinel)",
+            ));
+        }
 
         let (kernel_error, kernel_is_stable, kernel_depth) = {
             let mut error: f32 = 0.0;

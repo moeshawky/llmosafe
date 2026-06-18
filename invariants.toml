@@ -104,7 +104,7 @@ check = "if pressure >= escalate_pressure && entropy < halt_entropy: decision ==
 name = "typestate_pipeline_order"
 chain = ["sift", "memory", "kernel"]
 description = "SiftedSynapse → WorkingMemory::update → ValidatedSynapse → ReasoningLoop::next_step must be the only callable path"
-check = "Cannot construct ValidatedSynapse without going through WorkingMemory (pub(crate) enforced at compile time)"
+check = "Cannot construct ValidatedSynapse without going through WorkingMemory::update(). ValidatedProof uses pub(crate) visibility (crate-wide, not module-wide), so proof re-minting is permitted within the crate for pipeline re-entry. The data must still originate from WorkingMemory::update() — only the compile-time proof token may be regenerated."
 
 # ── Cross-Chain: Decision Consistency ────────────────────────────
 

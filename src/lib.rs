@@ -435,8 +435,7 @@ pub mod c_abi {
             return 1;
         }
         let arena = lock_arena();
-        let handle = instance_id;
-        let (index, generation) = unpack_handle(handle);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return 1;
         }
@@ -572,8 +571,7 @@ pub mod c_abi {
             return 1;
         }
         let arena = lock_arena();
-        let handle = instance_id;
-        let (index, generation) = unpack_handle(handle);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return 1;
         }
@@ -968,8 +966,7 @@ pub mod c_abi {
         let mut arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let handle = instance_id;
-        let (index, generation) = unpack_handle(handle);
+        let (index, generation) = unpack_handle(instance_id);
         if index >= ARENA_SIZE {
             return 1;
         }

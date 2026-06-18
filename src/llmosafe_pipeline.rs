@@ -817,6 +817,14 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
 
         // ── Stage 3: KERNEL (Tier 1) ──
         stages |= STAGE_KERNEL;
+        // NOTE: The ValidatedProof returned by WorkingMemory::update() is discarded
+        // here (bound to _p in the match above) and a fresh ValidatedProof(()) is
+        // minted below. This is intentional: the data DID pass through
+        // WorkingMemory::update() — only the compile-time proof token is
+        // regenerated to enter the ReasoningLoop. ValidatedProof uses
+        // pub(crate) visibility, so re-minting is permitted anywhere within
+        // the crate. See invariants.toml typestate_pipeline_order for the
+        // invariant this satisfies.
         let kernel_synapse = validated.into_inner();
         let kernel_entropy = kernel_synapse.raw_entropy();
         let kernel_validated = ValidatedSynapse::new(kernel_synapse);
