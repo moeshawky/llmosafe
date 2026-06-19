@@ -729,9 +729,15 @@ fn get_surprise(instance_id: usize) -> PyResult<u32> {
 
 /// Read the detection flags from the last pipeline invocation.
 ///
-/// Returns a bitmask of 5 detection flags (stuck, drifting, low-confidence,
-/// decaying, anomaly/adversarial). Bits 0-4 correspond to individual
-/// detector outputs.
+/// Returns a bitmask of 6 detection flags packed into the lower 6 bits
+/// (stuck, drifting, low-confidence, decaying, anomaly, adversarial).
+/// Bits 0-5 correspond to individual detector outputs:
+///   bit 0 = FLAG_STUCK (0x01)
+///   bit 1 = FLAG_DRIFTING (0x02)
+///   bit 2 = FLAG_LOW_CONFIDENCE (0x04)
+///   bit 3 = FLAG_DECAYING (0x08)
+///   bit 4 = FLAG_ANOMALY (0x10)
+///   bit 5 = FLAG_ADVERSARIAL (0x20)
 ///
 /// Args:
 ///     instance_id: Pipeline handle (0–15).

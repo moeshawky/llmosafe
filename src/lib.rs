@@ -491,9 +491,10 @@ pub mod c_abi {
 
     #[no_mangle]
     // C-ABI entry point — raw pointer safety is the caller's responsibility.
-    // Error sentinel: u16::MAX (65535). 0 is valid entropy for perfectly safe text
-    // and cannot serve as an error indicator. u16::MAX is maximum entropy and
-    // unambiguously distinguishable from a valid response.
+    // Error sentinel: u16::MAX (65535).
+    // WARNING: u16::MAX (65535) is within the valid entropy range [0, 65535].
+    // Callers CANNOT distinguish 'maximum entropy' from 'input error' from the
+    // return value alone. Use input validation BEFORE calling this function.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub extern "C" fn llmosafe_calculate_halo(text_ptr: *const u8, text_len: usize) -> u16 {
         let max_text_len = 10 * 1024 * 1024;

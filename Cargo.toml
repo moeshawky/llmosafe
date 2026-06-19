@@ -40,6 +40,7 @@ dal = []
 proptest = "1.5.0"
 criterion = "0.5"
 trybuild = "1"
+serde_json = "1"
 
 [[bench]]
 name = "llmosafe_benchmarks"

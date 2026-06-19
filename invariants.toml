@@ -151,8 +151,8 @@ check = "pipeline.adversarial.is_some() && detection_flags includes FLAG_ADVERSA
 [[invariant]]
 name = "c_abi_handle_bounds"
 chain = ["c_abi"]
-description = "llmosafe_create returns handle in [0, 15] on success, usize::MAX on failure. llmosafe_sift_and_process and llmosafe_get_decision return -9 for handles >= 16 or uninitialized slots."
-check = "handle < 16 or handle == usize::MAX"
+description = "llmosafe_create returns handle in [0, 15] on success, usize::MAX on failure. unpack_handle extracts the arena index via `handle & ARENA_INDEX_MASK (0xF)` and checks `index >= ARENA_SIZE (16)` for valid index extraction. llmosafe_sift_and_process, llmosafe_get_decision, and similar accessors return -9 on out-of-bounds index, uninitialized slot, or generation mismatch."
+check = "(handle & ARENA_INDEX_MASK) < ARENA_SIZE or handle == usize::MAX"
 
 [[invariant]]
 name = "c_abi_decision_code_semantics"

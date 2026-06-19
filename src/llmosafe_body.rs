@@ -84,21 +84,54 @@ impl EnvironmentalVitals {
     ///
     /// Returns `Some(iowait_ticks)` on success, or `None` if `/proc/stat` is
     /// unreadable, the `cpu` line is missing, or the iowait field is unparseable.
-    /// The internal `.ok()` at the parse site discards error details — callers
-    /// receive `None` with no distinction between "field not found" and
-    /// "field contained non-numeric data." Upstream callers handle `None`
-    /// via fail-closed defaults (`iowait = 0` in `EnvironmentalVitals::capture()`).
+    /// Emits `tracing::warn!` (target: `llmosafe::body`) on each failure path
+    /// so operators can distinguish transient I/O errors from parsing failures.
+    /// Upstream callers handle `None` via fail-closed defaults
+    /// (`iowait = 0` in `EnvironmentalVitals::capture()`).
     #[cfg(target_os = "linux")]
     fn read_iowait() -> Option<u64> {
-        // Optimization: fs::read_to_string avoids BufReader allocation for single-line pseudo-files.
-        if let Ok(content) = fs::read_to_string("/proc/stat") {
-            if let Some(line) = content.lines().next() {
-                if let Some(iowait_str) = line.split_whitespace().nth(5) {
-                    return iowait_str.parse().ok();
-                }
+        let content = match fs::read_to_string("/proc/stat") {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "Cannot read /proc/stat for iowait: {}",
+                    e
+                );
+                return None;
+            }
+        };
+        let line = match content.lines().next() {
+            Some(l) => l,
+            None => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "iowait field missing or unparseable in /proc/stat"
+                );
+                return None;
+            }
+        };
+        let iowait_str = match line.split_whitespace().nth(5) {
+            Some(s) => s,
+            None => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "iowait field missing or unparseable in /proc/stat"
+                );
+                return None;
+            }
+        };
+        match iowait_str.parse::<u64>() {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "iowait field missing or unparseable in /proc/stat: {}",
+                    e
+                );
+                None
             }
         }
-        None
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -110,21 +143,54 @@ impl EnvironmentalVitals {
     ///
     /// Returns `Some(load_avg)` on success, or `None` if `/proc/loadavg` is
     /// unreadable, the line is empty, or the first field is unparseable.
-    /// The internal `.ok()` at the parse site discards error details — callers
-    /// receive `None` with no distinction between "file not found" and
-    /// "field contained non-numeric data." Upstream callers handle `None`
-    /// via fail-closed defaults (`load_avg = 0.0` in `EnvironmentalVitals::capture()`).
+    /// Emits `tracing::warn!` (target: `llmosafe::body`) on each failure path
+    /// so operators can distinguish transient I/O errors from parsing failures.
+    /// Upstream callers handle `None` via fail-closed defaults
+    /// (`load_avg = 0.0` in `EnvironmentalVitals::capture()`).
     #[cfg(target_os = "linux")]
     fn read_loadavg() -> Option<f64> {
-        // Optimization: fs::read_to_string avoids BufReader allocation for single-line pseudo-files.
-        if let Ok(content) = fs::read_to_string("/proc/loadavg") {
-            if let Some(line) = content.lines().next() {
-                if let Some(first_part) = line.split_whitespace().next() {
-                    return first_part.parse().ok();
-                }
+        let content = match fs::read_to_string("/proc/loadavg") {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "Cannot read /proc/loadavg: {}",
+                    e
+                );
+                return None;
+            }
+        };
+        let line = match content.lines().next() {
+            Some(l) => l,
+            None => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "loadavg field missing or unparseable in /proc/loadavg"
+                );
+                return None;
+            }
+        };
+        let first_part = match line.split_whitespace().next() {
+            Some(s) => s,
+            None => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "loadavg field missing or unparseable in /proc/loadavg"
+                );
+                return None;
+            }
+        };
+        match first_part.parse::<f64>() {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "loadavg field missing or unparseable in /proc/loadavg: {}",
+                    e
+                );
+                None
             }
         }
-        None
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -286,7 +352,14 @@ impl ResourceGuard {
         if self.memory_ceiling_bytes == 0 {
             return 100;
         }
-        let current_rss = Self::try_current_rss_bytes().unwrap_or(self.memory_ceiling_bytes);
+        let current_rss = Self::try_current_rss_bytes().unwrap_or_else(|| {
+            tracing::warn!(
+                target: "llmosafe::body",
+                "RSS measurement unavailable in pressure(); substituting memory_ceiling_bytes ({}) as fail-closed value",
+                self.memory_ceiling_bytes
+            );
+            self.memory_ceiling_bytes
+        });
         let ratio = current_rss as f64 / self.memory_ceiling_bytes as f64;
         (ratio * 100.0).min(100.0) as u8
     }
@@ -805,34 +878,200 @@ impl ResourceGuard {
 
     /// Parses the first "cpu" line from /proc/stat and returns (active, total).
     /// active = user + nice + system, total = active + idle + iowait.
+    ///
+    /// Emits `tracing::warn!` (target: `llmosafe::body`) on each failure path
+    /// so operators can distinguish `/proc` unavailability from parse corruption.
     #[cfg(target_os = "linux")]
     fn parse_proc_stat() -> Option<(u64, u64)> {
-        // Optimization: fs::read_to_string avoids BufReader allocation for single-line pseudo-files.
-        let content = fs::read_to_string("/proc/stat").ok()?;
-        let line = content.lines().next()?;
+        let content = match fs::read_to_string("/proc/stat") {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "Cannot read /proc/stat in parse_proc_stat: {}",
+                    e
+                );
+                return None;
+            }
+        };
+        let line = match content.lines().next() {
+            Some(l) => l,
+            None => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "parse_proc_stat: no cpu line in /proc/stat"
+                );
+                return None;
+            }
+        };
         let mut parts = line.split_whitespace().skip(1);
-        let user: u64 = parts.next()?.parse().ok()?;
-        let nice: u64 = parts.next()?.parse().ok()?;
-        let system: u64 = parts.next()?.parse().ok()?;
-        let idle: u64 = parts.next()?.parse().ok()?;
-        let iowait: u64 = parts.next()?.parse().ok()?;
+
+        let user = match parts.next() {
+            Some(s) => match s.parse::<u64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "llmosafe::body", "parse_proc_stat: failed to parse user: {}", e);
+                    return None;
+                }
+            },
+            None => {
+                tracing::warn!(target: "llmosafe::body", "parse_proc_stat: missing user field in /proc/stat cpu line");
+                return None;
+            }
+        };
+        let nice = match parts.next() {
+            Some(s) => match s.parse::<u64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "llmosafe::body", "parse_proc_stat: failed to parse nice: {}", e);
+                    return None;
+                }
+            },
+            None => {
+                tracing::warn!(target: "llmosafe::body", "parse_proc_stat: missing nice field in /proc/stat cpu line");
+                return None;
+            }
+        };
+        let system = match parts.next() {
+            Some(s) => match s.parse::<u64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "llmosafe::body", "parse_proc_stat: failed to parse system: {}", e);
+                    return None;
+                }
+            },
+            None => {
+                tracing::warn!(target: "llmosafe::body", "parse_proc_stat: missing system field in /proc/stat cpu line");
+                return None;
+            }
+        };
+        let idle = match parts.next() {
+            Some(s) => match s.parse::<u64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "llmosafe::body", "parse_proc_stat: failed to parse idle: {}", e);
+                    return None;
+                }
+            },
+            None => {
+                tracing::warn!(target: "llmosafe::body", "parse_proc_stat: missing idle field in /proc/stat cpu line");
+                return None;
+            }
+        };
+        let iowait = match parts.next() {
+            Some(s) => match s.parse::<u64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "llmosafe::body", "parse_proc_stat: failed to parse iowait: {}", e);
+                    return None;
+                }
+            },
+            None => {
+                tracing::warn!(target: "llmosafe::body", "parse_proc_stat: missing iowait field in /proc/stat cpu line");
+                return None;
+            }
+        };
+
         let active = user + nice + system;
         let total = active + idle + iowait;
         Some((active, total))
     }
 
     /// Parses the iowait field from /proc/stat and returns (iowait, total).
+    ///
+    /// Emits `tracing::warn!` (target: `llmosafe::body`) on each failure path
+    /// so operators can distinguish `/proc` unavailability from parse corruption.
     #[cfg(target_os = "linux")]
     fn parse_proc_stat_iowait() -> Option<(u64, u64)> {
-        // Optimization: fs::read_to_string avoids BufReader allocation for single-line pseudo-files.
-        let content = fs::read_to_string("/proc/stat").ok()?;
-        let line = content.lines().next()?;
+        let content = match fs::read_to_string("/proc/stat") {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "Cannot read /proc/stat in parse_proc_stat_iowait: {}",
+                    e
+                );
+                return None;
+            }
+        };
+        let line = match content.lines().next() {
+            Some(l) => l,
+            None => {
+                tracing::warn!(
+                    target: "llmosafe::body",
+                    "parse_proc_stat_iowait: no cpu line in /proc/stat"
+                );
+                return None;
+            }
+        };
         let mut parts = line.split_whitespace().skip(1);
-        let user: u64 = parts.next()?.parse().ok()?;
-        let nice: u64 = parts.next()?.parse().ok()?;
-        let system: u64 = parts.next()?.parse().ok()?;
-        let idle: u64 = parts.next()?.parse().ok()?;
-        let iowait: u64 = parts.next()?.parse().ok()?;
+
+        let user = match parts.next() {
+            Some(s) => match s.parse::<u64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "llmosafe::body", "parse_proc_stat_iowait: failed to parse user: {}", e);
+                    return None;
+                }
+            },
+            None => {
+                tracing::warn!(target: "llmosafe::body", "parse_proc_stat_iowait: missing user field in /proc/stat cpu line");
+                return None;
+            }
+        };
+        let nice = match parts.next() {
+            Some(s) => match s.parse::<u64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "llmosafe::body", "parse_proc_stat_iowait: failed to parse nice: {}", e);
+                    return None;
+                }
+            },
+            None => {
+                tracing::warn!(target: "llmosafe::body", "parse_proc_stat_iowait: missing nice field in /proc/stat cpu line");
+                return None;
+            }
+        };
+        let system = match parts.next() {
+            Some(s) => match s.parse::<u64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "llmosafe::body", "parse_proc_stat_iowait: failed to parse system: {}", e);
+                    return None;
+                }
+            },
+            None => {
+                tracing::warn!(target: "llmosafe::body", "parse_proc_stat_iowait: missing system field in /proc/stat cpu line");
+                return None;
+            }
+        };
+        let idle = match parts.next() {
+            Some(s) => match s.parse::<u64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "llmosafe::body", "parse_proc_stat_iowait: failed to parse idle: {}", e);
+                    return None;
+                }
+            },
+            None => {
+                tracing::warn!(target: "llmosafe::body", "parse_proc_stat_iowait: missing idle field in /proc/stat cpu line");
+                return None;
+            }
+        };
+        let iowait = match parts.next() {
+            Some(s) => match s.parse::<u64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "llmosafe::body", "parse_proc_stat_iowait: failed to parse iowait: {}", e);
+                    return None;
+                }
+            },
+            None => {
+                tracing::warn!(target: "llmosafe::body", "parse_proc_stat_iowait: missing iowait field in /proc/stat cpu line");
+                return None;
+            }
+        };
+
         let active = user + nice + system;
         let total = active + idle + iowait;
         Some((iowait, total))

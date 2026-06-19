@@ -55,9 +55,6 @@ use crate::llmosafe_detection::{
     AdversarialDetector, ConfidenceTracker, CusumDetector, DriftDetector, RepetitionDetector,
 };
 use crate::llmosafe_integration::EscalationPolicy;
-#[cfg(feature = "std")]
-use crate::llmosafe_integration::SafetyDecision;
-#[cfg(not(feature = "std"))]
 use crate::llmosafe_integration::SafetyDecision;
 use crate::llmosafe_kernel::{
     DynamicStabilityMonitor, KernelError, KernelOutput, ReasoningLoop, StabilityResult, Synapse,
