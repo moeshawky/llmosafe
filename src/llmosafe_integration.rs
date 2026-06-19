@@ -345,9 +345,9 @@ impl EscalationPolicy {
 
     /// Evaluate entropy, surprise, and bias flags to produce a DAL-gated decision.
     ///
-    /// Delegates to [`canonical_decision`] for threshold checks with universal
+    /// Delegates to `canonical_decision` for threshold checks with universal
     /// [`DesignAssuranceLevel`] gating. All return paths pass through
-    /// [`apply_dal_to_decision`] so DAL is enforced uniformly.
+    /// `apply_dal_to_decision` so DAL is enforced uniformly.
     ///
     /// # Inputs
     /// * `entropy`: `u16` — raw entropy in `[0, 65535]`.
@@ -368,10 +368,10 @@ impl EscalationPolicy {
     /// Evaluate entropy/surprise/bias with a resource pressure signal.
     ///
     /// Halt-entropy is checked first (inclusive `>=`, consistent with
-    /// [`canonical_decision`]). If not at the Halt threshold, resource
+    /// `canonical_decision`). If not at the Halt threshold, resource
     /// pressure that meets or exceeds `escalate_pressure` triggers an
     /// `Escalate(ResourcePressure)` decision. When neither Halt nor
-    /// pressure escalation fires, delegates to [`canonical_decision`]
+    /// pressure escalation fires, delegates to `canonical_decision`
     /// for the standard threshold ladder with universal DAL gating.
     ///
     /// # Inputs
@@ -430,7 +430,7 @@ impl EscalationPolicy {
     /// Every public decision method routes through this single implementation.
     /// Thresholds are evaluated in severity order (Halt → Escalate → Warn →
     /// Proceed) using inclusive `>=` comparison at every boundary.  All return
-    /// paths pass through [`apply_dal_to_decision`] so the configured
+    /// paths pass through `apply_dal_to_decision` so the configured
     /// [`DesignAssuranceLevel`] gates every decision uniformly — no call path
     /// can bypass DAL.
     ///
