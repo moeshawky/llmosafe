@@ -217,17 +217,19 @@ impl DriftDetector {
             return;
         }
 
-        let mut obs_words = ArrayVec::<u32, MAX_CONTEXT_LEN>::new();
-        for word in observation.split_whitespace().take(MAX_CONTEXT_LEN) {
-            obs_words.push(RepetitionDetector::hash_str(word));
-        }
-
         let mut matches = 0usize;
-        for &obs_hash in obs_words.iter() {
+
+        // Optimization: Perform operations such as hashing and matching inline
+        // within the same iterator pass over `split_whitespace().take(N)`.
+        // This avoids the overhead of intermediate collections like `ArrayVec`
+        // and secondary loops.
+        for word in observation.split_whitespace().take(MAX_CONTEXT_LEN) {
+            let obs_hash = RepetitionDetector::hash_str(word);
             if self.goal_hashes.iter().any(|&g| g == obs_hash) {
                 matches += 1;
             }
         }
+
         let overlap = matches as f32 / self.goal_hashes.len() as f32;
         self.drift_score = 1.0 - overlap;
     }
