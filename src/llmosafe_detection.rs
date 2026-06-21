@@ -217,13 +217,11 @@ impl DriftDetector {
             return;
         }
 
-        let mut obs_words = ArrayVec::<u32, MAX_CONTEXT_LEN>::new();
-        for word in observation.split_whitespace().take(MAX_CONTEXT_LEN) {
-            obs_words.push(RepetitionDetector::hash_str(word));
-        }
-
         let mut matches = 0usize;
-        for &obs_hash in obs_words.iter() {
+        // Optimization: Inline hashing and matching during string splitting pass.
+        // This avoids allocating an intermediate ArrayVec and eliminates a secondary loop overhead.
+        for word in observation.split_whitespace().take(MAX_CONTEXT_LEN) {
+            let obs_hash = RepetitionDetector::hash_str(word);
             if self.goal_hashes.iter().any(|&g| g == obs_hash) {
                 matches += 1;
             }
