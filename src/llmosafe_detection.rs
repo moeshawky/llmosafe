@@ -310,27 +310,16 @@ impl ConfidenceTracker {
     /// Panics if `self.scores.len()` is unexpectedly `0` after the length check
     /// above — this cannot happen in practice.
     pub fn trend(&self) -> f32 {
-        if self.scores.len() < 2 {
+        let n = self.scores.len();
+        if n < 2 {
             return 0.0;
         }
-        let mut sum = 0.0;
-        let mut count = 0;
-        let mut it = self.scores.iter();
-        let first = it.next();
-        let mut prev = match first {
-            Some(&v) => v,
-            None => return 0.0,
-        };
-        for &curr in it {
-            sum += curr - prev;
-            prev = curr;
-            count += 1;
-        }
-        if count > 0 {
-            sum / count as f32
-        } else {
-            0.0
-        }
+        // ⚡ Bolt: optimized O(N) adjacent differences to O(1) start/end difference, since the sum telescopes to last - first.
+        let first = self.scores.iter().next().copied().unwrap_or(0.0);
+        let last = self.scores.iter().last().copied().unwrap_or(0.0);
+        let diff = last - first;
+        let count = n - 1;
+        diff / count as f32
     }
 
     /// Get the most recent confidence score.
