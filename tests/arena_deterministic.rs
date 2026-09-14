@@ -32,12 +32,55 @@
 
 #[cfg(feature = "std")]
 mod arena_tests {
+    use std::cell::RefCell;
     use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
 
     use proptest::prelude::*;
 
     use llmosafe::c_abi;
+
+    // ── File-local arena serialization ──
+    static ARENA_LOCK: Mutex<()> = Mutex::new(());
+
+    // Thread-local handle tracker for this test file only.
+    // Ensures drain-on-drop only destroys handles THIS file created.
+    thread_local! {
+        static TRACKED_HANDLES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Guard that serializes this file's arena tests and drains
+    /// the arena on creation (known-empty start) and on drop
+    /// (cleanup of tracked handles + any remaining slots).
+    struct ArenaGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ArenaGuard {
+        fn new() -> Self {
+            let lock = ARENA_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            c_abi::llmosafe_drain_arena();
+            Self { _lock: lock }
+        }
+    }
+
+    impl Drop for ArenaGuard {
+        fn drop(&mut self) {
+            // Destroy every handle this file created during the test,
+            // even if the test panicked (Drop runs during stack unwind).
+            TRACKED_HANDLES.with(|handles| {
+                let mut h = handles.borrow_mut();
+                for &handle in h.iter() {
+                    c_abi::llmosafe_destroy(handle);
+                }
+                h.clear();
+            });
+            // Drain any remaining slots (belt-and-suspenders).
+            c_abi::llmosafe_drain_arena();
+        }
+    }
 
     // ── Arena constants (mirrored from src/lib.rs c_abi module) ──
     const ARENA_SIZE: usize = 16;
@@ -56,7 +99,7 @@ mod arena_tests {
         (index, generation)
     }
 
-    // ── Reference model ──────────────────────────────────
+    // ── Reference model ──────────────────────────────
     struct ArenaModel {
         slots: [Option<u64>; ARENA_SIZE],
         next_generation: u64,
@@ -105,12 +148,17 @@ mod arena_tests {
         }
     }
 
-    // ── Helpers ──────────────────────────────────────────
+    // ── Helpers ──────────────────────────────────────
+    /// Create a pipeline and register the handle for guaranteed cleanup.
     fn create_pipeline() -> usize {
-        c_abi::llmosafe_create(
+        let h = c_abi::llmosafe_create(
             b"deterministic test objective".as_ptr(),
             b"deterministic test objective".len(),
-        )
+        );
+        TRACKED_HANDLES.with(|v| {
+            v.borrow_mut().push(h);
+        });
+        h
     }
 
     fn process_text(handle: usize) -> i32 {
@@ -121,12 +169,22 @@ mod arena_tests {
         )
     }
 
+    // Create a tracked handle for proptest use.
+    fn proptest_create() -> usize {
+        let h = c_abi::llmosafe_create(b"proptest objective".as_ptr(), b"proptest objective".len());
+        TRACKED_HANDLES.with(|v| {
+            v.borrow_mut().push(h);
+        });
+        h
+    }
+
     // ══════════════════════════════════════════════════════
     // PROPERTY 1: Fill to capacity (16) → 17th create fails
     // ══════════════════════════════════════════════════════
 
     #[test]
     fn prop1_fill_to_capacity_17th_fails() {
+        let _guard = ArenaGuard::new();
         let mut handles: Vec<usize> = Vec::new();
         for _ in 0..ARENA_SIZE {
             let h = create_pipeline();
@@ -147,6 +205,7 @@ mod arena_tests {
 
     #[test]
     fn prop1_capacity_recoverable_after_destroy() {
+        let _guard = ArenaGuard::new();
         let mut handles: Vec<usize> = Vec::new();
         for _ in 0..ARENA_SIZE {
             handles.push(create_pipeline());
@@ -170,6 +229,7 @@ mod arena_tests {
 
     #[test]
     fn prop2_destroy_frees_slot() {
+        let _guard = ArenaGuard::new();
         let h1 = create_pipeline();
         assert_ne!(h1, usize::MAX);
         c_abi::llmosafe_destroy(h1);
@@ -180,6 +240,7 @@ mod arena_tests {
 
     #[test]
     fn prop2_destroy_all_frees_capacity() {
+        let _guard = ArenaGuard::new();
         let mut handles: Vec<usize> = Vec::new();
         for _ in 0..ARENA_SIZE {
             handles.push(create_pipeline());
@@ -201,6 +262,7 @@ mod arena_tests {
 
     #[test]
     fn prop3_stale_handle_rejected_after_reuse() {
+        let _guard = ArenaGuard::new();
         let h1 = create_pipeline();
         assert_ne!(h1, usize::MAX);
         let (_, gen1) = unpack_handle(h1);
@@ -224,6 +286,7 @@ mod arena_tests {
 
     #[test]
     fn prop3_stale_handle_all_ops_rejected() {
+        let _guard = ArenaGuard::new();
         let h1 = create_pipeline();
         assert_ne!(h1, usize::MAX);
         let _ = process_text(h1);
@@ -245,6 +308,7 @@ mod arena_tests {
 
     #[test]
     fn prop4_replacement_has_distinct_generation() {
+        let _guard = ArenaGuard::new();
         let h1 = create_pipeline();
         assert_ne!(h1, usize::MAX);
         let (_, gen1) = unpack_handle(h1);
@@ -262,6 +326,7 @@ mod arena_tests {
 
     #[test]
     fn prop4_multiple_cycles_generate_increasing_generations() {
+        let _guard = ArenaGuard::new();
         let mut generations: Vec<u64> = Vec::new();
         let mut last_gen: Option<u64> = None;
         for _ in 0..5 {
@@ -284,6 +349,7 @@ mod arena_tests {
 
     #[test]
     fn prop5_handle_isolation_a_does_not_mutate_b() {
+        let _guard = ArenaGuard::new();
         let h_a = create_pipeline();
         assert_ne!(h_a, usize::MAX);
         let h_b = create_pipeline();
@@ -299,6 +365,7 @@ mod arena_tests {
 
     #[test]
     fn prop5_handle_isolation_configure() {
+        let _guard = ArenaGuard::new();
         let h_a = create_pipeline();
         assert_ne!(h_a, usize::MAX);
         let h_b = create_pipeline();
@@ -316,6 +383,7 @@ mod arena_tests {
 
     #[test]
     fn prop5_handle_isolation_process_with_pressure() {
+        let _guard = ArenaGuard::new();
         let h_a = create_pipeline();
         assert_ne!(h_a, usize::MAX);
         let h_b = create_pipeline();
@@ -340,6 +408,7 @@ mod arena_tests {
 
     #[test]
     fn prop6_arena_lock_released_during_per_slot_lock() {
+        let _guard = ArenaGuard::new();
         let mut handles: Vec<usize> = Vec::new();
         for _ in 0..ARENA_SIZE {
             handles.push(create_pipeline());
@@ -391,6 +460,7 @@ mod arena_tests {
 
     #[test]
     fn prop6_reset_releases_arena_lock_before_per_slot_lock() {
+        let _guard = ArenaGuard::new();
         let h1 = create_pipeline();
         assert_ne!(h1, usize::MAX);
         let h2 = create_pipeline();
@@ -430,6 +500,7 @@ mod arena_tests {
 
     #[test]
     fn prop7_destroy_access_interleaving_preserves_ownership() {
+        let _guard = ArenaGuard::new();
         let h1 = create_pipeline();
         assert_ne!(h1, usize::MAX);
         let _ = process_text(h1);
@@ -446,6 +517,7 @@ mod arena_tests {
 
     #[test]
     fn prop7_concurrent_destroy_access_preserves_isolation() {
+        let _guard = ArenaGuard::new();
         let h_a = create_pipeline();
         assert_ne!(h_a, usize::MAX);
         let h_b = create_pipeline();
@@ -464,6 +536,7 @@ mod arena_tests {
 
     #[test]
     fn prop7_destroy_create_cycle_ownership_semantics() {
+        let _guard = ArenaGuard::new();
         let mut handles: Vec<usize> = Vec::new();
         for _ in 0..3 {
             let h = create_pipeline();
@@ -516,6 +589,7 @@ mod arena_tests {
 
         #[test]
         fn proptest_arena_sequence_matches_reference_model(ops in arena_op_sequence()) {
+            let _guard = ArenaGuard::new();
             let mut model = ArenaModel::new();
             let mut slot_generation: [Option<u64>; ARENA_SIZE] = [None; ARENA_SIZE];
             let mut created_handles: Vec<usize> = Vec::new();
@@ -523,7 +597,7 @@ mod arena_tests {
             for op in ops {
                 match op {
                     ArenaOp::Create => {
-                        let handle = c_abi::llmosafe_create(b"proptest objective".as_ptr(), b"proptest objective".len());
+                        let handle = proptest_create();
                         let model_result = model.create();
                         match (handle, model_result) {
                             (usize::MAX, None) => {}
@@ -593,11 +667,12 @@ mod arena_tests {
             create_count in 1usize..4usize,
             destroy_count in 1usize..4usize,
         ) {
+            let _guard = ArenaGuard::new();
             let create_count = create_count.min(ARENA_SIZE);
             let destroy_count = destroy_count.min(create_count);
             let mut handles: Vec<usize> = Vec::new();
             for _ in 0..create_count {
-                handles.push(c_abi::llmosafe_create(b"proptest".as_ptr(), 8));
+                handles.push(proptest_create());
             }
             let mut destroyed_generations: Vec<(usize, u64)> = Vec::new();
             for idx in 0..destroy_count {
@@ -607,7 +682,7 @@ mod arena_tests {
                 c_abi::llmosafe_destroy(h);
             }
             for _ in 0..destroy_count {
-                let h = c_abi::llmosafe_create(b"proptest".as_ptr(), 8);
+                let h = proptest_create();
                 assert_ne!(h, usize::MAX, "Create must succeed when arena has free slots");
                 let (h_idx, h_gen) = unpack_handle(h);
                 for &(idx, old_gen) in &destroyed_generations {
@@ -629,6 +704,7 @@ mod arena_tests {
 
     #[test]
     fn test_stale_handle_classifier_score_is_nan() {
+        let _guard = ArenaGuard::new();
         let h = create_pipeline();
         assert_ne!(h, usize::MAX);
         let _ = process_text(h);
@@ -639,6 +715,7 @@ mod arena_tests {
 
     #[test]
     fn test_destroyed_handle_get_decision_is_minus9() {
+        let _guard = ArenaGuard::new();
         let h = create_pipeline();
         assert_ne!(h, usize::MAX);
         let _ = process_text(h);
@@ -649,6 +726,7 @@ mod arena_tests {
 
     #[test]
     fn test_double_destroy_no_crash() {
+        let _guard = ArenaGuard::new();
         let h = create_pipeline();
         assert_ne!(h, usize::MAX);
         c_abi::llmosafe_destroy(h);
@@ -658,12 +736,14 @@ mod arena_tests {
 
     #[test]
     fn test_destroy_invalid_handle_no_crash() {
+        let _guard = ArenaGuard::new();
         c_abi::llmosafe_destroy(999);
         c_abi::llmosafe_destroy(usize::MAX);
     }
 
     #[test]
     fn test_stale_handle_reset_full_returns_one() {
+        let _guard = ArenaGuard::new();
         let h = create_pipeline();
         assert_ne!(h, usize::MAX);
         let _ = process_text(h);
@@ -673,6 +753,7 @@ mod arena_tests {
 
     #[test]
     fn test_stale_handle_configure_returns_one() {
+        let _guard = ArenaGuard::new();
         let h = create_pipeline();
         assert_ne!(h, usize::MAX);
         c_abi::llmosafe_destroy(h);
@@ -681,6 +762,7 @@ mod arena_tests {
 
     #[test]
     fn test_stale_handle_process_with_pressure_returns_minus9() {
+        let _guard = ArenaGuard::new();
         let h = create_pipeline();
         assert_ne!(h, usize::MAX);
         let _ = process_text(h);

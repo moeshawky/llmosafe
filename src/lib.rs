@@ -1160,6 +1160,16 @@ pub mod c_abi {
         contents.pipeline.use_detection_gate = use_detection_gate != 0;
         0
     }
+    /// Resets the arena to empty state (all slots None) for test support.
+    /// Only safe to call when no other threads are concurrently using the arena.
+    pub fn llmosafe_drain_arena() {
+        let mut arena = PIPELINE_ARENA
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for slot in arena.iter_mut() {
+            *slot = None;
+        }
+    }
 }
 
 #[cfg(test)]
