@@ -289,7 +289,7 @@ fn fault_injection_check_blocking_max_retries() {
 #[test]
 #[cfg(feature = "testing")]
 fn check_blocking_succeeds_with_safe_entropy() {
-    let guard = ResourceGuard::for_testing(usize::MAX, 0, 0);
+    let guard = ResourceGuard::for_testing_simple(usize::MAX, 0, 0);
     let result = guard.check_blocking_with_max_retries(1);
     assert!(
         result.is_ok(),
@@ -301,7 +301,7 @@ fn check_blocking_succeeds_with_safe_entropy() {
 #[test]
 #[cfg(feature = "testing")]
 fn check_with_deadline_expired_returns_error() {
-    let guard = ResourceGuard::for_testing(usize::MAX, 0, 0);
+    let guard = ResourceGuard::for_testing_simple(usize::MAX, 0, 0);
     let result = guard.check_with_deadline(std::time::Instant::now());
     assert_eq!(result, Err(KernelError::DeadlineExceeded));
 }
@@ -309,7 +309,7 @@ fn check_with_deadline_expired_returns_error() {
 #[test]
 #[cfg(feature = "testing")]
 fn check_blocking_retries_exhaust_sustained_pressure() {
-    let guard = ResourceGuard::for_testing(usize::MAX, 0, 80);
+    let guard = ResourceGuard::for_testing_simple(usize::MAX, 0, 80);
     let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
     let result = guard.check_blocking_with_max_retries_and_policy(3, &policy);
     assert_eq!(result, Err(KernelError::DeadlineExceeded));

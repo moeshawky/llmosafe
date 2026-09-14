@@ -88,17 +88,21 @@ mod tests {
 
     #[test]
     fn test_cusum_detector_threshold_exact() {
-        let mut detector = CusumDetector::new(500.0, 50.0, 200.0);
+        // D3: Normalized domain [0,1]. mu_ref=0.5, k=0.1, h=0.5.
+        let mut detector = CusumDetector::new(0.5, 0.1, 0.5);
 
         for _ in 0..10 {
-            assert!(!detector.update(500.0), "At reference, should not detect");
+            assert!(
+                !detector.update(0.5, true),
+                "At reference, should not detect"
+            );
         }
 
         for _ in 0..5 {
-            detector.update(750.0);
+            detector.update(0.9, true);
         }
         assert!(
-            detector.detected() || detector.update(750.0),
+            detector.detected() || detector.update(0.9, true),
             "Should detect after sustained shift"
         );
     }
@@ -175,34 +179,36 @@ mod tests {
 
     #[test]
     fn test_cusum_negative_values() {
-        // Test CusumDetector with negative inputs
+        // D3: Normalized domain. Test CusumDetector with values outside [0,1].
         // CusumDetector computes: s_high = max(0, s_high + (val - mu_ref) - k)
-        // For mu_ref=100, k=10, h=100, val=-50:
-        // s_high = max(0, 0 + (-50 - 100) - 10) = max(0, -160) = 0
-        // s_low = max(0, 0 - (-50 - 100) - 10) = max(0, 140) = 140
-        let mut detector = CusumDetector::new(100.0, 10.0, 200.0);
+        // For mu_ref=0.5, k=0.1, h=0.5, val=-50:
+        // s_high = max(0, 0 + (-50 - 0.5) - 0.1) = max(0, -50.6) = 0
+        // s_low = max(0, 0 - (-50 - 0.5) - 0.1) = max(0, 50.4) = 50.4 → exceeds h
+        let mut detector = CusumDetector::new(0.5, 0.1, 0.5);
 
-        // Negative relative to reference
-        detector.update(-50.0);
-        // s_low should be positive but below threshold
+        // Extreme negative relative to reference (unaccepted, no warmup adaptation)
+        detector.update(-50.0, false);
+        // s_low should be positive but below threshold for single observation
         assert!(!detector.detected());
 
-        // More negative values should eventually trigger
+        // More extreme negative values should eventually trigger
         for _ in 0..5 {
-            detector.update(-50.0);
+            detector.update(-50.0, false);
         }
         // After enough samples below reference, should detect
     }
 
     #[test]
     fn test_cusum_reset() {
-        let mut detector = CusumDetector::new(500.0, 50.0, 200.0);
+        // D3: Normalized domain.
+        let mut detector = CusumDetector::new(0.5, 0.1, 0.5);
         for _ in 0..20 {
-            detector.update(1000.0);
+            detector.update(0.9, true);
         }
         detector.reset();
         assert_eq!(detector.s_high(), 0.0);
         assert_eq!(detector.s_low(), 0.0);
+        assert!(detector.warmup_active(), "Reset re-activates warmup");
     }
 
     /// Verifies the DynamicStabilityMonitor low-side guard at the exact boundary
@@ -378,8 +384,9 @@ mod tests {
         );
     }
 
-    /// `pid_risk_to_decision(f32::NAN, ...)` must return `Halt(CognitiveInstability, 0)`.
+    /// `pid_risk_to_decision(f32::NAN, ...)` must return `Halt(CognitiveInstability, 30000)`.
     /// NaN indicates sensor failure — must NOT return Proceed.
+    /// Cooldown matches measured-risk Halt (30000ms) per cooldown policy.
     #[test]
     #[cfg(feature = "std")]
     fn test_pid_risk_to_decision_nan_guard_returns_halt() {
@@ -390,9 +397,9 @@ mod tests {
         assert!(
             matches!(
                 decision,
-                SafetyDecision::Halt(KernelError::CognitiveInstability, 0)
+                SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)
             ),
-            "NaN risk must trigger Halt(CognitiveInstability, 0), got {:?}",
+            "NaN risk must trigger Halt(CognitiveInstability, 30000), got {:?}",
             decision
         );
     }

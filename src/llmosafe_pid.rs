@@ -145,6 +145,7 @@ impl PidConfig {
 /// session-level elevation. Both are leaky integrators clamped to [0, 1].
 /// `prev_pressure_norm` enables step-change detection for gain-scheduled P.
 /// Zero-initialised; `reset()` zeros all fields.
+#[derive(Clone)]
 pub struct PidState {
     /// Fast integrator: acute (request-level) entropy accumulation, decay 0.9
     pub acute_entropy: f32,
@@ -407,7 +408,10 @@ pub fn pid_risk_to_decision(risk: f32, config: &PidConfig) -> SafetyDecision {
     // all NaN comparisons are false, so the NaN passes through.
     // Without this check, NaN → Proceed (the lowest-severity decision).
     if risk.is_nan() {
-        return SafetyDecision::Halt(KernelError::CognitiveInstability, 0);
+        // NaN risk indicates sensor failure — treat as Halt, not Proceed.
+        // Cooldown matches measured-risk Halt (30000ms) per cooldown policy:
+        // Proceed=0, Escalate=5000, Halt=30000, Exit=0.
+        return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
     }
     let risk = risk.clamp(0.0, 1.0);
 

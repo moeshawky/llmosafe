@@ -42,10 +42,23 @@ use crate::llmosafe_kernel::{
 /// - Ring buffer size = SIZE (const generic, compile-time bound)
 /// - Surprise gate: `error_mem > surprise_threshold/65535` → HallucinationDetected
 ///
+/// # Zero-Observation and Warmup Semantics
+///
+/// During warmup (`write_count < SIZE`), `mean_entropy` is computed
+/// from only the `write_count` valid observations. `e_mem` during
+/// warmup is intentional: the mean lags behind steady-state, so
+/// `e_mem` will be larger for the same entropy value until the ring
+/// fills. This is by design — it allows the memory loop to detect
+/// sustained elevation early rather than being insensitive during
+/// initialization.
+///
+/// When `write_count == 0`, all statistics return `0.0` — no valid
+/// observations means no meaningful signal.
+///
 /// Fields:
 /// - `error_mem: f32` — normalised surprise error [0.0, 1.0].
 /// - `trend: f64` — linear regression slope over buffer window.
-/// - `mean_entropy: f64` — running mean entropy of ring buffer.
+/// - `mean_entropy: f64` — running mean entropy of ring buffer (0.0 when empty).
 #[derive(Debug, Clone, Copy)]
 pub struct MemoryOutput {
     /// Normalised surprise error `[0.0, 1.0]`.
@@ -70,10 +83,35 @@ impl ControlSignal for MemoryOutput {
 ///
 /// Holds up to SIZE entropy values in a ring buffer.
 /// Default capacity is 64 entries (stack-allocated).
+///
+/// # Valid-Write Statistics
+///
+/// The ring buffer tracks `write_count` — the number of successfully
+/// accepted (surprise-gate-passed) observations written. Statistics
+/// (`mean_entropy`, `entropy_variance`, `trend`) operate **only** over
+/// valid observations, dividing by `min(write_count, SIZE)` rather
+/// than by `SIZE`. Surprise-rejected observations never enter the
+/// buffer and never increment `write_count`.
+///
+/// **Zero-observation behavior** (`write_count == 0`): `mean_entropy()`
+/// returns `0.0`, `entropy_variance()` returns `0.0`, `trend()` returns
+/// `0.0`. This is intentional — with no data, there is no meaningful
+/// statistic, and returning `0.0` avoids spurious signals.
+///
+/// **Partial-window semantics** (`0 < write_count < SIZE`): During
+/// warmup, statistics operate over the `write_count` observations
+/// actually present. `e_mem` during warmup is computed against this
+/// partial-window mean, which is intentionally lower than the
+/// steady-state mean (the ring is not yet full). This warmup
+/// behavior is documented: `e_mem` will be larger early on as the
+/// mean lags behind, then stabilizes once the ring is full.
 pub struct WorkingMemory<const SIZE: usize = 64> {
     state: [CognitiveEntropy<28, 2>; SIZE],
     current_index: usize,
     surprise_threshold: i128,
+    /// Number of successfully accepted observations written.
+    /// Capped at `SIZE` once the ring wraps.
+    write_count: usize,
 }
 
 impl<const SIZE: usize> WorkingMemory<SIZE> {
@@ -92,6 +130,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
             state: [CognitiveEntropy::new(0); SIZE],
             current_index: 0,
             surprise_threshold: threshold,
+            write_count: 0,
         }
     }
 
@@ -125,6 +164,10 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
         self.state[self.current_index] = sifted.entropy();
         let prev_index = self.current_index;
         self.current_index = (self.current_index + 1) % SIZE;
+        // Cap at SIZE: once the ring wraps, all slots are valid.
+        if self.write_count < SIZE {
+            self.write_count += 1;
+        }
 
         let validated = ValidatedSynapse::new(sifted.into_inner());
         let validated_proof = ValidatedProof(());
@@ -139,41 +182,91 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
 
         Ok((validated, validated_proof))
     }
+    /// Returns the number of valid observations currently in the ring buffer.
+    fn valid_count(&self) -> usize {
+        self.write_count.min(SIZE)
+    }
+
+    /// Returns an iterator over valid entries in temporal order
+    /// (oldest first). Used internally by statistics methods.
+    fn valid_entries(&self) -> ValidEntryIter<'_, SIZE> {
+        let n = self.valid_count();
+        let start = (self.current_index + SIZE - n) % SIZE;
+        ValidEntryIter {
+            memory: self,
+            start,
+            count: n,
+            offset: 0,
+        }
+    }
+
     /// Returns the running mean entropy of the ring buffer.
+    ///
+    /// **Zero-observation behavior**: Returns `0.0` when no valid
+    /// observations have been written (`write_count == 0`). This
+    /// avoids spurious signals from uninitialized ring slots.
+    ///
+    /// **Partial-window**: When `write_count < SIZE`, the mean is
+    /// computed over only the `write_count` valid observations.
     pub fn mean_entropy(&self) -> f64 {
-        let sum: i128 = self.state.iter().map(CognitiveEntropy::mantissa).sum();
-        sum as f64 / SIZE as f64
+        let n = self.valid_count();
+        if n == 0 {
+            return 0.0;
+        }
+        let sum: i128 = self.valid_entries().map(CognitiveEntropy::mantissa).sum();
+        sum as f64 / n as f64
     }
 
     /// Returns the variance of entropy values in the ring buffer.
+    ///
+    /// **Zero-observation behavior**: Returns `0.0` when no valid
+    /// observations have been written.
+    ///
+    /// **Partial-window**: Operates over only the `write_count`
+    /// valid observations. Uninitialized slots are excluded.
     pub fn entropy_variance(&self) -> f64 {
         let mean = self.mean_entropy();
+        let n = self.valid_count();
+        if n == 0 {
+            return 0.0;
+        }
         let variance_sum: f64 = self
-            .state
-            .iter()
+            .valid_entries()
             .map(|e| {
                 let diff = e.mantissa() as f64 - mean;
                 diff * diff
             })
             .sum();
-        variance_sum / SIZE as f64
+        variance_sum / n as f64
     }
 
     /// Returns the linear regression slope over the buffer window.
+    ///
+    /// **Zero-observation behavior**: Returns `0.0` when no valid
+    /// observations have been written (`n == 0` or `n == 1`).
+    ///
+    /// **Partial-window**: When `write_count < SIZE`, the slope is
+    /// computed over only the `write_count` valid observations,
+    /// assigning `x=0` to the oldest and `x=write_count-1` to the
+    /// newest valid entry. This is intentional — warmup trend is
+    /// computed from the available data, not padded with zeros.
     pub fn trend(&self) -> f64 {
-        let n = SIZE as f64;
+        let n = self.valid_count() as f64;
+        if n <= 1.0 {
+            return 0.0;
+        }
+        let n_usize = self.valid_count();
+        let start = (self.current_index + SIZE - n_usize) % SIZE;
         // Defer floating-point conversions: accumulate as i128 to reduce
         // roundoff error in the tight loop. CognitiveEntropy::mantissa()
         // returns i128, so we keep it native until the final division.
         let mut sum_y: i128 = 0;
         let mut sum_x_times_y: i128 = 0;
 
-        // Walk the ring buffer in temporal order: oldest first, newest last.
-        // After wraparound, buffer order is [current_index, ..., SIZE-1, 0, ..., current_index-1].
-        // Assign x=0 to oldest, x=SIZE-1 to newest.
-        for offset in 0..SIZE {
-            let idx = (self.current_index + offset) % SIZE;
-            let x = offset as i128;
+        // Walk valid entries in temporal order: oldest first, newest last.
+        for i in 0..n_usize {
+            let idx = (start + i) % SIZE;
+            let x = i as i128;
             let y = self.state[idx].mantissa();
             sum_y += y;
             sum_x_times_y += x * y;
@@ -192,6 +285,27 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
     /// Returns true if the absolute trend exceeds the given threshold.
     pub fn is_drifting(&self, threshold: f64) -> bool {
         self.trend().abs() > threshold
+    }
+}
+
+/// Iterator over valid ring-buffer entries in temporal order (oldest first).
+struct ValidEntryIter<'a, const SIZE: usize> {
+    memory: &'a WorkingMemory<SIZE>,
+    start: usize,
+    count: usize,
+    offset: usize,
+}
+
+impl<'a, const SIZE: usize> Iterator for ValidEntryIter<'a, SIZE> {
+    type Item = &'a CognitiveEntropy<28, 2>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.count {
+            return None;
+        }
+        let idx = (self.start + self.offset) % SIZE;
+        self.offset += 1;
+        Some(&self.memory.state[idx])
     }
 }
 
@@ -217,6 +331,171 @@ mod tests {
         assert!((memory.trend() - 100.0).abs() < 0.01);
         assert!(memory.is_drifting(10.0));
     }
+
+    /// After exactly 1 accepted observation, mean must equal that
+    /// observation's entropy — NOT 0.0 and NOT value/SIZE.
+    #[test]
+    fn test_single_obs_mean_equals_obs() {
+        let mut memory = WorkingMemory::<4>::new(1000);
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(300);
+        let sifted = SiftedSynapse::new(synapse);
+        memory.update(sifted, SiftedProof::for_testing()).unwrap();
+        assert_eq!(
+            memory.mean_entropy(),
+            300.0,
+            "1 accepted obs → mean must equal that obs, not 0.0 and not value/SIZE"
+        );
+        assert_eq!(memory.valid_count(), 1);
+    }
+
+    /// n<SIZE uses warmup population only (not padded with zeros).
+    #[test]
+    fn test_warmup_mean_excludes_uninitialized() {
+        let mut memory = WorkingMemory::<4>::new(1000);
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(100);
+        memory
+            .update(SiftedSynapse::new(synapse), SiftedProof::for_testing())
+            .unwrap();
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(200);
+        memory
+            .update(SiftedSynapse::new(synapse), SiftedProof::for_testing())
+            .unwrap();
+        // Mean over 2 valid obs = (100+200)/2 = 150, NOT (100+200+0+0)/4 = 75
+        assert_eq!(
+            memory.mean_entropy(),
+            150.0,
+            "warmup mean must use only valid observations, not padded zeros"
+        );
+        assert_eq!(memory.valid_count(), 2);
+    }
+
+    /// Variance also operates over warmup population only.
+    #[test]
+    fn test_warmup_variance_excludes_uninitialized() {
+        let mut memory = WorkingMemory::<4>::new(1000);
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(100);
+        memory
+            .update(SiftedSynapse::new(synapse), SiftedProof::for_testing())
+            .unwrap();
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(200);
+        memory
+            .update(SiftedSynapse::new(synapse), SiftedProof::for_testing())
+            .unwrap();
+        // Variance over 2 obs: mean=150, variance = ((100-150)^2 + (200-150)^2)/2 = 2500
+        assert!(
+            (memory.entropy_variance() - 2500.0).abs() < 0.01,
+            "warmup variance must use only valid observations"
+        );
+    }
+
+    /// Zero-observation behavior: all stats return 0.0 when write_count==0.
+    #[test]
+    fn test_zero_observation_stats_return_zero() {
+        let memory = WorkingMemory::<4>::new(1000);
+        assert_eq!(
+            memory.mean_entropy(),
+            0.0,
+            "zero-observation mean must be 0.0"
+        );
+        assert_eq!(
+            memory.entropy_variance(),
+            0.0,
+            "zero-observation variance must be 0.0"
+        );
+        assert_eq!(memory.trend(), 0.0, "zero-observation trend must be 0.0");
+        assert_eq!(memory.valid_count(), 0);
+    }
+
+    /// Surprise-rejected observations never enter statistics and
+    /// never increment write_count. Stats unchanged after rejection.
+    #[test]
+    fn test_surprise_rejected_obs_no_stats_change() {
+        let mut memory = WorkingMemory::<4>::new(500);
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(200);
+        synapse.set_raw_surprise(100);
+        synapse.set_has_bias(false);
+        memory
+            .update(SiftedSynapse::new(synapse), SiftedProof::for_testing())
+            .unwrap();
+        let mean_after_accept = memory.mean_entropy();
+        let count_after_accept = memory.valid_count();
+
+        // Reject an observation with too-high surprise
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(9000);
+        synapse.set_raw_surprise(600); // > threshold 500
+        synapse.set_has_bias(false);
+        assert!(memory
+            .update(SiftedSynapse::new(synapse), SiftedProof::for_testing())
+            .is_err());
+
+        assert_eq!(
+            memory.mean_entropy(),
+            mean_after_accept,
+            "rejected obs must not change mean"
+        );
+        assert_eq!(
+            memory.valid_count(),
+            count_after_accept,
+            "rejected obs must not increment write_count"
+        );
+    }
+
+    /// Full-ring + wraparound: after SIZE updates, mean uses all entries.
+    /// After wraparound, oldest entry is replaced and mean uses SIZE entries.
+    #[test]
+    fn test_wraparound_mean_correct() {
+        let mut memory = WorkingMemory::<4>::new(1000);
+        for i in 0..4 {
+            let mut synapse = Synapse::new();
+            synapse.set_raw_entropy(100 * (i + 1) as u16);
+            memory
+                .update(SiftedSynapse::new(synapse), SiftedProof::for_testing())
+                .unwrap();
+        }
+        assert_eq!(memory.mean_entropy(), 250.0);
+        assert_eq!(memory.valid_count(), 4);
+
+        // Wrap: overwrite oldest (100) with 500
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(500);
+        memory
+            .update(SiftedSynapse::new(synapse), SiftedProof::for_testing())
+            .unwrap();
+        assert_eq!(
+            memory.mean_entropy(),
+            350.0,
+            "wraparound mean must exclude replaced slot"
+        );
+        assert_eq!(
+            memory.valid_count(),
+            4,
+            "write_count capped at SIZE after wraparound"
+        );
+    }
+
+    /// trend() returns 0.0 when only 1 observation exists (n<=1).
+    #[test]
+    fn test_trend_single_observation_zero() {
+        let mut memory = WorkingMemory::<4>::new(1000);
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(300);
+        memory
+            .update(SiftedSynapse::new(synapse), SiftedProof::for_testing())
+            .unwrap();
+        assert_eq!(
+            memory.trend(),
+            0.0,
+            "trend with single observation must be 0.0"
+        );
+    }
+
     #[test]
     fn test_memory_update_gating() {
         let mut memory = WorkingMemory::<4>::new(500); // Threshold 5.00
@@ -401,6 +680,9 @@ mod proptests {
 }
 
 #[cfg(feature = "std")]
+/// std-only global cognitive memory: one shared WorkingMemory<64> behind a Mutex,
+/// constructed with surprise threshold 58000 (matching the classifier surprise range [0, 65535]).
+/// Consumed by the C-ABI and the body control loop.
 pub mod cognitive_memory {
     use super::*;
     use crate::llmosafe_kernel::Synapse;
@@ -427,6 +709,9 @@ pub mod cognitive_memory {
         })
     }
 
+    /// C-ABI entry point: rebuilds a Synapse from raw 128 bits, wraps it as a
+    /// SiftedSynapse with a bypass SiftedProof, and pushes it through the global
+    /// WorkingMemory::update() gate. Returns 0 on acceptance.
     pub fn process_state_update(synapse_bits: u128) -> i32 {
         let synapse = Synapse::from_raw_u128(synapse_bits);
         let sifted = SiftedSynapse::new(synapse);
@@ -445,6 +730,9 @@ pub mod cognitive_memory {
         }
     }
 
+    /// Reads the global WorkingMemory statistics under the mutex with
+    /// poison-recovery (lock_memory: warns via tracing and reuses inner state).
+    /// Returns (mean, variance, trend, is_drifting).
     pub fn get_memory_stats() -> (f64, f64, f64, bool) {
         let memory = lock_memory();
         let mean = memory.mean_entropy();

@@ -180,8 +180,10 @@ pub use llmosafe_sifter::{
 #[allow(unsafe_code)]
 #[allow(clippy::missing_safety_doc)]
 #[allow(clippy::as_conversions, clippy::indexing_slicing)]
+/// FFI boundary for C callers. Holds a fixed arena of 16 CognitivePipeline slots
+/// behind a single Mutex (PIPELINE_ARENA); a poisoned mutex recovers via lock_arena().
 pub mod c_abi {
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use crate::llmosafe_body::ResourceGuard;
     use crate::llmosafe_integration::SafetyDecision;
@@ -194,11 +196,46 @@ pub mod c_abi {
     const ARENA_INDEX_MASK: usize = 0xF;
     const GEN_SHIFT: usize = 4;
 
+    /// Maximum number of tokens (whitespace-delimited words) allowed per
+    /// pipeline invocation as a work budget. Inputs exceeding this limit
+    /// fail predictably with -9 (sift_and_process/process_with_pressure)
+    /// or u16::MAX (calculate_halo) instead of pressuring the allocator.
+    /// Empirically: 10MiB of 1-char tokens = ~10M tokens; 100K cap
+    /// covers normal prose (~5-20K tokens) while rejecting adversarial
+    /// whitespace/amplification inputs.
+    pub const MAX_WORK_TOKENS: usize = 100_000;
+
+    /// Count whitespace-delimited tokens in `text` without allocating.
+    /// Uses a simple byte-level scan — O(n) time, O(1) space.
+    pub fn count_tokens(text: &str) -> usize {
+        let bytes = text.as_bytes();
+        let mut count = 0usize;
+        let mut in_token = false;
+        for &b in bytes {
+            if b.is_ascii_whitespace() {
+                in_token = false;
+            } else if !in_token {
+                count = count.saturating_add(1);
+                in_token = true;
+            }
+        }
+        count
+    }
+
+    /// Mutable contents of a pipeline slot — protected by a per-slot Mutex.
+    /// Pipeline execution and last_result are guarded here, not by the arena lock.
+    struct SlotContents {
+        pipeline: CognitivePipeline<'static, 64, 10>,
+        last_result: Option<PipelineResult>,
+    }
+
+    /// Arena slot metadata. The `contents` field is an Arc<Mutex<SlotContents>>
+    /// enabling per-slot locking: pipeline execution serializes PER SLOT, not globally.
+    /// The arena lock protects metadata/lookup only (find slot, validate generation).
     #[allow(dead_code)]
     struct PipelineSlot {
-        pipeline: CognitivePipeline<'static, 64, 10>,
+        contents: Arc<Mutex<SlotContents>>,
         objective_buf: Box<[u8; MAX_OBJECTIVE_LEN]>,
-        last_result: Option<PipelineResult>,
         generation: u64,
     }
 
@@ -214,9 +251,9 @@ pub mod c_abi {
         (index, generation)
     }
 
-    /// Acquires the arena lock with observability: if the mutex is poisoned
-    /// (a prior panic), recover the inner state instead of crashing the FFI
-    /// caller. Logs a warning so poisoning is visible, not silently swallowed.
+    /// Acquires the arena lock for metadata/lookup only.
+    /// The arena lock protects finding slots and validating generations.
+    /// Pipeline execution happens under per-slot locks (see Arc<Mutex<SlotContents>>).
     fn lock_arena() -> std::sync::MutexGuard<'static, [Option<PipelineSlot>; ARENA_SIZE]> {
         PIPELINE_ARENA.lock().unwrap_or_else(|e| {
             tracing::warn!(
@@ -227,6 +264,9 @@ pub mod c_abi {
         })
     }
 
+    /// Fixed arena of 16 pipeline slots. Each slot contains an Arc<Mutex<SlotContents>>
+    /// for per-slot locking. The arena lock protects metadata/lookup only;
+    /// pipeline execution serializes per-slot, not globally.
     static PIPELINE_ARENA: Mutex<[Option<PipelineSlot>; ARENA_SIZE]> = Mutex::new([
         None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         None,
@@ -268,7 +308,8 @@ pub mod c_abi {
     /// input. The handle encodes arena index (lower 4 bits) and a
     /// generation counter (upper bits) for stale-handle detection.
     /// The arena holds 16 concurrent pipeline slots protected by a
-    /// `std::sync::Mutex`.
+    /// `std::sync::Mutex`. Metadata/lookup is protected by the arena
+    /// lock; pipeline execution serializes per-slot (Arc<Mutex<SlotContents>>).
     ///
     /// The objective is stored in a fixed-size buffer per slot
     /// (MAX_OBJECTIVE_LEN = 1024 bytes), avoiding heap leaks.
@@ -303,9 +344,11 @@ pub mod c_abi {
         for (i, slot) in arena.iter_mut().enumerate() {
             if slot.is_none() {
                 *slot = Some(PipelineSlot {
-                    pipeline,
+                    contents: Arc::new(Mutex::new(SlotContents {
+                        pipeline,
+                        last_result: None,
+                    })),
                     objective_buf,
-                    last_result: None,
                     generation: gen,
                 });
                 return pack_handle(i, gen);
@@ -314,19 +357,19 @@ pub mod c_abi {
         usize::MAX
     }
 
-    /// Validates a packed handle against the arena. Returns the slot if the
-    /// generation matches, otherwise `None`. Also returns `None` if the index
-    /// is out of bounds.
+    /// Validates a packed handle against the arena. Returns the slot index
+    /// and generation if the generation matches, otherwise `None`. Also
+    /// returns `None` if the index is out of bounds.
     fn get_validated_slot(
         arena: &mut [Option<PipelineSlot>; ARENA_SIZE],
         handle: usize,
-    ) -> Option<&mut PipelineSlot> {
+    ) -> Option<(usize, u64)> {
         let (index, generation) = unpack_handle(handle);
         if index >= ARENA_SIZE {
             return None;
         }
-        match &mut arena[index] {
-            Some(slot) if slot.generation == generation => Some(slot),
+        match &arena[index] {
+            Some(slot) if slot.generation == generation => Some((index, generation)),
             _ => None,
         }
     }
@@ -352,19 +395,40 @@ pub mod c_abi {
             return -9;
         }
         // SAFETY: text_ptr non-null and text_len in [1, 10 MiB] validated above.
-        // The slice is consumed immediately via from_utf8_lossy.
+        // Use str::from_utf8 instead of String::from_utf8_lossy:
+        // avoids the temporary String allocation entirely for valid UTF-8,
+        // fail-closed for invalid bytes.
         let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
-        let text = String::from_utf8_lossy(slice);
+        let text = match std::str::from_utf8(slice) {
+            Ok(s) => s,
+            Err(_) => return -9,
+        };
+        // F2: Work budget check — count tokens before processing.
+        // Prevents working-set amplification from adversarial whitespace/token
+        // shapes. Fails predictably with -9 instead of pressuring the allocator.
+        if count_tokens(text) > MAX_WORK_TOKENS {
+            return -9;
+        }
+        // Arena lock: find slot and clone Arc (metadata/lookup only).
         let mut arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let slot = match get_validated_slot(&mut arena, handle) {
-            Some(s) => s,
+        let slot_index = match get_validated_slot(&mut arena, handle) {
+            Some((idx, _gen)) => idx,
             None => return -9,
         };
-        let result = slot.pipeline.process(&text);
+        // Clone the per-slot Arc before releasing the arena lock.
+        // This keeps the slot contents alive even after the arena lock is released.
+        let slot_contents = arena[slot_index].as_ref().unwrap().contents.clone();
+        drop(arena); // Release arena lock — pipeline execution now under per-slot lock only.
+
+        // Per-slot lock: execute pipeline and store result.
+        let mut contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let result = contents.pipeline.process(&text);
         let code = decision_to_code(&result.decision);
-        slot.last_result = Some(result);
+        contents.last_result = Some(result);
         code
     }
 
@@ -384,7 +448,12 @@ pub mod c_abi {
             .as_ref()
             .filter(|s| s.generation == generation)
             .map_or(-9, |slot| {
-                slot.last_result
+                let contents = slot
+                    .contents
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                contents
+                    .last_result
                     .as_ref()
                     .map_or(-9, |r| decision_to_code(&r.decision))
             })
@@ -410,7 +479,12 @@ pub mod c_abi {
             .map_or_else(
                 || f64::NAN,
                 |slot| {
-                    slot.last_result
+                    let contents = slot
+                        .contents
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    contents
+                        .last_result
                         .as_ref()
                         .map_or_else(|| f64::NAN, |r| f64::from(r.classifier_score))
                 },
@@ -439,11 +513,17 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[index] {
-            Some(s) if s.generation == generation => s,
+        let slot_contents = match &arena[index] {
+            Some(s) if s.generation == generation => s.contents.clone(),
             _ => return 1,
         };
-        let state = slot.pipeline.pid_state();
+        drop(arena);
+        let state = {
+            let contents = slot_contents
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            contents.pipeline.pid_state().clone()
+        };
         // SAFETY: acute, chronic, pressure are all non-null (validated above).
         // Writes are via write_unaligned for pointer alignment safety.
         unsafe {
@@ -496,6 +576,11 @@ pub mod c_abi {
     // Callers CANNOT distinguish 'maximum entropy' from 'input error' from the
     // return value alone. Use input validation BEFORE calling this function.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    /// Runs raw text through the dual-path sifter and returns the combined entropy.
+    /// Validates text_ptr (non-null) and text_len (>=1, <=isize::MAX, <=10 MiB),
+    /// returning u16::MAX on any violation.
+    /// Uses str::from_utf8 instead of String::from_utf8_lossy to avoid
+    /// the temporary String allocation entirely for valid UTF-8 inputs.
     pub extern "C" fn llmosafe_calculate_halo(text_ptr: *const u8, text_len: usize) -> u16 {
         let max_text_len = 10 * 1024 * 1024;
         if text_ptr.is_null()
@@ -505,11 +590,20 @@ pub mod c_abi {
         {
             return u16::MAX;
         }
-        // SAFETY: text_ptr is validated non-null and text_len is bounded to
-        // [1, 10 MiB] on lines 97-103 above. The slice lives only for the duration of
-        // from_utf8_lossy below.
         let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
-        let text = String::from_utf8_lossy(slice);
+        // str::from_utf8 avoids the temporary String allocation for valid UTF-8;
+        // fail-closed for invalid bytes.
+        let text = match std::str::from_utf8(slice) {
+            Ok(s) => s,
+            Err(_) => return u16::MAX,
+        };
+        // F2: Work budget check — count tokens before processing.
+        // Prevents working-set amplification from adversarial whitespace/token
+        // shapes. Fails predictably with u16::MAX instead of pressuring
+        // the allocator while the safety infrastructure is under load.
+        if count_tokens(text) > MAX_WORK_TOKENS {
+            return u16::MAX;
+        }
         // Dual-path: classifier + keyword bias (sift_text), not keyword-only.
         // Returns the combined entropy [0, 65535] from both pathways.
         let (sifted, _proof) = crate::llmosafe_sifter::sift_text(&text);
@@ -517,6 +611,10 @@ pub mod c_abi {
     }
 
     #[no_mangle]
+    /// Checks system resources against a memory ceiling.
+    /// Builds a ResourceGuard with ceiling_mb * 1024 * 1024 bytes and returns 0 while
+    /// guard.check() is Ok. On Err maps KernelError to i32 — only ResourceExhaustion (-5)
+    /// is currently reachable from check().
     pub extern "C" fn llmosafe_check_resources(ceiling_mb: u32) -> i32 {
         let ceiling_bytes = (ceiling_mb as usize).saturating_mul(1024 * 1024);
         let guard = ResourceGuard::new(ceiling_bytes);
@@ -531,6 +629,9 @@ pub mod c_abi {
     }
 
     #[no_mangle]
+    /// Returns the resource pressure percentage [0, 100] for a memory ceiling.
+    /// Builds a ResourceGuard and returns guard.pressure(). Returns 100 (maximum
+    /// pressure, fail-closed) when the computed byte ceiling is 0.
     pub extern "C" fn llmosafe_get_resource_pressure(ceiling_mb: u32) -> u8 {
         let ceiling_bytes = (ceiling_mb as usize).saturating_mul(1024 * 1024);
         if ceiling_bytes == 0 {
@@ -561,6 +662,12 @@ pub mod c_abi {
 
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    /// Writes working-memory statistics from the pipeline behind instance_id.
+    /// Writes mean, variance, trend (all f64) and is_drifting as u32 (0 or 1)
+    /// via ptr::write_unaligned.
+    ///
+    /// Returns 0 on success, 1 if any out pointer is null, the handle is invalid
+    /// or stale, or the arena index is out of range.
     pub extern "C" fn llmosafe_get_memory_stats(
         instance_id: usize,
         mean: *mut f64,
@@ -576,11 +683,17 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[index] {
-            Some(s) if s.generation == generation => s,
+        let slot_contents = match &arena[index] {
+            Some(s) if s.generation == generation => s.contents.clone(),
             _ => return 1,
         };
-        let stats = slot.pipeline.memory_stats();
+        drop(arena);
+        let stats = {
+            let contents = slot_contents
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            contents.pipeline.memory_stats()
+        };
         // SAFETY: mean, variance, trend, drifting are all non-null (validated above).
         // Writes are via write_unaligned for pointer alignment safety.
         unsafe {
@@ -593,6 +706,8 @@ pub mod c_abi {
     }
 
     #[no_mangle]
+    /// Returns system CPU load as a percentage via ResourceGuard::system_cpu_load()
+    /// (delta-based /proc/stat read).
     pub extern "C" fn llmosafe_get_system_cpu_load() -> u8 {
         ResourceGuard::system_cpu_load()
     }
@@ -621,21 +736,32 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return -9;
         }
-        arena[index]
-            .as_ref()
-            .filter(|s| s.generation == generation)
-            .and_then(|slot| slot.last_result.as_ref())
-            .and_then(|r| r.kernel_output())
-            .map_or(-9, |ko| {
-                // SAFETY: error_out, is_stable_out, depth_out are all non-null (validated above).
-                // Writes are via write_unaligned for pointer alignment safety.
-                unsafe {
-                    std::ptr::write_unaligned(error_out, ko.error_kernel);
-                    std::ptr::write_unaligned(is_stable_out, if ko.is_stable { 1 } else { 0 });
-                    std::ptr::write_unaligned(depth_out, ko.depth as u32);
-                }
-                0
-            })
+        let slot_contents = match &arena[index] {
+            Some(s) if s.generation == generation => s.contents.clone(),
+            _ => return -9,
+        };
+        drop(arena);
+        let result = {
+            let contents = slot_contents
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            contents
+                .last_result
+                .as_ref()
+                .and_then(|r| r.kernel_output())
+                .cloned()
+        };
+        let code = result.map_or(-9, |ko| {
+            // SAFETY: error_out, is_stable_out, depth_out are all non-null (validated above).
+            // Writes are via write_unaligned for pointer alignment safety.
+            unsafe {
+                std::ptr::write_unaligned(error_out, ko.error_kernel);
+                std::ptr::write_unaligned(is_stable_out, if ko.is_stable { 1 } else { 0 });
+                std::ptr::write_unaligned(depth_out, ko.depth as u32);
+            }
+            0
+        });
+        code
     }
 
     /// Returns the body pressure from the last pipeline invocation.
@@ -650,14 +776,18 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return u32::MAX;
         }
-        arena[index]
+        let slot_contents = match &arena[index] {
+            Some(s) if s.generation == generation => s.contents.clone(),
+            _ => return u32::MAX,
+        };
+        drop(arena);
+        let contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        contents
+            .last_result
             .as_ref()
-            .filter(|s| s.generation == generation)
-            .map_or(u32::MAX, |slot| {
-                slot.last_result
-                    .as_ref()
-                    .map_or(u32::MAX, |r| u32::from(r.body_pressure()))
-            })
+            .map_or(u32::MAX, |r| u32::from(r.body_pressure()))
     }
 
     /// Returns combined risk bits from a full 128-bit synapse.
@@ -692,11 +822,15 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[index] {
-            Some(s) if s.generation == generation => s,
+        let slot_contents = match &arena[index] {
+            Some(s) if s.generation == generation => s.contents.clone(),
             _ => return 1,
         };
-        let entropy = match slot.last_result.as_ref() {
+        drop(arena);
+        let contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entropy = match contents.last_result.as_ref() {
             Some(r) => r.entropy,
             None => return 3,
         };
@@ -725,11 +859,15 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[index] {
-            Some(s) if s.generation == generation => s,
+        let slot_contents = match &arena[index] {
+            Some(s) if s.generation == generation => s.contents.clone(),
             _ => return 1,
         };
-        let surprise = match slot.last_result.as_ref() {
+        drop(arena);
+        let contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let surprise = match contents.last_result.as_ref() {
             Some(r) => r.surprise,
             None => return 3,
         };
@@ -758,11 +896,15 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[index] {
-            Some(s) if s.generation == generation => s,
+        let slot_contents = match &arena[index] {
+            Some(s) if s.generation == generation => s.contents.clone(),
             _ => return 1,
         };
-        let flags = match slot.last_result.as_ref() {
+        drop(arena);
+        let contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let flags = match contents.last_result.as_ref() {
             Some(r) => r.detection_flags,
             None => return 3,
         };
@@ -791,11 +933,15 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[index] {
-            Some(s) if s.generation == generation => s,
+        let slot_contents = match &arena[index] {
+            Some(s) if s.generation == generation => s.contents.clone(),
             _ => return 1,
         };
-        let oov = match slot.last_result.as_ref() {
+        drop(arena);
+        let contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let oov = match contents.last_result.as_ref() {
             Some(r) => r.oov_ratio,
             None => return 3,
         };
@@ -825,11 +971,15 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[index] {
-            Some(s) if s.generation == generation => s,
+        let slot_contents = match &arena[index] {
+            Some(s) if s.generation == generation => s.contents.clone(),
             _ => return 1,
         };
-        let stages = match slot.last_result.as_ref() {
+        drop(arena);
+        let contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let stages = match contents.last_result.as_ref() {
             Some(r) => r.stages_executed,
             None => return 3,
         };
@@ -858,11 +1008,15 @@ pub mod c_abi {
         if index >= ARENA_SIZE {
             return 1;
         }
-        let slot = match &arena[index] {
-            Some(s) if s.generation == generation => s,
+        let slot_contents = match &arena[index] {
+            Some(s) if s.generation == generation => s.contents.clone(),
             _ => return 1,
         };
-        let steps = match slot.last_result.as_ref() {
+        drop(arena);
+        let contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let steps = match contents.last_result.as_ref() {
             Some(r) => r.step_count as u32,
             None => return 3,
         };
@@ -874,6 +1028,10 @@ pub mod c_abi {
     }
 
     /// Runs text through the pipeline with body pressure gating.
+    /// Uses per-slot locking (Arc<Mutex<SlotContents>>) so that
+    /// pipeline execution serializes per-slot, not globally.
+    /// Uses str::from_utf8 instead of String::from_utf8_lossy to avoid
+    /// the temporary String allocation for valid UTF-8 inputs.
     #[no_mangle]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub extern "C" fn llmosafe_process_with_pressure(
@@ -890,54 +1048,74 @@ pub mod c_abi {
         {
             return -9;
         }
-        // SAFETY: text_ptr is validated non-null and text_len is bounded
-        // to [1, 10 MiB] on the guard clauses above. The slice lives only
-        // for the duration of String::from_utf8_lossy below.
         let slice = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
-        let text = String::from_utf8_lossy(slice);
+        let text = match std::str::from_utf8(slice) {
+            Ok(s) => s,
+            Err(_) => return -9,
+        };
+        // F2: Work budget check — count tokens before processing.
+        // Prevents working-set amplification from adversarial whitespace/token
+        // shapes. Fails predictably with -9 instead of pressuring the allocator.
+        if count_tokens(text) > MAX_WORK_TOKENS {
+            return -9;
+        }
+        // Arena lock: find slot and clone Arc (metadata/lookup only).
         let mut arena = PIPELINE_ARENA
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let slot = match get_validated_slot(&mut arena, handle) {
-            Some(s) => s,
+        let slot_index = match get_validated_slot(&mut arena, handle) {
+            Some((idx, _gen)) => idx,
             None => return -9,
         };
-        let result = slot
+        let slot_contents = arena[slot_index].as_ref().unwrap().contents.clone();
+        drop(arena); // Release arena lock — pipeline execution under per-slot lock.
+
+        // Per-slot lock: execute pipeline with pressure and store result.
+        let mut contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let result = contents
             .pipeline
             .process_with_pressure(&text, body_entropy, pressure);
         let code = decision_to_code(&result.decision);
-        slot.last_result = Some(result);
+        contents.last_result = Some(result);
         code
     }
 
     /// Resets detectors and monitor only (preserves memory and reasoning).
+    /// Uses per-slot locking to allow concurrent reset on different slots.
     #[no_mangle]
     pub extern "C" fn llmosafe_reset_detectors(handle: usize) -> u32 {
-        let mut arena = PIPELINE_ARENA
+        let mut arena = lock_arena();
+        let slot_index_gen = match get_validated_slot(&mut arena, handle) {
+            Some(pair) => pair,
+            None => return 1,
+        };
+        let slot_contents = arena[slot_index_gen.0].as_ref().unwrap().contents.clone();
+        drop(arena);
+        let mut contents = slot_contents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match get_validated_slot(&mut arena, handle) {
-            Some(s) => {
-                s.pipeline.reset_detectors();
-                0
-            }
-            None => 1,
-        }
+        contents.pipeline.reset_detectors();
+        0
     }
 
     /// Full reset to post-construction state.
+    /// Uses per-slot locking to allow concurrent reset on different slots.
     #[no_mangle]
     pub extern "C" fn llmosafe_reset_full(handle: usize) -> u32 {
-        let mut arena = PIPELINE_ARENA
+        let mut arena = lock_arena();
+        let slot_index_gen = match get_validated_slot(&mut arena, handle) {
+            Some(pair) => pair,
+            None => return 1,
+        };
+        let slot_contents = arena[slot_index_gen.0].as_ref().unwrap().contents.clone();
+        drop(arena);
+        let mut contents = slot_contents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match get_validated_slot(&mut arena, handle) {
-            Some(s) => {
-                s.pipeline.reset_full();
-                0
-            }
-            None => 1,
-        }
+        contents.pipeline.reset_full();
+        0
     }
 
     /// Configures pipeline runtime parameters after creation.
@@ -950,6 +1128,7 @@ pub mod c_abi {
     /// dynamic sizing.
     ///
     /// Returns 0 on success, 1 if handle is invalid or slot is uninitialized.
+    /// Uses per-slot locking to allow concurrent configure on different slots.
     #[no_mangle]
     pub extern "C" fn llmosafe_configure(
         instance_id: usize,
@@ -964,21 +1143,19 @@ pub mod c_abi {
             3 => crate::control_types::DesignAssuranceLevel::D,
             _ => crate::control_types::DesignAssuranceLevel::E,
         };
-        let mut arena = PIPELINE_ARENA
+        let mut arena = lock_arena();
+        let slot_index_gen = match get_validated_slot(&mut arena, instance_id) {
+            Some(pair) => pair,
+            None => return 1,
+        };
+        let slot_contents = arena[slot_index_gen.0].as_ref().unwrap().contents.clone();
+        drop(arena);
+        let mut contents = slot_contents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (index, generation) = unpack_handle(instance_id);
-        if index >= ARENA_SIZE {
-            return 1;
-        }
-        match arena[index].as_mut() {
-            Some(slot) if slot.generation == generation => {
-                slot.pipeline.esc_policy.dal = dal;
-                slot.pipeline.use_detection_gate = use_detection_gate != 0;
-                0
-            }
-            _ => 1,
-        }
+        contents.pipeline.esc_policy.dal = dal;
+        contents.pipeline.use_detection_gate = use_detection_gate != 0;
+        0
     }
 }
 
@@ -1928,6 +2105,95 @@ mod tests {
         let code = crate::c_abi::llmosafe_sift_and_process(handle, text2.as_ptr(), text2.len());
         assert!((-8..=2).contains(&code));
         crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    // ── F2: Token working-set amplification tests ──
+
+    /// Token-pathological input: 200K tokens (exceeding 100K budget).
+    /// Should fail predictably with the documented -9 error sentinel
+    /// instead of pressuring the allocator. Each token is a single
+    /// character separated by spaces, producing exactly 200K tokens.
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_token_pathological_input_fails_bounded() {
+        let objective = b"token budget test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        // Create 200K tokens ("a " repeated 200K times = ~400KB).
+        // This exceeds MAX_WORK_TOKENS (100_000).
+        let token_count = 200_000usize;
+        let pathological_text = vec!["a "; token_count].concat();
+        let code = crate::c_abi::llmosafe_sift_and_process(
+            handle,
+            pathological_text.as_ptr(),
+            pathological_text.len(),
+        );
+        // Must fail with the documented error sentinel (-9), not process
+        // and pressuring the allocator.
+        assert_eq!(code, -9, "token-pathological input must fail with -9");
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    /// Token-pathological input for calculate_halo: 200K tokens
+    /// (exceeding 100K budget) must return the documented u16::MAX
+    /// error sentinel instead of processing.
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_calculate_halo_token_pathological_fails() {
+        let token_count = 200_000usize;
+        let pathological_text = vec!["a "; token_count].concat();
+        let result = crate::c_abi::llmosafe_calculate_halo(
+            pathological_text.as_ptr(),
+            pathological_text.len(),
+        );
+        // Must return u16::MAX (the documented error sentinel for
+        // llmosafe_calculate_halo) instead of processing.
+        assert_eq!(
+            result,
+            u16::MAX,
+            "token-pathological input must return u16::MAX"
+        );
+    }
+
+    /// Normal prose input well within the 100K token budget should
+    /// still process successfully. 10K tokens of typical prose.
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_normal_10mib_prose_still_processes() {
+        let objective = b"normal prose test";
+        let handle = crate::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
+        assert!(handle != usize::MAX);
+        // 10K tokens of typical prose (well under 100K budget)
+        // Using short words separated by spaces.
+        let normal_text = vec!["the "; 10_000].concat();
+        let code = crate::c_abi::llmosafe_sift_and_process(
+            handle,
+            normal_text.as_ptr(),
+            normal_text.len(),
+        );
+        // Should process successfully (not fail on token budget).
+        assert!(
+            (-8..=2).contains(&code),
+            "normal prose must process, got {code}"
+        );
+        crate::c_abi::llmosafe_destroy(handle);
+    }
+
+    /// Verify that the token counting function works correctly.
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_c_abi_token_counting_accuracy() {
+        use crate::c_abi::{count_tokens, MAX_WORK_TOKENS};
+        // Empty string: 0 tokens
+        assert_eq!(count_tokens(""), 0);
+        // Single word: 1 token
+        assert_eq!(count_tokens("hello"), 1);
+        // Multiple words: correct count
+        assert_eq!(count_tokens("hello world foo"), 3);
+        // Whitespace-only: 0 tokens
+        assert_eq!(count_tokens("   "), 0);
+        // Verify budget constant is positive
+        assert!(MAX_WORK_TOKENS > 0);
     }
 
     // ── llmosafe_configure ──

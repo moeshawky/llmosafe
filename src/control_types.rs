@@ -140,10 +140,17 @@ impl core::ops::BitOr for OverrideFlags {
 /// | `e_mem`          | 2    | `MemoryOutput.error_mem`         |
 /// | `e_kernel`       | 1    | `KernelOutput.error_kernel`      |
 /// | `trend`          | 2    | `WorkingMemory::trend()`         |
-/// | `classifier_prob`| 3    | `SifterOutput.classifier_prob`   |
+/// | `classifier_prob`| 3    | Pure classifier probability [0.0, 1.0] (not entropy-derived) |
 /// | `has_bias`       | 3    | `SifterOutput.has_bias`          |
 /// | `detection_flags`| DET  | Packed from 6 detectors          |
 /// | `pressure`       | 0    | `BodyOutput.pressure`            |
+///
+/// # D2: Confidence vs Risk separation
+///
+/// `classifier_prob` carries manipulation risk p as a separate
+/// directional signal. ConfidenceTracker receives CERTAINTY = abs(2p-1),
+/// not raw probability. Keyword bias feeds NEITHER certainty nor
+/// classifier_probability.
 ///
 /// # DAL A
 ///
@@ -166,7 +173,10 @@ pub struct PidInput {
     pub e_kernel: f32,
     /// Raw entropy trend from WorkingMemory::trend().
     pub trend: f64,
-    /// Classifier probability `[0.0, 1.0]`, from SifterOutput.classifier_prob.
+    /// Pure classifier probability [0.0, 1.0] from SifterOutput.classifier_prob.
+    /// This is the manipulation risk p as a separate directional signal.
+    /// D2: ConfidenceTracker receives CERTAINTY = abs(2p-1), not this value.
+    /// Keyword bias feeds NEITHER certainty nor this field.
     pub classifier_prob: f32,
     /// Bias flag from SifterOutput.has_bias.
     pub has_bias: bool,

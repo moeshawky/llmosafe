@@ -300,7 +300,7 @@ fn word_in_list(word: &str, list: &[&str]) -> bool {
 }
 
 /// Check if consecutive tokens match a multi-word phrase.
-#[cfg(feature = "std")]
+/// Works in both std and no_std — uses slice indexing only.
 #[inline]
 fn phrase_matches(window: &[&str], phrase_words: &[&str]) -> bool {
     if window.len() < phrase_words.len() {
@@ -356,12 +356,11 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
         if word_in_list(trimmed, EXPERTISE_SIGNALING) {
             breakdown.expertise_signaling = breakdown.expertise_signaling.saturating_add(100);
         }
-        if word_in_list(trimmed, SEMANTIC_TRAPS) {
-            breakdown.semantic_traps = breakdown.semantic_traps.saturating_add(100);
-        }
-        if word_in_list(trimmed, TEMPLATE_FITTING) {
-            breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
-        }
+        // NOTE: SEMANTIC_TRAPS and TEMPLATE_FITTING entries are
+        // all multi-word phrases — they are matched exclusively
+        // in Phase 2 (bounded sliding-window below). Single-token
+        // comparisons here can never match and have been removed
+        // as dead code (see S1 no_std parity fix).
 
         // Attention-emphasis signal: ALL CAPS words (len >= 2) indicate
         // typographic manipulation independent of keyword membership.
@@ -372,19 +371,30 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
         }
     }
 
-    // Phase 2: Multi-word phrase matching (for entries containing spaces).
-    // Requires `std` for Vec allocation. no_std users get single-word detection only.
-    #[cfg(feature = "std")]
+    // Phase 2: Multi-word phrase matching.
+    // Bounded allocation-free sliding-window: uses fixed-size
+    // arrays instead of Vec, so this works in both std and no_std.
+    // Tokens and phrase words are normalized (trimmed, lower-cased
+    // via eq_ignore_ascii_case) and compared without allocation.
     {
-        let tokens: Vec<&str> = text
-            .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| c.is_ascii_punctuation()))
-            .collect();
+        // Collect tokens into a fixed-size array (no allocation).
+        let mut tokens: [&str; 128] = [""; 128];
+        let mut token_count = 0usize;
+        for raw_word in text.split_whitespace() {
+            let trimmed = raw_word.trim_matches(|c: char| c.is_ascii_punctuation());
+            if token_count < 128 {
+                tokens[token_count] = trimmed;
+                token_count += 1;
+            } else {
+                break;
+            }
+        }
 
-        let mut negated_positions = vec![false; tokens.len()];
+        // Compute negation positions into a fixed-size array.
+        let mut negated_positions: [bool; 128] = [false; 128];
         let mut neg_ttl = 0u8;
-        for (i, token) in tokens.iter().enumerate() {
-            let is_neg = word_in_list(token, NEGATION_WORDS);
+        for i in 0..token_count {
+            let is_neg = word_in_list(tokens[i], NEGATION_WORDS);
             let curr_negated = neg_ttl > 0;
             if is_neg {
                 neg_ttl = 6;
@@ -394,21 +404,27 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             negated_positions[i] = curr_negated;
         }
 
-        // Optimization: Lift Vec allocation outside the hot loop and reuse it via
-        // `.clear()` and `.extend()` to avoid dynamic allocations per phrase.
-        let mut phrase_words_buf: Vec<&str> = Vec::new();
+        // Bounded sliding-window phrase matching.
+        // phrase_words_buf is a fixed-size array — no Vec allocation.
+        let mut phrase_words_buf: [&str; 4] = [""; 4];
 
         for phrase in SEMANTIC_TRAPS {
             if !phrase.contains(' ') {
                 continue;
             }
-            phrase_words_buf.clear();
-            phrase_words_buf.extend(phrase.split_whitespace());
-            if tokens
-                .windows(phrase_words_buf.len())
-                .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, &phrase_words_buf))
-            {
+            let mut pw_count = 0usize;
+            for w in phrase.split_whitespace() {
+                if pw_count < 4 {
+                    phrase_words_buf[pw_count] = w;
+                    pw_count += 1;
+                } else {
+                    break;
+                }
+            }
+            let pw_slice = &phrase_words_buf[..pw_count];
+            if (0..=token_count.saturating_sub(pw_count)).any(|i| {
+                !negated_positions[i] && phrase_matches(&tokens[i..i + pw_count], pw_slice)
+            }) {
                 breakdown.semantic_traps = breakdown.semantic_traps.saturating_add(100);
             }
         }
@@ -417,13 +433,19 @@ pub fn get_bias_breakdown(text: &str) -> BiasBreakdown {
             if !phrase.contains(' ') {
                 continue;
             }
-            phrase_words_buf.clear();
-            phrase_words_buf.extend(phrase.split_whitespace());
-            if tokens
-                .windows(phrase_words_buf.len())
-                .enumerate()
-                .any(|(i, w)| !negated_positions[i] && phrase_matches(w, &phrase_words_buf))
-            {
+            let mut pw_count = 0usize;
+            for w in phrase.split_whitespace() {
+                if pw_count < 4 {
+                    phrase_words_buf[pw_count] = w;
+                    pw_count += 1;
+                } else {
+                    break;
+                }
+            }
+            let pw_slice = &phrase_words_buf[..pw_count];
+            if (0..=token_count.saturating_sub(pw_count)).any(|i| {
+                !negated_positions[i] && phrase_matches(&tokens[i..i + pw_count], pw_slice)
+            }) {
                 breakdown.template_fitting = breakdown.template_fitting.saturating_add(100);
             }
         }
@@ -498,12 +520,15 @@ pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
     count.saturating_mul(100).min(u16::MAX as usize) as u16
 }
 
-/// Internal version of `sift_text` that also returns the raw classifier score.
+/// Internal version of `sift_text` that also returns the raw classifier score
+/// and the pure classifier probability (without keyword bias).
 ///
 /// The score is the unbounded logistic regression sum before sigmoid.
 /// Callers that need only the synapse/proof pair should use `sift_text()`.
+/// The classifier_probability is the pure classifier output [0.0, 1.0],
+/// distinct from entropy-derived values that may include keyword-bias boosting.
 #[allow(deprecated)]
-pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedProof, f32) {
+pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedProof, f32, f32) {
     let classification = classify_text(observation);
     let bias = get_bias_breakdown(observation);
 
@@ -530,7 +555,12 @@ pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedP
     let sifted = SiftedSynapse::new(synapse);
     let proof = SiftedProof::mint();
 
-    (sifted, proof, classification.score)
+    (
+        sifted,
+        proof,
+        classification.score,
+        classification.probability,
+    )
 }
 
 /// Canonical single-entry sifter: classifier (adaptive layer) + keyword bias
@@ -556,7 +586,7 @@ pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedP
 /// - `oov_ratio`: u8 — packed into synapse reserved bits 6-13
 /// - `anchor_hash`: u31 — Adler-32 of observation bytes
 pub fn sift_text(observation: &str) -> (SiftedSynapse, SiftedProof) {
-    let (sifted, proof, _score) = sift_text_with_score(observation);
+    let (sifted, proof, _score, _classifier_probability) = sift_text_with_score(observation);
     (sifted, proof)
 }
 
@@ -632,29 +662,29 @@ pub fn sift_perceptions(observations: &[&str], _objective: &str) -> (SiftedSynap
         return (SiftedSynapse::new(synapse), SiftedProof::mint());
     }
 
-    let mut best_entropy: u16 = 0;
-    let mut best_result: Option<(SiftedSynapse, SiftedProof)> = None;
+    // Seed from the first observation so a non-empty batch
+    // with all-zero entropy returns the first item's result,
+    // not the 0xFFFF empty-batch fallback. Empty slice remains
+    // the sole fail-closed sentinel (checked above).
+    let mut best_result = sift_text(observations[0]);
+    let mut best_entropy = best_result.0.raw_entropy();
 
-    for obs in observations {
+    for obs in &observations[1..] {
         let result = sift_text(obs);
         let entropy = result.0.raw_entropy();
         if entropy > best_entropy {
             best_entropy = entropy;
-            best_result = Some(result);
+            best_result = result;
         }
     }
 
-    best_result.unwrap_or_else(|| {
-        let mut synapse = Synapse::new();
-        synapse.set_raw_entropy(0xFFFF);
-        synapse.set_raw_surprise(0);
-        synapse.set_has_bias(false);
-        synapse.set_anchor_hash(0);
-        (SiftedSynapse::new(synapse), SiftedProof::mint())
-    })
+    best_result
 }
 
 mod adler32 {
+    //! The adler32 module contains a 32-bit Adler-32 checksum implementation of
+    //! the observation bytes. Accumulates a = 1 + sum(bytes) and b = sum(a),
+    //! reducing both mod 65521 after each 5552-byte chunk.
     pub fn adler32(data: &[u8]) -> u32 {
         let mut a: u32 = 1;
         let mut b: u32 = 0;
@@ -966,5 +996,123 @@ mod tests {
         assert!(output.has_bias);
         assert_eq!(output.classifier_prob, 0.82);
         assert!(output.oov_ratio > 0);
+    }
+
+    // ── no_std phrase parity tests ─────────────────────────
+    // These tests verify that multi-word phrase matching works
+    // in both std and no_std builds. Without this, SEMANTIC_TRAPS
+    // and TEMPLATE_FITTING (all multi-word entries) could never
+    // fire — the old code gated phrase matching behind
+    // #[cfg(feature = "std")], leaving no_std with dead code.
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_no_std_semantic_traps_phrases_fire() {
+        // "instead of" fires semantic_traps — works in no_std
+        let breakdown = get_bias_breakdown("instead of");
+        assert_eq!(
+            breakdown.semantic_traps, 100,
+            "SEMANTIC_TRAPS multi-word phrases must fire in no_std"
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_no_std_template_fitting_phrases_fire() {
+        // "as an ai" fires template_fitting — works in no_std
+        let breakdown = get_bias_breakdown("as an ai");
+        assert_eq!(
+            breakdown.template_fitting, 100,
+            "TEMPLATE_FITTING multi-word phrases must fire in no_std"
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_no_std_multi_word_combinations() {
+        // Both SEMANTIC_TRAPS and TEMPLATE_FITTING fire together
+        let text = "As an AI, I cannot comply, instead of helping you";
+        let breakdown = get_bias_breakdown(text);
+        assert_eq!(breakdown.template_fitting, 200);
+        assert_eq!(breakdown.semantic_traps, 100);
+    }
+
+    /// Verify single-token comparisons against multi-word lists
+    /// are dead code (removed). A single word like "not" should
+    /// NOT match SEMANTIC_TRAPS/TEMPLATE_FITTING.
+    #[test]
+    #[allow(deprecated)]
+    fn test_dead_single_token_comparisons_removed() {
+        // "not" is a single word; SEMANTIC_TRAPS entries are all
+        // multi-word. The old phase-1 check would have matched
+        // "not" against SEMANTIC_TRAPS (dead code, now removed).
+        // The phrase_matches function requires consecutive tokens.
+        let breakdown = get_bias_breakdown("not");
+        assert_eq!(breakdown.semantic_traps, 0);
+        assert_eq!(breakdown.template_fitting, 0);
+    }
+}
+
+// ── S3: Acronym/emphasis coupling triage ──────────────────────
+//
+// Evidence note: Ordinary all-caps technical tokens (AI, API,
+// HTTP, CPU) flow emphasis → has_bias → fixed validation Halt.
+//
+// File:line trace:
+//   src/llmosafe_sifter.rs:369-370 — emphasis check fires on
+//     any trimmed word that is ≥2 chars and all ASCII-uppercase.
+//     "AI", "API", "HTTP", "CPU" all match → emphasis += 50.
+//   src/llmosafe_sifter.rs:292 — `emphasis` is included in
+//     `BiasBreakdown::total()`, which is summed into bias total.
+//   src/llmosafe_sifter.rs:522 — `has_bias = classification.is_manipulation
+//     || bias.total() > 0`. Since emphasis > 0, bias.total() > 0,
+//     so has_bias = true even for ordinary technical text.
+//   src/llmosafe_pipeline.rs:1087 — `if has_bias {
+//     override_flags |= OverrideFlags::BIAS; }`
+//   src/llmosafe_pipeline.rs:1098-1102 — `apply_safety_overrides()`
+//     with BIAS flag forces Halt (DAL override).
+//
+// This is a dangerous coupling: ordinary technical text like
+// "The AI API HTTP CPU are safe" triggers a Halt solely because
+// of acronym formatting. This is filed as the mandatory first
+// item of the dedicated sifter audit (see project issue tracker).
+// Resolution: the minimal dangerous-coupling correction must
+// either exclude known technical acronyms from the emphasis
+// check, or decouple emphasis from has_bias. Until resolved,
+// this test documents the failure mode.
+#[cfg(test)]
+mod s3_acronym_emphasis_audit {
+    use super::*;
+
+    /// Demonstrates the acronym/emphasis coupling: ordinary
+    /// technical acronyms (AI, API, HTTP, CPU) flow through
+    /// the emphasis pathway into has_bias, which drives
+    /// fixed validation Halt.
+    ///
+    /// This test PASSES and documents the coupling as evidence
+    /// for the mandatory first item of the dedicated sifter
+    /// audit. File:src/llmosafe_sifter.rs:369.
+    #[test]
+    #[allow(deprecated)]
+    fn test_acronym_emphasis_drives_has_bias() {
+        // "AI", "API", "HTTP", "CPU" are ordinary technical
+        // acronyms that match the emphasis check at
+        // src/llmosafe_sifter.rs:369 (all ASCII-uppercase,
+        // len >= 2).
+        let text = "The AI API HTTP CPU are safe";
+        let (sifted, _) = sift_text(text);
+        // Evidence: emphasis > 0 → bias.total() > 0 →
+        // has_bias = true. This is the documented dangerous
+        // coupling (S3 audit item).
+        // When the coupling is resolved by the sifter audit,
+        // this test will need updating.
+        assert!(
+            sifted.has_bias(),
+            "S3 AUDIT: ordinary technical acronyms (AI, API, \
+             HTTP, CPU) trigger has_bias via emphasis pathway \
+             at src/llmosafe_sifter.rs:369. This is the \
+             mandatory first item of the dedicated sifter \
+             audit. File:src/llmosafe_sifter.rs:369"
+        );
     }
 }
