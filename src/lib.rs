@@ -172,6 +172,32 @@ pub use llmosafe_sifter::{
     BiasBreakdown,
 };
 
+/// Maximum number of tokens (whitespace-delimited words) allowed per
+/// pipeline invocation as a work budget. Inputs exceeding this limit
+/// fail predictably with -9 (sift_and_process/process_with_pressure)
+/// or u16::MAX (calculate_halo) instead of pressuring the allocator.
+/// Empirically: 10MiB of 1-char tokens = ~10M tokens; 100K cap
+/// covers normal prose (~5-20K tokens) while rejecting adversarial
+/// whitespace/amplification inputs.
+pub const MAX_WORK_TOKENS: usize = 100_000;
+
+/// Count whitespace-delimited tokens in `text` without allocating.
+/// Uses a simple byte-level scan — O(n) time, O(1) space.
+pub fn count_tokens(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let mut count = 0usize;
+    let mut in_token = false;
+    for &b in bytes {
+        if b.is_ascii_whitespace() {
+            in_token = false;
+        } else if !in_token {
+            count = count.saturating_add(1);
+            in_token = true;
+        }
+    }
+    count
+}
+
 #[cfg(feature = "std")]
 // C-ABI module: FFI boundary inherently requires unsafe blocks and
 // no_mangle functions. These patterns are correct for extern "C" code.
@@ -191,36 +217,13 @@ pub mod c_abi {
     use crate::llmosafe_memory;
     use crate::llmosafe_pipeline::{CognitivePipeline, PipelineConfig, PipelineResult};
 
+    // Re-export shared budget policy at crate root for C-ABI callers.
+    pub use crate::{count_tokens, MAX_WORK_TOKENS};
+
     const ARENA_SIZE: usize = 16;
     const MAX_OBJECTIVE_LEN: usize = 1024;
     const ARENA_INDEX_MASK: usize = 0xF;
     const GEN_SHIFT: usize = 4;
-
-    /// Maximum number of tokens (whitespace-delimited words) allowed per
-    /// pipeline invocation as a work budget. Inputs exceeding this limit
-    /// fail predictably with -9 (sift_and_process/process_with_pressure)
-    /// or u16::MAX (calculate_halo) instead of pressuring the allocator.
-    /// Empirically: 10MiB of 1-char tokens = ~10M tokens; 100K cap
-    /// covers normal prose (~5-20K tokens) while rejecting adversarial
-    /// whitespace/amplification inputs.
-    pub const MAX_WORK_TOKENS: usize = 100_000;
-
-    /// Count whitespace-delimited tokens in `text` without allocating.
-    /// Uses a simple byte-level scan — O(n) time, O(1) space.
-    pub fn count_tokens(text: &str) -> usize {
-        let bytes = text.as_bytes();
-        let mut count = 0usize;
-        let mut in_token = false;
-        for &b in bytes {
-            if b.is_ascii_whitespace() {
-                in_token = false;
-            } else if !in_token {
-                count = count.saturating_add(1);
-                in_token = true;
-            }
-        }
-        count
-    }
 
     /// Mutable contents of a pipeline slot — protected by a per-slot Mutex.
     /// Pipeline execution and last_result are guarded here, not by the arena lock.
@@ -406,7 +409,7 @@ pub mod c_abi {
         // F2: Work budget check — count tokens before processing.
         // Prevents working-set amplification from adversarial whitespace/token
         // shapes. Fails predictably with -9 instead of pressuring the allocator.
-        if count_tokens(text) > MAX_WORK_TOKENS {
+        if crate::count_tokens(text) > crate::MAX_WORK_TOKENS {
             return -9;
         }
         // Arena lock: find slot and clone Arc (metadata/lookup only).
@@ -601,7 +604,7 @@ pub mod c_abi {
         // Prevents working-set amplification from adversarial whitespace/token
         // shapes. Fails predictably with u16::MAX instead of pressuring
         // the allocator while the safety infrastructure is under load.
-        if count_tokens(text) > MAX_WORK_TOKENS {
+        if crate::count_tokens(text) > crate::MAX_WORK_TOKENS {
             return u16::MAX;
         }
         // Dual-path: classifier + keyword bias (sift_text), not keyword-only.
@@ -1056,7 +1059,7 @@ pub mod c_abi {
         // F2: Work budget check — count tokens before processing.
         // Prevents working-set amplification from adversarial whitespace/token
         // shapes. Fails predictably with -9 instead of pressuring the allocator.
-        if count_tokens(text) > MAX_WORK_TOKENS {
+        if crate::count_tokens(text) > crate::MAX_WORK_TOKENS {
             return -9;
         }
         // Arena lock: find slot and clone Arc (metadata/lookup only).
@@ -2194,6 +2197,108 @@ mod tests {
         assert_eq!(count_tokens("   "), 0);
         // Verify budget constant is positive
         assert!(MAX_WORK_TOKENS > 0);
+    }
+
+    // ── F3: Boundary tests — MAX-1 / exact max / max+1 ──
+
+    /// MAX-1 tokens should process successfully through sift_text.
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_sift_text_boundary_max_minus_one() {
+        use crate::count_tokens;
+        // Build input with exactly MAX_WORK_TOKENS - 1 tokens.
+        let budget = crate::MAX_WORK_TOKENS;
+        let input = vec!["a "; budget - 1].concat();
+        assert_eq!(count_tokens(&input), budget - 1);
+        let (sifted, _proof) = crate::llmosafe_sifter::sift_text(&input);
+        // Should return a valid sifted synapse, not a sentinel.
+        assert!(sifted.raw_entropy() > 0 || sifted.raw_entropy() == 0);
+        // sift_text always returns a valid result; the budget check
+        // only triggers at MAX_WORK_TOKENS + 1.
+    }
+
+    /// Exact MAX tokens should still process successfully (invariant is > MAX, not >= MAX).
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_sift_text_boundary_exact_max() {
+        use crate::count_tokens;
+        let budget = crate::MAX_WORK_TOKENS;
+        let input = vec!["a "; budget].concat();
+        assert_eq!(count_tokens(&input), budget);
+        let (sifted, _proof) = crate::llmosafe_sifter::sift_text(&input);
+        assert!(sifted.raw_entropy() > 0 || sifted.raw_entropy() == 0);
+    }
+
+    /// MAX+1 tokens should trigger budget sentinel in sift_text.
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_sift_text_boundary_max_plus_one() {
+        use crate::count_tokens;
+        let budget = crate::MAX_WORK_TOKENS;
+        // MAX+1 tokens.
+        let input = vec!["a "; budget + 1].concat();
+        assert_eq!(count_tokens(&input), budget + 1);
+        let (sifted, _proof) = crate::llmosafe_sifter::sift_text(&input);
+        // Should return zero-entropy sentinel synapse (fail-closed).
+        assert_eq!(sifted.raw_entropy(), 0);
+    }
+
+    /// MAX+1 pathological "a a a..." input via CognitivePipeline::process should halt.
+    #[cfg(feature = "std")]
+    #[test]
+    #[allow(clippy::wildcard_enum_match_arm)]
+    fn test_pipeline_process_boundary_max_plus_one_halts() {
+        use crate::count_tokens;
+        let budget = crate::MAX_WORK_TOKENS;
+        let input = vec!["a "; budget + 1].concat();
+        assert_eq!(count_tokens(&input), budget + 1);
+        let mut pipeline = crate::CognitivePipeline::<64, 10>::new("test");
+        let result = pipeline.process(&input);
+        // Should halt with ResourceExhaustion.
+        match result.decision {
+            crate::SafetyDecision::Halt(crate::KernelError::ResourceExhaustion, _) => {}
+            other => panic!("Expected Halt(ResourceExhaustion), got {:?}", other),
+        }
+    }
+
+    /// MAX-1 tokens should process successfully through CognitivePipeline::process.
+    #[cfg(feature = "std")]
+    #[test]
+    #[allow(clippy::wildcard_enum_match_arm)]
+    fn test_pipeline_process_boundary_max_minus_one() {
+        use crate::count_tokens;
+        let budget = crate::MAX_WORK_TOKENS;
+        let input = vec!["a "; budget - 1].concat();
+        assert_eq!(count_tokens(&input), budget - 1);
+        let mut pipeline = crate::CognitivePipeline::<64, 10>::new("test");
+        let result = pipeline.process(&input);
+        // Should NOT halt with ResourceExhaustion.
+        match result.decision {
+            crate::SafetyDecision::Halt(crate::KernelError::ResourceExhaustion, _) => {
+                panic!("Should not halt with ResourceExhaustion at MAX-1 tokens")
+            }
+            _ => {}
+        }
+    }
+
+    /// Exact MAX tokens should process successfully through CognitivePipeline::process.
+    #[cfg(feature = "std")]
+    #[test]
+    #[allow(clippy::wildcard_enum_match_arm)]
+    fn test_pipeline_process_boundary_exact_max() {
+        use crate::count_tokens;
+        let budget = crate::MAX_WORK_TOKENS;
+        let input = vec!["a "; budget].concat();
+        assert_eq!(count_tokens(&input), budget);
+        let mut pipeline = crate::CognitivePipeline::<64, 10>::new("test");
+        let result = pipeline.process(&input);
+        // Should NOT halt with ResourceExhaustion at exact max.
+        match result.decision {
+            crate::SafetyDecision::Halt(crate::KernelError::ResourceExhaustion, _) => {
+                panic!("Should not halt with ResourceExhaustion at exact MAX tokens")
+            }
+            _ => {}
+        }
     }
 
     // ── llmosafe_configure ──

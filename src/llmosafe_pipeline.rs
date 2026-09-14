@@ -714,6 +714,13 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
     ) -> PipelineResult {
         use crate::llmosafe_integration::PressureLevel;
 
+        // Single preflight: bounded-work budget check.
+        // Prevents working-set amplification from adversarial whitespace/token
+        // shapes. Fails closed with ResourceExhaustion halt.
+        if crate::count_tokens(observation) > crate::MAX_WORK_TOKENS {
+            return self.ctrl_result_from_error(KernelError::ResourceExhaustion, 0, 0, 0, 0, false);
+        }
+
         // Pre-SIFT pressure gate: map pressure to PressureLevel.
         // If pressure is Critical or Emergency, short-circuit before SIFT
         // via decide_with_pressure(). This is the documented safety
@@ -879,6 +886,12 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
     /// `e_body` is the normalised body pressure error [0.0, 1.0] from BodyOutput.
     /// `pressure` is the resource pressure percentage [0, 100], passed for diagnostics.
     pub fn process_ctrl(&mut self, observation: &str, e_body: f32, pressure: u8) -> PipelineResult {
+        // Single preflight: bounded-work budget check.
+        // Prevents working-set amplification from adversarial whitespace/token
+        // shapes. Fails closed with ResourceExhaustion halt.
+        if crate::count_tokens(observation) > crate::MAX_WORK_TOKENS {
+            return self.ctrl_result_from_error(KernelError::ResourceExhaustion, 0, 0, 0, 0, false);
+        }
         let _pressure = pressure; // Only used in test/diagnostics in some configurations
         let mut stages = 0u8;
 

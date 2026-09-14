@@ -73,7 +73,8 @@ use crate::llmosafe_kernel::U16_MAX_F32;
 /// - `0.0 ≤ error_sift ≤ 1.0`
 /// - `0 ≤ raw_entropy ≤ 65535`
 /// - `has_bias == classification.is_manipulation` (classifier-only path;
-///   `sift_text()` OR-s the keyword-bias breakdown into its output)
+///   `sift_text()` OR-s the keyword hard-bias breakdown into its output);
+///   typographic `emphasis` is soft evidence only and never sets `has_bias`)
 #[derive(Debug, Clone, Copy)]
 pub struct SifterOutput {
     /// Error signal = classifier probability (setpoint=0).
@@ -279,7 +280,7 @@ pub struct BiasBreakdown {
 }
 
 impl BiasBreakdown {
-    /// Total bias score across all categories.
+    /// Total bias score across all categories including typographic emphasis.
     pub fn total(&self) -> u16 {
         self.authority
             .saturating_add(self.social_proof)
@@ -290,6 +291,23 @@ impl BiasBreakdown {
             .saturating_add(self.semantic_traps)
             .saturating_add(self.template_fitting)
             .saturating_add(self.emphasis)
+    }
+
+    /// Hard bias total across manipulation categories only.
+    /// Excludes typographic `emphasis` — emphasis is soft heuristic
+    /// evidence that may contribute to soft scoring (entropy, telemetry,
+    /// PID input) but must NEVER independently trigger a hard BIAS
+    /// override or set `has_bias`. All-caps acronyms like "AI",
+    /// "API", "HTTP", "CPU" fire the emphasis pathway but not hard bias.
+    pub fn hard_total(&self) -> u16 {
+        self.authority
+            .saturating_add(self.social_proof)
+            .saturating_add(self.scarcity)
+            .saturating_add(self.urgency)
+            .saturating_add(self.emotional_appeal)
+            .saturating_add(self.expertise_signaling)
+            .saturating_add(self.semantic_traps)
+            .saturating_add(self.template_fitting)
     }
 }
 
@@ -541,7 +559,7 @@ pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedP
     let entropy = classifier_entropy.max(keyword_boost);
 
     let surprise = (U16_MAX_F32 * classification.oov_ratio.clamp(0.0, 1.0)) as u16;
-    let has_bias = classification.is_manipulation || bias.total() > 0;
+    let has_bias = classification.is_manipulation || bias.hard_total() > 0;
 
     let mut synapse = Synapse::new();
     synapse.set_raw_entropy(entropy);
@@ -582,10 +600,19 @@ pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedP
 ///   the greater of the adaptive (classifier) and innate (keyword) layers
 /// - `raw_surprise`: u16 — `classifier.oov_ratio * 65535` (classifier
 ///   uncertainty — how much vocabulary the model doesn't recognize)
-/// - `has_bias`: bool — `classifier.is_manipulation || bias_breakdown.total() > 0`
+/// - `has_bias`: bool — `classifier.is_manipulation || bias_breakdown.hard_total() > 0`
+///   (hard manipulation categories only; typographic `emphasis` is soft
+///   evidence that may contribute to entropy/telemetry but never sets
+///   `has_bias` independently)
 /// - `oov_ratio`: u8 — packed into synapse reserved bits 6-13
 /// - `anchor_hash`: u31 — Adler-32 of observation bytes
 pub fn sift_text(observation: &str) -> (SiftedSynapse, SiftedProof) {
+    // Single preflight: bounded-work budget check.
+    // Prevents working-set amplification from adversarial whitespace/token
+    // shapes. Fails closed with a zero-entropy sentinel synapse.
+    if crate::count_tokens(observation) > crate::MAX_WORK_TOKENS {
+        return (SiftedSynapse::new(Synapse::new()), SiftedProof::mint());
+    }
     let (sifted, proof, _score, _classifier_probability) = sift_text_with_score(observation);
     (sifted, proof)
 }
@@ -597,7 +624,7 @@ pub fn sift_text(observation: &str) -> (SiftedSynapse, SiftedProof) {
 /// tokenization. The keyword-bias pathway is the innate immune backstop:
 /// even if classifier is compromised, keyword pattern-matching flags text with
 /// known manipulation markers. Entropy is `max(classifier_entropy, keyword_boost)`,
-/// and bias is `classifier.is_manipulation || bias_breakdown.total() > 0`.
+/// and bias is `classifier.is_manipulation || bias_breakdown.hard_total() > 0`.
 #[allow(deprecated)]
 pub fn sift_observation(
     classification: &ClassificationResult,
@@ -614,7 +641,7 @@ pub fn sift_observation(
     let entropy = classifier_entropy.max(keyword_boost);
 
     let surprise = (U16_MAX_F32 * classification.oov_ratio.clamp(0.0, 1.0)) as u16;
-    let has_bias = classification.is_manipulation || bias.total() > 0;
+    let has_bias = classification.is_manipulation || bias.hard_total() > 0;
 
     let mut synapse = Synapse::new();
     synapse.set_raw_entropy(entropy);
@@ -1053,66 +1080,119 @@ mod tests {
     }
 }
 
-// ── S3: Acronym/emphasis coupling triage ──────────────────────
+// ── S3: Acronym/emphasis decoupling resolution ──────
 //
-// Evidence note: Ordinary all-caps technical tokens (AI, API,
-// HTTP, CPU) flow emphasis → has_bias → fixed validation Halt.
+// Resolution: emphasis is decoupled from hard bias.
+// `has_bias` now uses `bias.hard_total() > 0` which excludes
+// typographic `emphasis`. The invariant
+// `has_bias == classification.is_manipulation` is restored.
 //
-// File:line trace:
-//   src/llmosafe_sifter.rs:369-370 — emphasis check fires on
-//     any trimmed word that is ≥2 chars and all ASCII-uppercase.
-//     "AI", "API", "HTTP", "CPU" all match → emphasis += 50.
-//   src/llmosafe_sifter.rs:292 — `emphasis` is included in
-//     `BiasBreakdown::total()`, which is summed into bias total.
-//   src/llmosafe_sifter.rs:522 — `has_bias = classification.is_manipulation
-//     || bias.total() > 0`. Since emphasis > 0, bias.total() > 0,
-//     so has_bias = true even for ordinary technical text.
-//   src/llmosafe_pipeline.rs:1087 — `if has_bias {
-//     override_flags |= OverrideFlags::BIAS; }`
-//   src/llmosafe_pipeline.rs:1098-1102 — `apply_safety_overrides()`
-//     with BIAS flag forces Halt (DAL override).
-//
-// This is a dangerous coupling: ordinary technical text like
-// "The AI API HTTP CPU are safe" triggers a Halt solely because
-// of acronym formatting. This is filed as the mandatory first
-// item of the dedicated sifter audit (see project issue tracker).
-// Resolution: the minimal dangerous-coupling correction must
-// either exclude known technical acronyms from the emphasis
-// check, or decouple emphasis from has_bias. Until resolved,
-// this test documents the failure mode.
+// File:line trace after fix:
+//   src/llmosafe_sifter.rs:296-305 — `hard_total()` sums all
+//     manipulation categories EXCEPT `emphasis`.
+//   src/llmosafe_sifter.rs:559 — `has_bias = classification.is_manipulation
+//     || bias.hard_total() > 0`. Emphasis no longer sets has_bias.
+//   src/llmosafe_sifter.rs:553-556 — `keyword_boost` still uses
+//     `bias.total() > 0` (includes emphasis), so emphasis continues
+//     to contribute to soft scoring (entropy/telemetry/PID input).
+//   src/llmosafe_pipeline.rs:1099 — `if has_bias { ... BIAS }`
+//     now correctly only triggers on genuine hard bias.
 #[cfg(test)]
 mod s3_acronym_emphasis_audit {
     use super::*;
 
-    /// Demonstrates the acronym/emphasis coupling: ordinary
-    /// technical acronyms (AI, API, HTTP, CPU) flow through
-    /// the emphasis pathway into has_bias, which drives
-    /// fixed validation Halt.
+    /// FIX VERIFIED: ordinary technical acronyms (AI, API, HTTP, CPU)
+    /// no longer trigger `has_bias` via the emphasis pathway.
     ///
-    /// This test PASSES and documents the coupling as evidence
-    /// for the mandatory first item of the dedicated sifter
-    /// audit. File:src/llmosafe_sifter.rs:369.
+    /// Emphasis is still detected and contributes to soft scoring
+    /// (via `bias.total()` which feeds `keyword_boost` and entropy),
+    /// but `has_bias` uses `bias.hard_total() > 0` which excludes
+    /// emphasis. This restores the invariant
+    /// `has_bias == classification.is_manipulation`.
     #[test]
     #[allow(deprecated)]
-    fn test_acronym_emphasis_drives_has_bias() {
+    fn test_acronym_emphasis_no_longer_drives_has_bias() {
         // "AI", "API", "HTTP", "CPU" are ordinary technical
         // acronyms that match the emphasis check at
         // src/llmosafe_sifter.rs:369 (all ASCII-uppercase,
         // len >= 2).
         let text = "The AI API HTTP CPU are safe";
         let (sifted, _) = sift_text(text);
-        // Evidence: emphasis > 0 → bias.total() > 0 →
-        // has_bias = true. This is the documented dangerous
-        // coupling (S3 audit item).
-        // When the coupling is resolved by the sifter audit,
-        // this test will need updating.
+        // After the fix, emphasis no longer sets has_bias.
+        // The invariant has_bias == classification.is_manipulation
+        // is restored — ordinary acronyms do not trigger hard bias.
+        assert!(
+            !sifted.has_bias(),
+            "FIXED: ordinary technical acronyms (AI, API, HTTP, CPU) \
+             must NOT trigger has_bias via emphasis pathway. \
+             Emphasis is soft evidence only; hard_bias uses \
+             hard_total() which excludes emphasis."
+        );
+        // But emphasis still contributes to soft scoring (total > 0)
+        let breakdown = get_bias_breakdown(text);
+        assert!(
+            breakdown.emphasis > 0,
+            "emphasis should still be detected for ALL-CAPS words"
+        );
+        assert!(
+            breakdown.total() > 0,
+            "total() (including emphasis) should still be > 0 \
+             for soft scoring/telemetry"
+        );
+        assert!(
+            breakdown.hard_total() == 0,
+            "hard_total() (excluding emphasis) must be 0 \
+             for ordinary technical acronyms"
+        );
+    }
+
+    /// Genuine manipulation/bias cases that set hard bias before
+    /// still do. Keywords like "expert", "guaranteed", etc. are
+    /// in the hard-bias categories and fire hard_total() > 0.
+    #[test]
+    #[allow(deprecated)]
+    fn test_genuine_manipulation_still_sets_hard_bias() {
+        let text = "The expert provided a guaranteed professional opinion";
+        let (sifted, _) = sift_text(text);
+        // Authority + expertise + guaranteed keyword bias → hard bias
         assert!(
             sifted.has_bias(),
-            "S3 AUDIT: ordinary technical acronyms (AI, API, \
-             HTTP, CPU) trigger has_bias via emphasis pathway \
-             at src/llmosafe_sifter.rs:369. This is the \
-             mandatory first item of the dedicated sifter \
-             audit. File:src/llmosafe_sifter.rs:369"
+            "genuine manipulation must still set has_bias via hard_total()"
         );
+        let breakdown = get_bias_breakdown(text);
+        assert!(
+            breakdown.hard_total() > 0,
+            "genuine manipulation must fire hard_total() > 0"
+        );
+    }
+
+    /// ALL-CAPS emphasis can still raise soft risk if retained.
+    /// Emphasis contributes to `bias.total()` which feeds
+    /// `keyword_boost` and entropy — soft scoring, telemetry,
+    /// and PID input, but never independently triggers the
+    /// BIAS override or Halt.
+    #[test]
+    #[allow(deprecated)]
+    fn test_emphasis_still_contributes_to_soft_scoring() {
+        let text = "THE QUICK BROWN FOX";
+        let breakdown = get_bias_breakdown(text);
+        // All-caps words trigger emphasis
+        assert!(
+            breakdown.emphasis > 0,
+            "ALL-CAPS words must still trigger emphasis detection"
+        );
+        // Emphasis contributes to total() for soft scoring
+        assert!(
+            breakdown.total() > 0,
+            "emphasis must still contribute to total() for soft scoring"
+        );
+        // But hard_total() excludes emphasis
+        assert!(
+            breakdown.hard_total() == 0,
+            "emphasis must NOT contribute to hard_total()"
+        );
+        // And has_bias must not be set by emphasis alone
+        let (sifted, _) = sift_text(text);
+        assert!(!sifted.has_bias(), "emphasis alone must NOT set has_bias");
     }
 }
