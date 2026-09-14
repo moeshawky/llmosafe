@@ -3,7 +3,7 @@
 Example: Python bindings for llmosafe via ctypes
 This demonstrates how to call llmosafe from Python using the C-ABI.
 Requirements:
-  cargo build --release --features ffi
+cargo build --release --features full
   LD_LIBRARY_PATH=./target/release python3 examples/python_consumer/main.py
 """
 import ctypes
@@ -15,13 +15,13 @@ import sys
 lib_path = os.path.join(os.path.dirname(__file__), '..', '..', 'target', 'release', 'libllmosafe.so')
 if not os.path.exists(lib_path):
     print(f"Library not found at {lib_path}")
-    print("Build with: cargo build --release --features ffi")
+    print("Build with: cargo build --release --features full")
     sys.exit(1)
 
 llmosafe = ctypes.CDLL(lib_path)
 
 # Define function signatures
-llmosafe.llmosafe_process_synapse.argtypes = [ctypes.c_uint64]
+llmosafe.llmosafe_process_synapse.argtypes = [ctypes.c_uint64]  # u128 synapse: c_uint64 is the widest available in ctypes; values >2^64-1 will truncate. Use make_synapse() from the Rust crate or split into high/low u64 for full 128-bit fidelity.
 llmosafe.llmosafe_process_synapse.restype = ctypes.c_int32
 
 llmosafe.llmosafe_calculate_halo.argtypes = [ctypes.c_char_p, ctypes.c_size_t]

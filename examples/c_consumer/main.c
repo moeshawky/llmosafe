@@ -4,7 +4,7 @@
  * Demonstrates calling llmosafe from C using the C-ABI.
  * 
  * Build with:
- *   cargo build --release --features ffi
+ *   cargo build --release --features full
  *   gcc -o c_harness examples/c_consumer/main.c -L./target/release -lllmosafe -lpthread -ldl -lm
  *   LD_LIBRARY_PATH=./target/release ./c_harness
  */
@@ -14,13 +14,13 @@
 #include <string.h>
 
 // C-ABI declarations
-extern int32_t llmosafe_process_synapse(uint64_t synapse_bits);
+extern int32_t llmosafe_process_synapse(unsigned __int128 synapse_bits);
 extern uint16_t llmosafe_calculate_halo(const char* text, size_t text_len);
 extern int32_t llmosafe_check_resources(uint32_t ceiling_mb);
 extern uint8_t llmosafe_get_resource_pressure(uint32_t ceiling_mb);
-extern int32_t llmosafe_get_stability(uint64_t synapse_bits);
+extern int32_t llmosafe_get_stability(unsigned __int128 synapse_bits);
 extern uint8_t llmosafe_get_system_cpu_load();
-extern uint16_t llmosafe_get_environmental_entropy();
+// extern uint16_t llmosafe_get_environmental_entropy(); // NOT a C-ABI export; use llmosafe_get_resource_pressure / llmosafe_get_system_cpu_load
 
 void print_separator(const char* title) {
     printf("\n=== %s ===\n\n", title);

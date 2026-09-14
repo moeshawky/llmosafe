@@ -109,6 +109,17 @@ match result.decision {
                         │ (SiftedSynapse, SiftedProof)
                         ▼
 ┌──────────────────────────────────────────────────────────────┐
+│ ADVERSARY CHECK — Pre-KERNEL adversarial pattern detection    │
+│                                                              │
+│  • Runs BEFORE the kernel bias gate so FLAG_ADVERSARIAL     │
+│    is set even when Stage 3 (BiasHalo) short-circuits       │
+│  • is_adversarial(): exact-match against built-in patterns   │
+│  • detect_substrings(): substring detection (std-only)      │
+│  • Result consumed at DETECTION stage to set FLAG_ADVERSARIAL│
+└───────────────────────┬──────────────────────────────────────┘
+                        │ (FLAG_ADVERSARIAL in detection_flags)
+                        ▼
+┌──────────────────────────────────────────────────────────────┐
 │ WORKING MEMORY (Tier 2) — Surprise Gating                    │
 │                                                              │
 │  • Surprise-gated updates: reject unexpected results         │
@@ -122,17 +133,41 @@ match result.decision {
 │                                                              │
 │  • Cognitive entropy: 0–65535 range                        │
 │  • Binary entropy: H(p) = 4p(1-p), peaks at p=0.5           │
+│    p is the classifier manipulation probability feeding      │
+│    PidInput; distinct from certainty abs(2p-1) feeding      │
+│    ConfidenceTracker                                       │
 │  • Bounded loops: ReasoningLoop<MAX_STEPS>                   │
 │  • STABILITY_THRESHOLD: 50000                                │
 └───────────────────────┬──────────────────────────────────────┘
                         │
                         ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ DETECTION LAYER — 5 Detectors, 6 Flags (wired into CognitivePipeline) │
+│ DETECTION — 5 Detectors, 6 Flags (wired into CognitivePipeline)│
 │                                                              │
 │  • Stuck (repetition)  • Drifting (goal shift)               │
-│  • Low Confidence      • Decaying (confidence collapse)      │
+│  • Low Confidence      • Decaying (confidence collapse)       │
 │  • Anomaly (CUSUM)     • Adversarial (pattern matching)      │
+│  • Flags packed into synapse reserved bits 0-5              │
+└───────────────────────┬──────────────────────────────────────┘
+                        │
+                        ▼
+┌──────────────────────────────────────────────────────────────┐
+│ PID — Proportional-Integral-Derivative-FeedForward Controller │
+│                                                              │
+│  • compute_pid_score_pure() + apply_safety_overrides()       │
+│    (DAL-gated: hard limits enforced when dal feature active)  │
+│  • Risk score mapped to SafetyDecision via thresholds       │
+│  • Anti-windup: integrators bleed at 0.999× when            │
+│    risk >= halt_gain                                        │
+│  • Sidechain: detection flags modulate gains [0.5, 2.0]     │
+└───────────────────────┬──────────────────────────────────────┘
+                        │
+                        ▼
+┌──────────────────────────────────────────────────────────────┐
+│ MONITOR — DynamicStabilityMonitor (advisory only)            │
+│                                                              │
+│  • Records entropy envelope for stability tracking           │
+│  • Feeds KERNEL_UNSTABLE override when non-Stable            │
 └───────────────────────┬──────────────────────────────────────┘
                         │
                         ▼
@@ -141,11 +176,16 @@ match result.decision {
 │                                                              │
 │  • RSS memory monitoring                                     │
 │  • CPU load tracking                                         │
+│  • e_body (normalised BodyOutput) vs body_stress (composite)│
+│    — e_body feeds PID as the P-term; body_stress is the     │
+│      separate weighted composite (RSS 50%, IO wait 25%, CPU) │
 │  • Linux + Windows (std feature)                             │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 Tiers 1-3 are `#![no_std]` + zero-alloc. Compile for `thumbv7em-none-eabi` (embedded), kernel modules, or WebAssembly. No heap. No dynamic dispatch. No unwinding.
+
+**Decision-gate toggle** (`use_detection_gate`): When true, routes decisions through `decide_from_detection()` (first-match-wins: Anomaly > Adversarial > Drifting > Stuck > Confidence) instead of the PID weighted summation path. The detection-gate path avoids PID integrator state entirely — simpler and faster, but does not remember past observations beyond what detectors track. Default: false (PID path). Only available with `std` feature.
 
 ---
 
@@ -196,7 +236,7 @@ if !result.is_safe() {
 
 Entropy measures cognitive uncertainty using **binary entropy**: H(p) = 4p(1-p), scaled to 0–65535.
 
-The formula peaks at p=0.5 (maximum uncertainty — classifier can't decide) and drops to 0 at both extremes (p=0 = confident it's safe, p=1 = confident it's dangerous). Unlike the old linear complement (1-p), binary entropy correctly treats both safety-confidence and danger-confidence as **low-entropy states**.
+Here p is the classifier manipulation probability (the same p feeding PidInput as the F-term), distinct from certainty abs(2p−1) which feeds ConfidenceTracker. The formula peaks at p=0.5 (maximum uncertainty — classifier can't decide) and drops to 0 at both extremes (p=0 = confident it's safe, p=1 = confident it's dangerous). Unlike the old linear complement (1-p), binary entropy correctly treats both safety-confidence and danger-confidence as **low-entropy states**.
 
 ```ignore
 // STABILITY_THRESHOLD = 50000, PRESSURE_THRESHOLD = 40000

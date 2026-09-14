@@ -18,7 +18,7 @@
 //!
 //! # Anti-windup
 //!
-//! Integrators freeze when risk >= halt_gain, preventing meaningless accumulation
+//! Integrators bleed at 0.999× when risk >= halt_gain, preventing meaningless accumulation
 //! during Halt state and avoiding the halt→recovery→re-halt loop.
 //!
 //! # Sidechain
@@ -815,7 +815,7 @@ mod tests {
     // ── Anti-windup tests ────────────────────────────────────────
 
     #[test]
-    fn anti_windup_freezes_integrator_when_risk_at_halt() {
+    fn anti_windup_bleeds_integrator_when_risk_at_halt() {
         let mut state = PidState::new();
         state.acute_entropy = 1.0;
         state.chronic_entropy = 1.0;

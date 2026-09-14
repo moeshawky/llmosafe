@@ -1,4 +1,4 @@
-//! `CognitivePipeline` — 5-stage sequential safety pipeline.
+//! `CognitivePipeline` — seven-stage sequential safety pipeline.
 //!
 //! Wires the sifter, working memory, kernel, 5 detectors, dynamic stability
 //! monitor, PID controller, and escalation policy into a single cascade that
@@ -49,7 +49,7 @@
 //!
 //! # Processing Modes
 //!
-//! - `process(observation)` — standard 5-stage pipeline
+//! - `process(observation)` — standard seven-stage pipeline
 //! - `process_with_pressure(observation, body_entropy, pressure)` — adds resource
 //!   body pre-gate before SIFT
 //! - `process_ctrl(observation, e_body, pressure)` — control-theory composition
@@ -570,7 +570,7 @@ impl PipelineResult {
     }
 }
 
-/// Five-stage cognitive safety pipeline.
+/// Seven-stage cognitive safety pipeline.
 ///
 /// Owns one instance of each safety component and orchestrates them through
 /// sequential stages: SIFT → MEMORY → KERNEL → DETECTION → MONITOR.
@@ -669,7 +669,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         })
     }
 
-    /// Processes an observation through the full 5-stage pipeline.
+    /// Processes an observation through the full seven-stage pipeline.
     ///
     /// # Stages
     ///
