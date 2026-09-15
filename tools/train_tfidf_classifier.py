@@ -223,7 +223,8 @@ def main():
     val_path = Path("/tmp/opencode/sifter-tournament/manifests/validation/rows.jsonl")
     ood_path = Path("/tmp/opencode/sifter-tournament/manifests/ood_non_english/rows.jsonl")
     tech_path = Path("/tmp/opencode/sifter-tournament/manifests/technical_quoted/rows.jsonl")
-    sealed_path = Path("/tmp/opencode/sifter-tournament/sealed/sealed_holdout.jsonl")
+    historical_release_holdout_v1_path = Path("/tmp/opencode/sifter-tournament/sealed/sealed_holdout.jsonl")
+    # NOTE: on-disk sealed/ dir is outside repo and absent (ls verified); only code identifiers renamed.
 
     vocab_model_path = tools_dir / "vocab_model.bin"
     hash_path = tools_dir / "vocab_model.bin.sha256"
@@ -238,7 +239,7 @@ def main():
     val_records = load_jsonl(str(val_path)) if val_path.exists() else []
     ood_records = load_jsonl(str(ood_path)) if ood_path.exists() else []
     tech_records = load_jsonl(str(tech_path)) if tech_path.exists() else []
-    sealed_records = load_jsonl(str(sealed_path)) if sealed_path.exists() else []
+    historical_release_holdout_v1_records = load_jsonl(str(historical_release_holdout_v1_path)) if historical_release_holdout_v1_path.exists() else []
 
     train_manifest_hash = sha256_file(train_path)
     cal_manifest_hash = sha256_file(cal_path)
@@ -248,7 +249,7 @@ def main():
     cal_dataset_hash = hashlib.sha256("".join(sorted(cal_hashes)).encode()).hexdigest()
 
     print(f"\nData loaded: train={len(train_records)} cal={len(cal_records)} val={len(val_records)} "
-          f"ood={len(ood_records)} tech={len(tech_records)} sealed={len(sealed_records)}")
+          f"ood={len(ood_records)} tech={len(tech_records)} historical_release_holdout_v1={len(historical_release_holdout_v1_records)}")
     print(f"Manifest hashes: train={train_manifest_hash[:16]}... cal={cal_manifest_hash[:16]}...")
 
     # === PASS 1 ===
@@ -348,7 +349,7 @@ def main():
     all_evals = {}
     for split_name, records in [("train", train_records), ("calibration", cal_records),
                                 ("validation", val_records), ("ood_non_english", ood_records),
-                                ("technical_quoted", tech_records), ("sealed_holdout", sealed_records)]:
+                                ("technical_quoted", tech_records), ("historical_release_holdout_v1", historical_release_holdout_v1_records)]:
         if not records:
             continue
         labels = np.array([1 if r.get('label_binary', r.get('label', 0)) == 1 else 0 for r in records], dtype=np.int64)
@@ -395,7 +396,7 @@ def main():
         "val_rows": len(val_records),
         "ood_rows": len(ood_records),
         "tech_rows": len(tech_records),
-        "sealed_rows": len(sealed_records),
+        "historical_release_holdout_v1_rows": len(historical_release_holdout_v1_records),
         "vocab_size": len(vocab_features),
         "threshold": float(threshold),
         "intercept": intercept,
@@ -415,7 +416,7 @@ def main():
     # Store records for TRAINING_REPORT generation
     all_records = {
         "train": train_records, "cal": cal_records, "val": val_records,
-        "ood": ood_records, "tech": tech_records, "sealed": sealed_records,
+        "ood": ood_records, "tech": tech_records, "historical_release_holdout_v1": historical_release_holdout_v1_records,
     }
     with open(artifact_dir / "all_records.json", 'w') as f:
         json.dump(all_records, f)
@@ -423,7 +424,8 @@ def main():
     print(f"\n{'='*60}")
     print(f"TRAINING COMPLETE — vocab_model.bin written to {vocab_model_path}")
     print(f"Determinism: {'PROVEN ✅' if determinism else 'FAILED ❌'}")
-    print(f"Sealed holdout F1: {all_evals.get('sealed_holdout', {}).get('f1', 'N/A')}")
+    print(f"Historical release holdout v1 F1: {all_evals.get('historical_release_holdout_v1', {}).get('f1', 'N/A')}")
+    # GUARD: next training cycle must create a new sealed holdout before experimenting — do not reuse v1 for tuning.
 
 
 if __name__ == '__main__':

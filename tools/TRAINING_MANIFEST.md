@@ -34,7 +34,7 @@ Count-based TF: every occurrence of a term contributes to the feature count. Thi
 |-------|--------|------|
 | canonical_train | `836417ba040a5c56c894c7539d3e52d2709cd91a4a9e9d72b7700bc3a58a5f32` | 35,490 |
 | calibration | `13fce5cdeddd82e70cbdc5692099b8d3fa0d2c755a076944a33a3c799a8b3627` | 13,559 |
-| sealed_holdout | `37bed07b89fe7c4f804048e99216a6da8793ac39678547a3732203b60309e` | 974 |
+| historical_release_holdout_v1 | `37bed07b89fe7c4f804048e99216a6da8793ac39678547a3732203b60309e` | 974 |
 | OOD non-English | *(loaded)* | 4,969 |
 | Validation | *(loaded)* | 15,673 |
 | Technical quoted | *(loaded)* | 209 |

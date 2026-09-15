@@ -82,7 +82,7 @@ reliably across environments. Follow-up: **deterministic resource test** (open f
 2. **deterministic resource test** — Make `resource_to_decision_chain_integrity` pass
    deterministically across cgroup environments.
 3. **P7 formalization** — Formalize P7 bars in invariants or source code (currently
-   only documented in CEO_RULINGS.md).
+   only documented in CEO_RULINGS.md). This is by design for a release-scoped gate.
 4. **halo ABI resolution** — Resolve the `u16::MAX` sentinel collision with a future
    ABI change that distinguishes error returns from valid maximum-entropy returns.
 5. **sealed→historical_holdout_v1 rename** — Execute the rename and establish the

@@ -142,3 +142,22 @@ training_metrics.jsonl
 .maat/
 .workflows/
 MAAT_REPORT.md
+
+# --- Publish hygiene (local-only, never committed) ---
+# ls -ld verified 2026-09-15: PUBLISHING.md and .pypi-env are both plain files
+/PUBLISHING.md
+/.pypi-env
+
+# --- Archived artifacts from /tmp/opencode (local-only, never committed) ---
+.archive/
+
+# --- Local infra / operator docs (untracked, never published) ---
+.codegraph/
+.opencode/
+deploy/
+docs/
+sync_codegraph.sh
+.codegraphinclude
+.codeqlignore
+.githooks/
+.ixd.toml
