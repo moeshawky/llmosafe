@@ -119,7 +119,8 @@ fn test_sifted_to_kernel_boundary() {
 
 #[test]
 fn test_sifted_to_kernel_boundary_via_sift_text() {
-    let (sifted, proof) = sift_text("the weather is sunny today");
+    let (sifted, proof) =
+        sift_text("the weather is sunny today").expect("sift_text should succeed");
     let mut memory = WorkingMemory::<64>::new(500);
     match memory.update(sifted, proof) {
         Ok((validated, vproof)) => {
