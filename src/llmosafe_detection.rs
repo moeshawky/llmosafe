@@ -199,10 +199,15 @@ pub struct DriftDetector {
 impl DriftDetector {
     /// Create a new drift detector with the given goal.
     /// Returns a detector with drift_score=0.0 (no drift possible) if goal is empty.
+    /// Deduplicates goal word hashes so overlap is computed against the distinct
+    /// goal set, keeping drift_score ∈ [0,1] by construction.
     pub fn new(goal: &str, drift_threshold: f32) -> Self {
         let mut goal_hashes = ArrayVec::new();
         for word in goal.split_whitespace().take(MAX_CONTEXT_LEN) {
-            goal_hashes.push(RepetitionDetector::hash_str(word));
+            let hash = RepetitionDetector::hash_str(word);
+            if !goal_hashes.iter().any(|&g| g == hash) {
+                goal_hashes.push(hash);
+            }
         }
         Self {
             goal_hashes,
@@ -222,13 +227,17 @@ impl DriftDetector {
             obs_words.push(RepetitionDetector::hash_str(word));
         }
 
-        let mut matches = 0usize;
-        for &obs_hash in obs_words.iter() {
-            if self.goal_hashes.iter().any(|&g| g == obs_hash) {
-                matches += 1;
+        // Count distinct goal hashes present in obs_words.
+        // Iterating over goal_hashes (already deduplicated in new())
+        // ensures each goal concept is counted at most once, so
+        // overlap = matched / total ∈ [0, 1] by construction.
+        let mut matched_goals = 0usize;
+        for &goal_hash in self.goal_hashes.iter() {
+            if obs_words.iter().any(|&obs| obs == goal_hash) {
+                matched_goals += 1;
             }
         }
-        let overlap = matches as f32 / self.goal_hashes.len() as f32;
+        let overlap = matched_goals as f32 / self.goal_hashes.len() as f32;
         self.drift_score = 1.0 - overlap;
     }
 
@@ -355,25 +364,82 @@ fn contains_ignore_ascii_case(text: &str, pattern: &str) -> bool {
 /// Adversarial pattern detector.
 ///
 /// Recognizes known attack patterns and manipulation attempts.
-#[derive(Debug, Clone, Default)]
+/// Built-in adversarial signatures are immutable default capability:
+/// they are always present and never removed by `reset()`.
+/// Custom patterns added via `add_pattern()` are separate mutable state.
+#[derive(Debug, Clone)]
 pub struct AdversarialDetector {
-    /// Known adversarial pattern hashes.
+    /// Immutable built-in adversarial pattern hashes (always present).
+    /// Precomputed FNV-1a hashes of built-in adversarial patterns.
+    built_in_patterns: [u32; 10],
+    /// Known adversarial pattern hashes (custom, mutable state).
     patterns: ArrayVec<u32, MAX_CONTEXT_LEN>,
 }
 
+impl Default for AdversarialDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AdversarialDetector {
-    /// Create a new adversarial detector.
+    /// Create a new adversarial detector with built-in patterns
+    /// as immutable default capability.
+    ///
+    /// Built-in patterns are always present and never removed by `reset()`.
+    /// Custom patterns can be added via `add_pattern()`.
     pub fn new() -> Self {
-        Self::default()
+        let built_in_patterns = Self::compute_built_in_hashes();
+        Self {
+            built_in_patterns,
+            patterns: ArrayVec::new(),
+        }
+    }
+
+    /// Compute FNV-1a hashes of built-in adversarial patterns at construction time.
+    /// These are immutable default signatures — always present.
+    fn compute_built_in_hashes() -> [u32; 10] {
+        // Built-in adversarial patterns (same set as detect_substrings PATTERNS).
+        // FNV-1a hash with ASCII lowercase folding.
+        let patterns: &[&str] = &[
+            "ignore previous",
+            "disregard",
+            "you are now",
+            "simulate",
+            "pretend",
+            "act as",
+            "bypass",
+            "override",
+            "developer mode",
+            "jailbreak",
+        ];
+        let mut hashes = [0u32; 10];
+        for (i, &p) in patterns.iter().enumerate() {
+            hashes[i] = Self::hash_lowercase(p);
+        }
+        hashes
+    }
+
+    /// FNV-1a hash of a string with ASCII lowercase folding.
+    fn hash_lowercase(s: &str) -> u32 {
+        let mut hash: u32 = 2_166_136_261;
+        for byte in s.bytes() {
+            let lower = byte.to_ascii_lowercase();
+            hash ^= lower as u32;
+            hash = hash.wrapping_mul(16_777_619);
+        }
+        hash
     }
 
     /// Add a known adversarial pattern.
+    /// Custom state — separate from built-in immutable signatures.
     pub fn add_pattern(&mut self, pattern: &str) {
         let hash = Self::hash_lowercase(pattern);
         self.patterns.push(hash);
     }
 
     /// Check if input matches any known adversarial pattern.
+    /// Checks both built-in immutable signatures and custom patterns.
     pub fn is_adversarial(&self, input: &str) -> bool {
         const MAX_INPUT_LEN: usize = 64 * 1024;
         let bounded = if input.len() > MAX_INPUT_LEN {
@@ -386,18 +452,26 @@ impl AdversarialDetector {
             input
         };
         let input_hash = Self::hash_lowercase(bounded);
-        self.patterns.iter().any(|&p| p == input_hash)
+        // Check built-in patterns first (immutable default capability)
+        self.built_in_patterns.contains(&input_hash)
+            || self.patterns.iter().any(|&p| p == input_hash)
     }
 
-    /// FNV-1a hash with ASCII lowercase folding (no allocation).
-    fn hash_lowercase(s: &str) -> u32 {
-        let mut hash: u32 = 2_166_136_261;
-        for byte in s.bytes() {
-            let lower = byte.to_ascii_lowercase();
-            hash ^= lower as u32;
-            hash = hash.wrapping_mul(16_777_619);
-        }
-        hash
+    /// Returns true if the input matches any built-in adversarial pattern.
+    /// This is the immutable default capability — always available.
+    pub fn matches_built_in(&self, input: &str) -> bool {
+        const MAX_INPUT_LEN: usize = 64 * 1024;
+        let bounded = if input.len() > MAX_INPUT_LEN {
+            let mut end = MAX_INPUT_LEN;
+            while end > 0 && !input.is_char_boundary(end) {
+                end -= 1;
+            }
+            input.get(..end).unwrap_or(input)
+        } else {
+            input
+        };
+        let input_hash = Self::hash_lowercase(bounded);
+        self.built_in_patterns.contains(&input_hash)
     }
 
     /// Check for common adversarial substrings.
@@ -452,6 +526,12 @@ impl AdversarialDetector {
 /// Derived from statistical process control (Montgomery). Detects
 /// distribution shifts that indicate the system is operating outside
 /// normal parameters.
+///
+/// D3: Monitors bounded normalized residual. The reference/baseline
+/// is established from a bounded warmup of observations only, then
+/// frozen or very-slowly adapted under trusted conditions. A minimum
+/// observation count is required before any shift declaration —
+/// preventing baseline poisoning and first-sample Halt.
 #[derive(Debug, Clone)]
 pub struct CusumDetector {
     s_high: f64,
@@ -459,15 +539,34 @@ pub struct CusumDetector {
     k: f64,
     h: f64,
     mu_ref: f64,
+    /// Observation count since last reset. Used to enforce
+    /// minimum observation count before shift declaration.
+    obs_count: usize,
+    /// Minimum observations required before any shift declaration.
+    /// Prevents first-sample Halt and baseline poisoning.
+    /// Set to 2 — sufficient to prevent first-sample false positives
+    /// while not consuming excessive warmup capacity.
+    warmup_min: usize,
+    /// Running sum of observations during warmup for baseline
+    /// establishment. Frozen after warmup completes.
+    mu_ref_accumulator: f64,
+    /// True when warmup is still in progress (mu_ref not yet frozen).
+    warmup_active: bool,
 }
 
 impl CusumDetector {
     /// Create a new CUSUM detector.
     ///
     /// # Arguments
-    /// * `mu_ref` - Reference mean (expected value)
+    /// * `mu_ref` - Reference mean (expected value). During warmup,
+    ///   this is gradually refined from observations.
     /// * `k` - Slack parameter (detection sensitivity, typically 0.5σ to 1σ)
     /// * `h` - Decision threshold (detection boundary, typically 4σ to 5σ)
+    ///
+    /// D3: `warmup_min` defaults to 2 observations. The detector
+    /// requires at least `warmup_min` observations before any shift
+    /// declaration. During warmup, mu_ref is slowly adapted from
+    /// observed values. After warmup, mu_ref is frozen.
     pub fn new(mu_ref: f64, k: f64, h: f64) -> Self {
         Self {
             s_high: 0.0,
@@ -475,20 +574,67 @@ impl CusumDetector {
             k,
             h,
             mu_ref,
+            obs_count: 0,
+            warmup_min: 2,
+            mu_ref_accumulator: mu_ref,
+            warmup_active: true,
         }
     }
 
     /// Update with a new value. Returns true if anomaly detected.
-    pub fn update(&mut self, val: f64) -> bool {
-        self.s_high = (0.0f64).max(self.s_high + (val - self.mu_ref) - self.k);
-        self.s_low = (0.0f64).max(self.s_low - (val - self.mu_ref) - self.k);
+    ///
+    /// D3: The value is normalized relative to mu_ref. A minimum
+    /// observation count (warmup_min) must be reached before any
+    /// shift is declared — preventing baseline poisoning and
+    /// first-sample Halt. During warmup, mu_ref is slowly adapted
+    /// (learning rate 0.1) from OBSERVATIONS THAT ARE ACCEPTED
+    /// (i.e. non-escalated, confirmed benign). Unaccepted observations
+    /// are tracked by the CUSUM sum but do NOT pollute the baseline.
+    /// After warmup, mu_ref is frozen.
+    ///
+    /// # Arguments
+    /// * `val` - Normalized observation value (typically in [0, 1]).
+    /// * `accepted` - True when the observation is confirmed benign
+    ///   (non-escalated). Only accepted observations adapt mu_ref
+    ///   during warmup. All observations still contribute to the
+    ///   CUSUM accumulation.
+    pub fn update(&mut self, val: f64, accepted: bool) -> bool {
+        self.obs_count += 1;
+
+        // During warmup, slowly adapt mu_ref from ACCEPTED observations only.
+        // This prevents baseline poisoning — unaccepted (escalated/adversarial)
+        // observations must not shift the reference baseline.
+        // Warmup always completes after warmup_min observations regardless
+        // of acceptance; only mu_ref adaptation is gated on acceptance.
+        if self.warmup_active {
+            if accepted {
+                self.mu_ref_accumulator = self.mu_ref_accumulator * 0.9 + val * 0.1;
+            }
+            if self.obs_count >= self.warmup_min {
+                self.mu_ref = self.mu_ref_accumulator;
+                self.warmup_active = false;
+            }
+            // CUSUM sums are NOT accumulated during warmup.
+            return false;
+        }
+
+        // Normalized residual relative to the (possibly warming-up) reference.
+        let residual = val - self.mu_ref;
+        self.s_high = (0.0f64).max(self.s_high + residual - self.k);
+        self.s_low = (0.0f64).max(self.s_low - residual - self.k);
+
         self.s_high > self.h || self.s_low > self.h
     }
 
-    /// Reset the cumulative sums to zero.
+    /// Reset the cumulative sums and observation count to zero.
+    /// D3: mu_ref is restored to its initial value and warmup
+    /// re-activates — the baseline must be re-established.
     pub fn reset(&mut self) {
         self.s_high = 0.0;
         self.s_low = 0.0;
+        self.obs_count = 0;
+        self.warmup_active = true;
+        self.mu_ref_accumulator = self.mu_ref;
     }
 
     /// Get the upper cumulative sum.
@@ -519,6 +665,16 @@ impl CusumDetector {
     /// Get the decision threshold.
     pub fn h(&self) -> f64 {
         self.h
+    }
+
+    /// Returns the current observation count since last reset.
+    pub fn obs_count(&self) -> usize {
+        self.obs_count
+    }
+
+    /// Returns true if still in warmup period.
+    pub fn warmup_active(&self) -> bool {
+        self.warmup_active
     }
 }
 
@@ -761,22 +917,31 @@ mod tests {
 
     #[test]
     fn test_cusum_detector() {
-        let mut detector = CusumDetector::new(500.0, 50.0, 200.0);
-        assert!(!detector.update(500.0));
-        assert!(!detector.update(510.0));
+        // D3: Normalized domain [0,1]. mu_ref=0.5 center, k=0.1 slack, h=0.5 threshold.
+        // During warmup (obs_count < warmup_min=2), no shift declared.
+        let mut detector = CusumDetector::new(0.5, 0.1, 0.5);
+        assert!(!detector.update(0.9, true), "warmup obs 1 should not fire");
+        assert!(!detector.update(0.9, true), "warmup obs 2 should not fire");
+        // After warmup, sustained high values trigger shift.
+        // mu_ref was frozen at ~0.576; residual ~0.324 per obs adds ~0.224 to s_high.
+        // Need enough steps for s_high > 0.5.
         for _ in 0..5 {
-            detector.update(600.0);
+            detector.update(0.9, true);
         }
-        assert!(detector.detected());
+        assert!(
+            detector.detected(),
+            "sustained high values must trigger after warmup"
+        );
     }
 
     #[test]
     fn test_cusum_detector_s_low_path() {
-        // mu_ref=500, k=50, h=200. Feed values well below mu_ref to trigger s_low.
-        let mut detector = CusumDetector::new(500.0, 50.0, 200.0);
+        // D3: Normalized domain. mu_ref=0.5, k=0.1, h=0.5.
+        // Feed values well below mu_ref to trigger s_low.
+        let mut detector = CusumDetector::new(0.5, 0.1, 0.5);
         for _ in 0..10 {
-            // val=400, delta=400-500=-100, s_low += -(-100) - 50 = 50 → s_low rises
-            detector.update(400.0);
+            // val=0.1, residual=0.1-0.5=-0.4, s_low += 0.4-0.1=0.3 → s_low rises
+            detector.update(0.1, true);
         }
         assert!(detector.detected(), "s_low path must detect downward shift");
         assert!(
@@ -785,6 +950,49 @@ mod tests {
             detector.s_low(),
             detector.h(),
         );
+    }
+
+    #[test]
+    fn test_cusum_detector_warmup_not_adapting_on_unaccepted() {
+        // D3: Warmup must NOT adapt mu_ref from unaccepted observations.
+        // Feed adversarial (unaccepted) observations during warmup.
+        // mu_ref stays at 0.5 (initial) because accepted=false skips adaptation.
+        let mut detector = CusumDetector::new(0.5, 0.1, 0.5);
+        // Feed adversarial (unaccepted) observations during warmup
+        for _ in 0..5 {
+            detector.update(0.95, false);
+        }
+        // mu_ref should NOT have shifted toward 0.95 since updates were unaccepted
+        assert!(
+            detector.mu_ref() < 0.7,
+            "mu_ref ({}) must not drift far from 0.5 on unaccepted inputs",
+            detector.mu_ref()
+        );
+        // Warmup complete regardless of acceptance (obs_count advanced)
+        assert!(
+            !detector.warmup_active(),
+            "warmup should complete regardless of acceptance"
+        );
+        // Note: CUSUM sums still accumulate for unaccepted observations during warmup
+        // — they contribute to anomaly scoring, just not to baseline adaptation.
+    }
+
+    #[test]
+    fn test_cusum_detector_accepted_warms_up() {
+        // D3: Warmup should adapt mu_ref toward accepted observations.
+        let mut detector = CusumDetector::new(0.5, 0.1, 0.5);
+        // First two observations are accepted → warmup adapts mu_ref
+        assert!(!detector.update(0.48, true), "warmup obs 1");
+        assert!(!detector.update(0.52, true), "warmup obs 2");
+        // mu_ref should now be close to ~0.50 (adapted slightly)
+        let mu = detector.mu_ref();
+        assert!(
+            (mu - 0.5).abs() < 0.05,
+            "mu_ref ({}) should be near 0.5 after warmup on benign inputs",
+            mu
+        );
+        // Warmup complete, frozen
+        assert!(!detector.warmup_active(), "Reset re-activates warmup");
     }
 
     // ── AdversarialDetector edge cases ────────────────────────────

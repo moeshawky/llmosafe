@@ -167,34 +167,37 @@ mod tests {
 
     #[test]
     fn test_cusum_detector_threshold_boundary() {
-        let mut detector = CusumDetector::new(100.0, 10.0, 50.0);
+        // D3: Normalized domain [0,1]. mu_ref=0.5, k=0.1, h=0.5.
+        let mut detector = CusumDetector::new(0.5, 0.1, 0.5);
 
         for _ in 0..10 {
-            assert!(!detector.update(100.0), "At reference, should not detect");
+            assert!(
+                !detector.update(0.5, true),
+                "At reference, should not detect"
+            );
         }
 
-        let mut detector2 = CusumDetector::new(100.0, 10.0, 50.0);
+        let mut detector2 = CusumDetector::new(0.5, 0.1, 0.5);
         for _ in 0..20 {
-            detector2.update(160.0);
+            detector2.update(0.9, true);
         }
         assert!(detector2.detected(), "Sustained shift should trigger");
     }
 
     #[test]
     fn test_cusum_detector_negative_values() {
-        // Test with positive reference that negative shifts can occur
-        let mut detector = CusumDetector::new(100.0, 10.0, 200.0);
+        // D3: Normalized domain. Test extreme out-of-range values.
+        let mut detector = CusumDetector::new(0.5, 0.1, 0.5);
 
-        // Positive values above reference
-        assert!(!detector.update(150.0), "Should handle positive values");
+        // Positive values above reference (accepted)
+        assert!(!detector.update(0.8, true), "Should handle positive values");
 
-        // Negative values would cause issues, so test with values below reference instead
-        // (CusumDetector works with f64, negative is valid mathematically)
-        let mut detector2 = CusumDetector::new(100.0, 10.0, 200.0);
+        // Values below reference trigger s_low (accepted)
+        let mut detector2 = CusumDetector::new(0.5, 0.1, 0.5);
 
-        // Values below reference trigger s_low
+        // Values far below reference trigger s_low
         for _ in 0..30 {
-            detector2.update(0.0); // 100 units below reference
+            detector2.update(0.0, true); // 0.5 units below reference
         }
         // Eventually should detect
     }
@@ -224,5 +227,68 @@ mod tests {
 
         detector.observe("python web framework");
         assert!(detector.is_drifting(), "Different topic should drift");
+    }
+
+    // D4: drift_score must always be ∈ [0,1] by construction.
+    // Repeating one goal word must not impersonate full goal coverage.
+    #[test]
+    fn test_drift_detector_range_property() {
+        // Repeated single word should give high drift (not aligned)
+        let mut detector = DriftDetector::new("a b c", 0.5);
+        detector.observe("a a a a a a a a");
+        let score = detector.drift_score();
+        assert!(
+            (0.0..=1.0).contains(&score),
+            "Score must be in [0,1], got {score}"
+        );
+        assert!(
+            detector.is_drifting(),
+            "Single-word repetition must drift (score > 0.5)"
+        );
+        assert!(
+            score > 0.5,
+            "Single-word repetition should give high drift, got {score}"
+        );
+    }
+
+    // Disjoint text → maximal drift (score ≈ 1.0).
+    #[test]
+    fn test_drift_disjoint_maximal_drift() {
+        let mut detector = DriftDetector::new("a b c", 0.5);
+        detector.observe("xyz completely unrelated words here");
+        assert!(
+            detector.drift_score() >= 0.9,
+            "Disjoint text should give maximal drift, got {}",
+            detector.drift_score()
+        );
+    }
+
+    // Complete coverage → ~zero drift.
+    #[test]
+    fn test_drift_full_coverage_zero_drift() {
+        let mut detector = DriftDetector::new("a b c", 0.5);
+        detector.observe("a b c");
+        assert!(
+            detector.drift_score() < 0.01,
+            "Full coverage should give near-zero drift, got {}",
+            detector.drift_score()
+        );
+        assert!(!detector.is_drifting(), "Fully covered should not drift");
+    }
+
+    // Oracle regression: goal "a b c" + 8×"a" must read in_range AND drifted.
+    #[test]
+    fn test_drift_oracle_example() {
+        let mut detector = DriftDetector::new("a b c", 0.5);
+        detector.observe("a a a a a a a a");
+        let score = detector.drift_score();
+        assert!(
+            (0.0..=1.0).contains(&score),
+            "Oracle example: score must be in [0,1], got {score}"
+        );
+        assert!(
+            detector.is_drifting(),
+            "Oracle example: must drift (score > threshold)"
+        );
     }
 }

@@ -143,8 +143,8 @@ check = "step_count == 0 after reset_full(); calling process() again produces fr
 [[invariant]]
 name = "pipeline_adversarial_wired"
 chain = ["pipeline", "detection"]
-description = "AdversarialDetector must be instantiated in CognitivePipeline and called during detection stage. FLAG_ADVERSARIAL (0x20) contributes to detection_flags."
-check = "pipeline.adversarial.is_some() && detection_flags includes FLAG_ADVERSARIAL when adversarial input matches patterns"
+description = "AdversarialDetector is instantiated in CognitivePipeline and checked pre-KERNEL; the result is consumed at DETECTION to set FLAG_ADVERSARIAL (0x20). The production detector has a non-empty effective domain (is_adversarial exact-match + detect_substrings), and a known production-path input reaches FLAG_ADVERSARIAL via the detection stage."
+check = "pipeline.adversarial.is_some() && detection_flags includes FLAG_ADVERSARIAL when adversarial input matches patterns; adversarial check runs pre-KERNEL (before Stage 3 bias gate), result consumed at DETECTION"
 
 # ── C-ABI arena: handle lifecycle ─────────────────────────────────
 
@@ -201,7 +201,7 @@ check = "if has_bias: risk >= config.halt_gain"
 [[invariant]]
 name = "pid_anti_windup"
 chain = ["pid"]
-description = "Integrator update freezes when risk >= halt_gain"
+description = "Integrator update bleeds at 0.999× when risk >= halt_gain"
 check = "if risk >= halt_gain: integrators unchanged (or bled at 0.999x)"
 
 [[invariant]]

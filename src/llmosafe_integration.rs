@@ -292,6 +292,10 @@ pub struct EscalationPolicy {
     pub dal: DesignAssuranceLevel,
 }
 
+/// Default escalation policy thresholds.
+/// warn_entropy=30000, escalate_entropy=40000, halt_entropy=50000,
+/// warn_surprise=42600, escalate_surprise=55700, bias_escalates=true,
+/// escalate_pressure=Critical, dal=A.
 impl Default for EscalationPolicy {
     fn default() -> Self {
         Self {
@@ -365,14 +369,89 @@ impl EscalationPolicy {
         self.canonical_decision(entropy, surprise, has_bias)
     }
 
+    /// Raw threshold decision — same threshold ladder as [`canonical_decision`]
+    /// but WITHOUT DAL gating. Used by the policy-floor composition in
+    /// `CognitivePipeline::process_ctrl` (A1) where policy and PID severities
+    /// are computed independently and merged before a single DAL application.
+    ///
+    /// # Inputs
+    /// Same as [`canonical_decision`].
+    ///
+    /// # Outputs
+    /// Returns the raw threshold-based `SafetyDecision` with no DAL applied.
+    ///
+    /// # Invariants
+    /// * Inclusive halt check: `entropy ≥ halt_entropy` triggers Halt.
+    /// * Severity ordering is preserved: Halt > Escalate > Warn > Proceed.
+    /// * First-match-wins: higher-severity conditions are checked first.
+    ///
+    /// # Note
+    /// This method intentionally bypasses DAL. Callers must apply DAL
+    /// explicitly to the merged result if desired.
+    pub(crate) fn raw_decision(
+        &self,
+        entropy: u16,
+        surprise: u16,
+        has_bias: bool,
+    ) -> SafetyDecision {
+        // Halt checks first (highest severity — must not be overridden).
+        if entropy >= self.halt_entropy {
+            return SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
+        }
+
+        // Escalate checks (medium severity)
+        if has_bias && self.bias_escalates {
+            return SafetyDecision::Escalate {
+                entropy,
+                reason: EscalationReason::BiasDetected,
+                cooldown_ms: 5000,
+            };
+        }
+        if entropy >= self.escalate_entropy {
+            return SafetyDecision::Escalate {
+                entropy,
+                reason: EscalationReason::EntropyApproachingLimit,
+                cooldown_ms: 5000,
+            };
+        }
+        if surprise >= self.escalate_surprise {
+            return SafetyDecision::Escalate {
+                entropy,
+                reason: EscalationReason::SurpriseElevated,
+                cooldown_ms: 5000,
+            };
+        }
+
+        // Warn checks (lowest severity)
+        if entropy >= self.warn_entropy {
+            return SafetyDecision::Warn("entropy elevated");
+        }
+        if surprise >= self.warn_surprise {
+            return SafetyDecision::Warn("surprise elevated");
+        }
+
+        SafetyDecision::Proceed
+    }
+
     /// Evaluate entropy/surprise/bias with a resource pressure signal.
     ///
     /// Halt-entropy is checked first (inclusive `>=`, consistent with
-    /// [`canonical_decision`]). If not at the Halt threshold, resource
-    /// pressure that meets or exceeds `escalate_pressure` triggers an
-    /// `Escalate(ResourcePressure)` decision. When neither Halt nor
-    /// pressure escalation fires, delegates to [`canonical_decision`]
-    /// for the standard threshold ladder with universal DAL gating.
+    /// [`canonical_decision`]). Then pressure is evaluated:
+    /// `Emergency` pressure triggers `Halt(ResourcePressure)`, and
+    /// `Critical` pressure (or higher when `escalate_pressure` is
+    /// `Critical`) triggers `Escalate(ResourcePressure)`. When neither
+    /// pressure escalation nor Halt fires, delegates to
+    /// [`canonical_decision`] for the standard threshold ladder with
+    /// universal DAL gating.
+    ///
+    /// # Pressure Level Contract
+    ///
+    /// | PressureLevel | Decision | Rationale |
+    /// |---------------|----------|-----------|
+    /// | `Emergency` (76-100%) | `Halt` | Memory exhaustion is catastrophic |
+    /// | `Critical` (51-75%) | `Escalate` | Significant concern, escalate |
+    /// | `Elevated` (26-50%) | Falls through | Monitor only |
+    /// | `Nominal` (0-25%) | Falls through | Normal operation |
     ///
     /// # Inputs
     /// * `entropy`: `u16` — raw entropy in `[0, 65535]`.
@@ -385,7 +464,8 @@ impl EscalationPolicy {
     ///
     /// # Threshold Semantics
     /// All threshold comparisons use `>=` — entropy ≥ `halt_entropy`
-    /// triggers Halt, pressure ≥ `escalate_pressure` triggers Escalate.
+    /// triggers Halt, Emergency pressure triggers Halt,
+    /// Critical pressure ≥ `escalate_pressure` triggers Escalate.
     pub fn decide_with_pressure(
         &self,
         entropy: u16,
@@ -402,7 +482,16 @@ impl EscalationPolicy {
             ));
         }
 
+        // Emergency pressure → Halt (conservative safety contract)
+        if pressure == PressureLevel::Emergency {
+            return self.apply_dal_to_decision(SafetyDecision::Halt(
+                KernelError::ResourceExhaustion,
+                30000,
+            ));
+        }
+
         // Pressure escalation (only when not at Halt threshold)
+        // Critical→Escalate; Elevated and below fall through
         if pressure >= self.escalate_pressure {
             return self.apply_dal_to_decision(SafetyDecision::Escalate {
                 entropy,
@@ -510,7 +599,7 @@ impl EscalationPolicy {
     /// | C   | Warn   | Warn      | Warn   | Proceed   |
     /// | D   | Warn   | Warn      | Warn   | Proceed   |
     /// | E   | Proceed | Proceed  | Proceed | Proceed   |
-    fn apply_dal_to_decision(&self, decision: SafetyDecision) -> SafetyDecision {
+    pub(crate) fn apply_dal_to_decision(&self, decision: SafetyDecision) -> SafetyDecision {
         match self.dal {
             DesignAssuranceLevel::A => decision,
             DesignAssuranceLevel::B => match decision {
@@ -1284,12 +1373,76 @@ mod tests {
 
     #[test]
     fn test_decide_with_pressure_emergency_halt() {
-        // Emergency pressure (90%) — should Escalate via pressure escalation
+        // Emergency pressure (90%) — must Halt per safety contract
         let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
         let decision = policy.decide_with_pressure(100, 100, false, PressureLevel::Emergency);
         assert!(
-            matches!(decision, SafetyDecision::Escalate { .. }),
-            "Emergency pressure must escalate (via pressure escalation)"
+            matches!(decision, SafetyDecision::Halt(..)),
+            "Emergency pressure must Halt (not Escalate)"
+        );
+    }
+
+    // ── R2: Pressure boundary tests at exact 25/26, 50/51, 75/76, 100 ──
+
+    #[test]
+    fn test_pressure_boundary_25_26() {
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        // 25% = Nominal (0-25), 26% = Elevated (26-50)
+        let d25 = policy.decide_with_pressure(400, 100, false, PressureLevel::Nominal);
+        assert!(
+            matches!(d25, SafetyDecision::Proceed),
+            "25% (Nominal) must Proceed"
+        );
+        // Elevated (26%) below default escalate_pressure=Critical → Proceed
+        let d26 = policy.decide_with_pressure(400, 100, false, PressureLevel::Elevated);
+        assert!(
+            matches!(d26, SafetyDecision::Proceed),
+            "26% (Elevated) must Proceed"
+        );
+    }
+
+    #[test]
+    fn test_pressure_boundary_50_51() {
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        // 50% = Elevated (26-50), 51% = Critical (51-75)
+        let d50 = policy.decide_with_pressure(400, 100, false, PressureLevel::Elevated);
+        assert!(
+            matches!(d50, SafetyDecision::Proceed),
+            "50% (Elevated) must Proceed"
+        );
+        // Critical at default escalate_pressure → Escalate
+        let d51 = policy.decide_with_pressure(400, 100, false, PressureLevel::Critical);
+        assert!(
+            matches!(d51, SafetyDecision::Escalate { .. }),
+            "51% (Critical) must Escalate"
+        );
+    }
+
+    #[test]
+    fn test_pressure_boundary_75_76() {
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        // 75% = Critical (51-75), 76% = Emergency (76-100)
+        let d75 = policy.decide_with_pressure(400, 100, false, PressureLevel::Critical);
+        assert!(
+            matches!(d75, SafetyDecision::Escalate { .. }),
+            "75% (Critical) must Escalate"
+        );
+        // Emergency → Halt
+        let d76 = policy.decide_with_pressure(400, 100, false, PressureLevel::Emergency);
+        assert!(
+            matches!(d76, SafetyDecision::Halt(..)),
+            "76% (Emergency) must Halt"
+        );
+    }
+
+    #[test]
+    fn test_pressure_boundary_100() {
+        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        // 100% = Emergency → Halt
+        let d100 = policy.decide_with_pressure(400, 100, false, PressureLevel::Emergency);
+        assert!(
+            matches!(d100, SafetyDecision::Halt(..)),
+            "100% (Emergency) must Halt"
         );
     }
 

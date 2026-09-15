@@ -20,7 +20,9 @@
 
 #[cfg(test)]
 mod tests {
-    use llmosafe::{calculate_halo_signal, get_bias_breakdown, SiftedSynapse, Synapse};
+    use llmosafe::{
+        calculate_halo_signal, get_bias_breakdown, sift_perceptions, SiftedSynapse, Synapse,
+    };
 
     #[test]
     fn test_halo_signal_empty_string() {
@@ -167,5 +169,31 @@ mod tests {
         let long_text = "expert ".repeat(10000);
         let signal = calculate_halo_signal(&long_text);
         assert!(signal > 0, "Should handle very long strings");
+    }
+
+    // S2: sift_perceptions structural fix — seeding from first item.
+    // Empty slice remains the sole fail-closed sentinel (0xFFFF).
+    // Non-empty batches always return a real result, never the 0xFFFF fallback.
+    #[test]
+    fn test_sift_perceptions_empty_still_fails_closed() {
+        let (synapse, _) = sift_perceptions(&[], "objective");
+        assert_eq!(
+            synapse.raw_entropy(),
+            0xFFFF,
+            "Empty slice must return 0xFFFF fail-closed sentinel"
+        );
+    }
+
+    #[test]
+    fn test_sift_perceptions_nonempty_never_fallback() {
+        // Any non-empty batch must produce a synapse with entropy != 0xFFFF.
+        // This would fail under the old `best_entropy=0` + strict `>` logic
+        // if all observations produced zero entropy (theoretically).
+        let (synapse, _) = sift_perceptions(&["hello world"], "objective");
+        assert_ne!(
+            synapse.raw_entropy(),
+            0xFFFF,
+            "Non-empty batch must not return 0xFFFF fallback"
+        );
     }
 }

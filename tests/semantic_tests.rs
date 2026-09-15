@@ -28,38 +28,46 @@ mod tests {
 
     #[test]
     fn test_cusum_math_correctness() {
-        // Known values test: mu_ref=100, k=10, h=50
-        // After 5 values of 150 (shift of +50 from reference):
-        // s_high = max(0, 0 + 50 - 10) = 40
-        // s_high = max(0, 40 + 50 - 10) = 80 -> exceeds h=50
+        // D3: Normalized domain [0,1]. mu_ref=0.5, k=0.1, h=0.5.
+        // Warmup (obs 1-2) establishes mu_ref without CUSUM accumulation.
+        // After warmup, s_high accumulates and exceeds h=0.5.
+        //
+        // obs 1 (0.5): warmup, mu_ref adapts to ~0.5, return false
+        // obs 2 (0.9): warmup completes, mu_ref=0.54, return false
+        // obs 3 (0.9): residual=0.36, s_high = 0.36-0.1 = 0.26
+        // obs 4 (0.9): s_high = 0.26+0.36-0.1 = 0.52 > 0.5 → detected
+        let mut detector = CusumDetector::new(0.5, 0.1, 0.5);
 
-        let mut detector = CusumDetector::new(100.0, 10.0, 50.0);
-
-        assert!(!detector.update(100.0), "At reference, no detection");
-        assert!(!detector.update(150.0), "First deviation, s_high=40");
-
-        let detected_after_second = detector.update(150.0);
+        assert!(!detector.update(0.5, true), "At reference, warmup obs 1");
+        assert!(!detector.update(0.9, true), "Warmup obs 2, mu_ref freezing");
+        // First post-warmup observation starts CUSUM accumulation
         assert!(
-            detected_after_second,
-            "Second deviation should trigger (s_high=80 > 50)"
+            !detector.update(0.9, true),
+            "Post-warmup obs 3, s_high accumulating"
+        );
+        // Second post-warmup observation triggers
+        let detected_after_third = detector.update(0.9, true);
+        assert!(
+            detected_after_third,
+            "Third post-warmup deviation should trigger (s_high exceeds h=0.5)"
         );
     }
 
     #[test]
     fn test_cusum_symmetric_detection() {
-        // Test both directions
-        let mut detector_high = CusumDetector::new(100.0, 10.0, 100.0);
-        let mut detector_low = CusumDetector::new(100.0, 10.0, 100.0);
+        // D3: Normalized domain [0,1]. mu_ref=0.5, k=0.1, h=0.3.
+        let mut detector_high = CusumDetector::new(0.5, 0.1, 0.3);
+        let mut detector_low = CusumDetector::new(0.5, 0.1, 0.3);
 
         // High shift
         for _ in 0..10 {
-            detector_high.update(200.0);
+            detector_high.update(0.9, true);
         }
         assert!(detector_high.detected(), "High shift should be detected");
 
         // Low shift
         for _ in 0..10 {
-            detector_low.update(0.0);
+            detector_low.update(0.1, true);
         }
         assert!(detector_low.detected(), "Low shift should be detected");
     }

@@ -65,14 +65,14 @@ fn bench_memory(c: &mut Criterion) {
 
 #[cfg(feature = "testing")]
 fn bench_detection(c: &mut Criterion) {
-    let mut cusum = CusumDetector::new(500.0, 50.0, 200.0);
+    let mut cusum = CusumDetector::new(0.5, 0.1, 0.5);
     let mut rep = RepetitionDetector::new(3);
     let mut drift = DriftDetector::new("rust safety", 0.5);
     let mut conf = ConfidenceTracker::new(0.5, 2);
     let adv = AdversarialDetector::new();
 
     c.bench_function("cusum_update", |b| {
-        b.iter(|| cusum.update(black_box(600.0)))
+        b.iter(|| cusum.update(black_box(0.6), true))
     });
 
     c.bench_function("repetition_observe", |b| {

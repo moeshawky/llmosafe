@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (P0 corrective pass)
+- **Decision architecture**: F-01–F-14 corrections across docs, invariants, examples, and README:
+  - **D1**: Anti-windup integrators *bleed* at 0.999× (not freeze) when risk ≥ halt_gain; `invariants.toml:201`, `llmosafe_pid.rs:21` module doc, test `anti_windup_bleeds_integrator_when_risk_at_halt` renamed from `anti_windup_freezes_integrator_when_risk_at_halt`
+  - **D2**: `pipeline_adversarial_wired` invariant corrected — ADVERSARY_CHECK runs *pre-KERNEL* (before Stage 3 bias gate short-circuit); result consumed at DETECTION to set FLAG_ADVERSARIAL. Strengthened to establish production detector has non-empty effective domain and known production-path input reaches the flag
+  - **D3**: Pipeline stage count corrected from "Five-stage" to "seven-stage" (SIFT, ADVERSARY_CHECK, MEMORY, KERNEL, DETECTION, PID, MONITOR) per `llmosafe_pipeline.rs:9-31`
+  - **D4**: C-ABI synapse parameter type corrected from `uint64_t` to `unsigned __int128` (`llmosafe_process_synapse`, `llmosafe_get_stability`) matching `u128` Rust signatures
+  - **D5**: Non-existent `llmosafe_get_environmental_entropy` C-ABI declaration removed from `main.c`; valid exports are `llmosafe_get_system_cpu_load` and `llmosafe_get_resource_pressure`
+- **M1/S1**: `cargo build --features ffi` → `--features full` corrected in C and Python example build commands; Python ctypes `c_uint64` annotated with documented truncation warning for u128 synapse params
+- **R1–R4**: README architecture section extended with ADVERSARY_CHECK, PID, MONITOR stages, DAL-gating annotation, e_body-vs-body_stress distinction, `use_detection_gate` toggle note; entropy H(p)=4p(1-p) semantics clarified (p = classifier manipulation probability feeding PidInput, distinct from certainty abs(2p−1) feeding ConfidenceTracker)
+- **F1/F2**: F-14 verified — `get_environmental_entropy` IS exported in `llmosafe-py/llmosafe/__init__.py` (lines 52, 107); no README fix needed
+- **D4/S2**: C-ABI handle and synapse parameter types aligned with Rust `u128` layout
+- **Oracle verdicts**: All findings verified against source code before application; no source-logic changes applied
+- **S3**: Filed for sifter audit (out of scope for this pass)
+- **F3**: Closed
+
 ## [0.7.7] — 2026-06-18
 
 ### Fixed (BREAKING)
