@@ -65,7 +65,7 @@ from llmosafe._llmosafe import (
     sift_text,
 )
 
-__version__: str = "0.7.7"
+__version__: str = "0.8.0"
 
 # Nice names for Python users
 Synapse = PySynapse

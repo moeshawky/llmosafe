@@ -1,6 +1,6 @@
 [package]
 name = "llmosafe"
-version = "0.7.7"
+version = "0.8.0"
 edition = "2021"
 description = "Safety-critical cognitive safety library for AI agents. 4-tier architecture (Resource Body, Kernel, Working Memory, Sifter) with formal verification primitives, detection layer, and integration primitives."
 license = "MIT"
@@ -11,7 +11,7 @@ readme = "README.md"
 homepage = "https://github.com/moeshawky/llmosafe"
 keywords = ["safety", "ai-agent", "entropy", "detection", "guardrails"]
 categories = ["development-tools", "algorithms", "embedded", "no-std"]
-exclude = [".github/", ".sniper/", "target/", "tests/", "/AGENTS.md", "/data/", "/Cargo.lock", "/DESIGN_DECISION_*.md", "/RECOMMENDATIONS.md"]
+exclude = [".github/", ".sniper/", "target/", "tests/", "/AGENTS.md", "/data/", "/Cargo.lock", "/DESIGN_DECISION_*.md", "/RECOMMENDATIONS.md", "/.codegraph/", "/.opencode/", "/deploy/", "/docs/", "/sync_codegraph.sh", "/.codegraphinclude", "/.codeqlignore", "/.githooks/", "/.ixd.toml", "/tools/train_*.py", "/tools/training_artifacts/", "/tools/*.sha256"]
 
 [dependencies]
 modular-bitfield = "0.11.2"
