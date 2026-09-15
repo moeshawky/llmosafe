@@ -38,6 +38,7 @@ from llmosafe._llmosafe import (
     PySynapse,
     ResourceExhaustedError,
     SafetyDecision,
+    SiftError,
     calculate_halo,
     calculate_halo_signal_legacy,
     calculate_utility,
@@ -61,6 +62,7 @@ from llmosafe._llmosafe import (
     get_system_cpu_load,
     memory_stats,
     process_synapse,
+    sift_text,
 )
 
 __version__: str = "0.7.7"
@@ -91,10 +93,12 @@ __all__ = [
     "LLMOSafeError",
     "PressureLevel",
     "ResourceExhaustedError",
+    "SiftError",
     "SafetyDecision",
     "Synapse",
     "calculate_halo",
     "calculate_halo_signal_legacy",
+    "sift_text",
     "calculate_utility",
     "check_resources",
     "combined_risk_bits",

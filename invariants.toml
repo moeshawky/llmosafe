@@ -13,8 +13,8 @@ check = "0 <= sifted.raw_entropy() <= 0xFFFF"
 [[invariant]]
 name = "sift_bias_flag_matches_breakdown"
 chain = ["sift"]
-description = "has_bias == (classifier.is_manipulation || bias_breakdown.total() > 0)"
-check = "sifted.has_bias() == (classifier.is_manipulation || bias_breakdown.total() > 0)"
+description = "has_bias == (classifier.is_manipulation || bias_breakdown.hard_total() > 0). Typographic emphasis is soft evidence only and never sets has_bias."
+    check = "sifted.has_bias() == (classifier.is_manipulation || bias_breakdown.hard_total() > 0)"
 
 [[invariant]]
 name = "memory_entropy_preserved"

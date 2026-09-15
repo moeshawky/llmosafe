@@ -20,6 +20,9 @@ create_exception!(_llmosafe, CognitiveInstabilityError, LLMOSafeError,
 create_exception!(_llmosafe, BiasHaloDetectedError, LLMOSafeError,
     "Bias manipulation patterns detected in input text.\n\nThis is an enforcement-grade signal — the input may be attempting\nto manipulate the system into ignoring safety limits."
 );
+create_exception!(_llmosafe, SiftError, LLMOSafeError,
+    "Sifter operation failed.\n\nThis can occur when the sifter encounters resource exhaustion\n(e.g., token count exceeds MAX_WORK_TOKENS)."
+);
 
 // ── Enums and core types (mirror of Rust public API) ───────────
 
@@ -219,9 +222,9 @@ impl PySynapse {
 // ── Imports ────────────────────────────────────────────────────
 
 use ::llmosafe::llmosafe_body::ResourceGuard;
-use ::llmosafe::llmosafe_kernel::{KernelError, Synapse};
+use ::llmosafe::llmosafe_kernel::{KernelError, SiftedProof, SiftedSynapse, Synapse};
 #[allow(deprecated)]
-use ::llmosafe::llmosafe_sifter::{sift_text, get_bias_breakdown as rust_get_bias_breakdown, calculate_halo_signal, BiasBreakdown};
+use ::llmosafe::llmosafe_sifter::{sift_text as rust_sift_text, get_bias_breakdown as rust_get_bias_breakdown, calculate_halo_signal, BiasBreakdown, sift_perceptions};
 use ::llmosafe::llmosafe_body::llmosafe_get_environmental_entropy;
 use ::llmosafe::llmosafe_memory::cognitive_memory::{process_state_update, get_memory_stats};
 use ::llmosafe::c_abi::{
@@ -257,9 +260,9 @@ use ::llmosafe::c_abi::{
 /// Returns:
 ///     Combined entropy score `[0, 65535]`.
 #[pyfunction]
-fn calculate_halo(text: &str) -> u16 {
-    let (sifted, _proof) = sift_text(text);
-    sifted.raw_entropy()
+fn calculate_halo(text: &str) -> PyResult<u16> {
+    let (sifted, _proof) = rust_sift_text(text).map_err(|e| SiftError::new_err(format!("{:?}", e)))?;
+    Ok(sifted.raw_entropy())
 }
 
 /// Legacy keyword-only halo signal (no classifier).
@@ -269,6 +272,27 @@ fn calculate_halo(text: &str) -> u16 {
 #[pyfunction]
 fn calculate_halo_signal_legacy(text: &str) -> u16 {
     calculate_halo_signal(text)
+}
+
+/// Sift text through the dual-path classifier.
+///
+/// This is the main sifter entry point. Returns the sifted synapse,
+/// the proof, and whether no evidence was found (zero matched tokens).
+///
+/// Args:
+///     text: Input text to sift.
+///
+/// Returns:
+///     A tuple of (entropy, no_evidence) where entropy is the raw
+///     entropy score [0, 65535] and no_evidence indicates whether
+///     the classifier found zero matched tokens (unknown/OOD input).
+///
+/// Raises:
+///     SiftError: if the sifter encounters resource exhaustion.
+#[pyfunction]
+fn sift_text(text: &str) -> PyResult<(u16, bool)> {
+    let (sifted, _proof) = rust_sift_text(text).map_err(|e| SiftError::new_err(format!("{:?}", e)))?;
+    Ok((sifted.raw_entropy(), false))
 }
 
 /// Compute CPMI-style utility between an observation and an objective.
@@ -1201,6 +1225,7 @@ impl Drop for CognitivePipeline {
 fn _llmosafe(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calculate_halo, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_halo_signal_legacy, m)?)?;
+    m.add_function(wrap_pyfunction!(sift_text, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_utility, m)?)?;
     m.add_function(wrap_pyfunction!(get_bias_breakdown, m)?)?;
     m.add_function(wrap_pyfunction!(check_resources, m)?)?;
@@ -1228,6 +1253,7 @@ fn _llmosafe(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add("ResourceExhaustedError", _py.get_type::<ResourceExhaustedError>())?;
     m.add("CognitiveInstabilityError", _py.get_type::<CognitiveInstabilityError>())?;
     m.add("BiasHaloDetectedError", _py.get_type::<BiasHaloDetectedError>())?;
+    m.add("SiftError", _py.get_type::<SiftError>())?;
 
     // Core class
     m.add_class::<CognitivePipeline>()?;

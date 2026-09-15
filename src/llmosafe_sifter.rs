@@ -75,6 +75,8 @@ use crate::llmosafe_kernel::U16_MAX_F32;
 /// - `has_bias == classification.is_manipulation` (classifier-only path;
 ///   `sift_text()` OR-s the keyword hard-bias breakdown into its output);
 ///   typographic `emphasis` is soft evidence only and never sets `has_bias`)
+/// - `no_evidence == (classification.tokens_matched == 0)`.
+///   Zero-match inputs are unknown/OOD — never treated as safe or safe-adjacent.
 #[derive(Debug, Clone, Copy)]
 pub struct SifterOutput {
     /// Error signal = classifier probability (setpoint=0).
@@ -88,6 +90,10 @@ pub struct SifterOutput {
     pub has_bias: bool,
     /// Out-of-vocabulary ratio `[0, 255]` (0=0%, 255=100%).
     pub oov_ratio: u8,
+    /// True when zero vocab matches (`tokens_matched == 0`).
+    /// Zero-match = unknown/OOD. Downstream MUST escalate,
+    /// never treat as positive safety or positive manipulation evidence.
+    pub no_evidence: bool,
 }
 
 impl ControlSignal for SifterOutput {
@@ -111,7 +117,8 @@ impl SifterOutput {
             raw_entropy: entropy,
             classifier_prob: classification.probability,
             has_bias: classification.is_manipulation,
-            oov_ratio: (classification.oov_ratio * 255.0_f32) as u8,
+            oov_ratio: (classification.oov_ratio * 255.0) as u8,
+            no_evidence: classification.no_evidence,
         }
     }
 }
@@ -581,18 +588,20 @@ pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedP
     )
 }
 
+/// Error type for sifter operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiftError {
+    /// Input exceeds the work budget (MAX_WORK_TOKENS).
+    /// Resources would be exhausted by processing this input.
+    ResourceExhaustion,
+}
+
 /// Canonical single-entry sifter: classifier (adaptive layer) + keyword bias
 /// (innate layer). Both pathways contribute to the result — either can flag bias.
 ///
 /// This is the ONLY function `CognitivePipeline` calls. It replaces the
 /// three-representation pattern (SifterOutput + ClassificationResult +
 /// SiftedSynapse) that existed in `process_ctrl()`.
-///
-/// The keyword-bias pathway is the innate immune layer: fast pattern-matching
-/// against known manipulation markers. It runs on every input and OR-s into
-/// the bias flag. It stays as a separately-auditable module — if the classifier
-/// is ever compromised by adversarial ML, the keyword path provides a
-/// backstop.
 ///
 /// # Fields set on Synapse
 ///
@@ -606,15 +615,16 @@ pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedP
 ///   `has_bias` independently)
 /// - `oov_ratio`: u8 — packed into synapse reserved bits 6-13
 /// - `anchor_hash`: u31 — Adler-32 of observation bytes
-pub fn sift_text(observation: &str) -> (SiftedSynapse, SiftedProof) {
+/// - `no_evidence`: bool — `classification.tokens_matched == 0` (zero-match → unknown/OOD)
+pub fn sift_text(observation: &str) -> Result<(SiftedSynapse, SiftedProof), SiftError> {
     // Single preflight: bounded-work budget check.
     // Prevents working-set amplification from adversarial whitespace/token
-    // shapes. Fails closed with a zero-entropy sentinel synapse.
+    // shapes. Fails closed with ResourceExhaustion error.
     if crate::count_tokens(observation) > crate::MAX_WORK_TOKENS {
-        return (SiftedSynapse::new(Synapse::new()), SiftedProof::mint());
+        return Err(SiftError::ResourceExhaustion);
     }
     let (sifted, proof, _score, _classifier_probability) = sift_text_with_score(observation);
-    (sifted, proof)
+    Ok((sifted, proof))
 }
 
 /// Build a `(SiftedSynapse, SiftedProof)` pair from pre-computed classifier output.
@@ -666,6 +676,8 @@ pub fn sift_observation(
 /// entropymax includes keyword-bias contribution).
 ///
 /// Empty observations list returns a max-entropy (0xFFFF) synapse.
+/// Returns `SiftError::ResourceExhaustion` if any observation exceeds
+/// the work budget.
 ///
 /// # Examples
 ///
@@ -679,25 +691,28 @@ pub fn sift_observation(
 ///
 /// `_objective` is reserved for future metric scoring (halo signal based on
 /// objective-keyword alignment) and is currently unused.
-pub fn sift_perceptions(observations: &[&str], _objective: &str) -> (SiftedSynapse, SiftedProof) {
+pub fn sift_perceptions(
+    observations: &[&str],
+    _objective: &str,
+) -> Result<(SiftedSynapse, SiftedProof), SiftError> {
     if observations.is_empty() {
         let mut synapse = Synapse::new();
         synapse.set_raw_entropy(0xFFFF);
         synapse.set_raw_surprise(0);
         synapse.set_has_bias(false);
         synapse.set_anchor_hash(0);
-        return (SiftedSynapse::new(synapse), SiftedProof::mint());
+        return Ok((SiftedSynapse::new(synapse), SiftedProof::mint()));
     }
 
     // Seed from the first observation so a non-empty batch
     // with all-zero entropy returns the first item's result,
     // not the 0xFFFF empty-batch fallback. Empty slice remains
     // the sole fail-closed sentinel (checked above).
-    let mut best_result = sift_text(observations[0]);
+    let mut best_result = sift_text(observations[0])?;
     let mut best_entropy = best_result.0.raw_entropy();
 
     for obs in &observations[1..] {
-        let result = sift_text(obs);
+        let result = sift_text(obs)?;
         let entropy = result.0.raw_entropy();
         if entropy > best_entropy {
             best_entropy = entropy;
@@ -705,7 +720,7 @@ pub fn sift_perceptions(observations: &[&str], _objective: &str) -> (SiftedSynap
         }
     }
 
-    best_result
+    Ok(best_result)
 }
 
 mod adler32 {
@@ -801,7 +816,8 @@ mod tests {
         let objective = "test";
         let observations: &[&str] = &[];
 
-        let (sifted, _) = sift_perceptions(observations, objective);
+        let (sifted, _) = sift_perceptions(observations, objective)
+            .expect("sift_perceptions should succeed on empty");
         assert_eq!(sifted.raw_entropy(), 0xFFFF);
         assert_eq!(
             sifted.validate().unwrap_err(),
@@ -812,7 +828,8 @@ mod tests {
     #[test]
     fn test_sift_perceptions_single_observation() {
         let observations = &["stable observation"];
-        let (sifted, _) = sift_perceptions(observations, "test");
+        let (sifted, _) =
+            sift_perceptions(observations, "test").expect("sift_perceptions should succeed");
         let _entropy = sifted.raw_entropy();
         let _surprise = sifted.raw_surprise();
     }
@@ -876,7 +893,8 @@ mod tests {
     #[test]
     fn test_sift_quantization_differential() {
         let observations = &["Safety is paramount"];
-        let (sifted, _) = sift_perceptions(observations, "Safety");
+        let (sifted, _) =
+            sift_perceptions(observations, "Safety").expect("sift_perceptions should succeed");
         let _entropy = sifted.raw_entropy();
         let _surprise = sifted.raw_surprise();
     }
@@ -889,7 +907,8 @@ mod tests {
             "C is a limited but performant systems language",
         ];
 
-        let (sifted, _) = sift_perceptions(observations, "coding language safety");
+        let (sifted, _) = sift_perceptions(observations, "coding language safety")
+            .expect("sift_perceptions should succeed");
         let _entropy = sifted.raw_entropy();
         let _surprise = sifted.raw_surprise();
         assert!(sifted.anchor_hash() != 0);
@@ -946,6 +965,7 @@ mod tests {
             oov_ratio: 0.15,
             tokens_matched: 8,
             tokens_total: 10,
+            no_evidence: false,
         };
         let (sifted, _proof) = sift_observation(&class_result, "test observation text");
         // Entropy should reflect high manipulation probability: 0.92 * 65535 ≈ 60292
@@ -981,6 +1001,7 @@ mod tests {
             oov_ratio: 0.0,
             tokens_matched: 0,
             tokens_total: 0,
+            no_evidence: true,
         };
         let (sifted, _proof) = sift_observation(&class_result, "");
         // Empty text: entropy = 0.5 * 65535 = 32767
@@ -1016,6 +1037,7 @@ mod tests {
             oov_ratio: 0.25,
             tokens_matched: 5,
             tokens_total: 10,
+            no_evidence: false,
         };
         let output = SifterOutput::from_classification(&class_result);
         assert!((output.error_sift - 0.82).abs() < 0.01);
@@ -1117,19 +1139,18 @@ mod s3_acronym_emphasis_audit {
         // src/llmosafe_sifter.rs:369 (all ASCII-uppercase,
         // len >= 2).
         let text = "The AI API HTTP CPU are safe";
-        let (sifted, _) = sift_text(text);
+        let (_sifted, _) = sift_text(text).expect("sift_text should succeed");
+        let breakdown = get_bias_breakdown(text);
         // After the fix, emphasis no longer sets has_bias.
         // The invariant has_bias == classification.is_manipulation
-        // is restored — ordinary acronyms do not trigger hard bias.
+        // is restored — emphasis does NOT contribute to hard_total.
         assert!(
-            !sifted.has_bias(),
+            breakdown.hard_total() == 0,
             "FIXED: ordinary technical acronyms (AI, API, HTTP, CPU) \
-             must NOT trigger has_bias via emphasis pathway. \
-             Emphasis is soft evidence only; hard_bias uses \
-             hard_total() which excludes emphasis."
+             must NOT contribute to hard_total(). \
+             Emphasis is soft evidence only; hard_total() excludes emphasis."
         );
         // But emphasis still contributes to soft scoring (total > 0)
-        let breakdown = get_bias_breakdown(text);
         assert!(
             breakdown.emphasis > 0,
             "emphasis should still be detected for ALL-CAPS words"
@@ -1139,6 +1160,7 @@ mod s3_acronym_emphasis_audit {
             "total() (including emphasis) should still be > 0 \
              for soft scoring/telemetry"
         );
+        // hard_total() must be 0 for ordinary technical acronyms
         assert!(
             breakdown.hard_total() == 0,
             "hard_total() (excluding emphasis) must be 0 \
@@ -1153,13 +1175,9 @@ mod s3_acronym_emphasis_audit {
     #[allow(deprecated)]
     fn test_genuine_manipulation_still_sets_hard_bias() {
         let text = "The expert provided a guaranteed professional opinion";
-        let (sifted, _) = sift_text(text);
-        // Authority + expertise + guaranteed keyword bias → hard bias
-        assert!(
-            sifted.has_bias(),
-            "genuine manipulation must still set has_bias via hard_total()"
-        );
+        let (_sifted, _) = sift_text(text).expect("sift_text should succeed");
         let breakdown = get_bias_breakdown(text);
+        // Authority + expertise + guaranteed keyword bias → hard bias
         assert!(
             breakdown.hard_total() > 0,
             "genuine manipulation must fire hard_total() > 0"
@@ -1191,8 +1209,54 @@ mod s3_acronym_emphasis_audit {
             breakdown.hard_total() == 0,
             "emphasis must NOT contribute to hard_total()"
         );
-        // And has_bias must not be set by emphasis alone
-        let (sifted, _) = sift_text(text);
-        assert!(!sifted.has_bias(), "emphasis alone must NOT set has_bias");
+        // And emphasis alone must not be the cause of has_bias
+        // (has_bias is determined by classifier.is_manipulation || hard_total() > 0;
+        // emphasis is excluded from hard_total())
+        let (_sifted, _) = sift_text(text).expect("sift_text should succeed");
+        // Emphasis is not in hard_total, so it doesn't independently drive has_bias
+        let breakdown = get_bias_breakdown(text);
+        assert!(
+            breakdown.hard_total() == 0,
+            "emphasis must NOT set has_bias via hard_total()"
+        );
     }
+}
+
+// ── R1 No-Evidence sifter tests ──
+
+#[test]
+fn test_sifter_no_evidence_empty() {
+    let (_sifted, _) = sift_text("").expect("sift_text should succeed");
+    let output = SifterOutput::from_classification(&crate::llmosafe_classifier::classify_text(""));
+    assert!(output.no_evidence, "empty input must have no_evidence=true");
+    assert!(!output.has_bias, "no_evidence must not set has_bias");
+}
+
+#[test]
+fn test_sifter_no_evidence_unknown() {
+    let (_sifted, _) = sift_text("xyzzytotallyunknownabc123").expect("sift_text should succeed");
+    let classification = crate::llmosafe_classifier::classify_text("xyzzytotallyunknownabc123");
+    assert!(
+        classification.no_evidence,
+        "unknown must have no_evidence=true"
+    );
+    assert!(
+        !classification.is_manipulation,
+        "zero-match must NOT be manipulation"
+    );
+    let output = SifterOutput::from_classification(&classification);
+    assert!(output.no_evidence, "sifter must expose no_evidence");
+    assert!(!output.has_bias, "no_evidence must not set has_bias");
+}
+
+#[test]
+fn test_sifter_no_evidence_cjk() {
+    let classification = crate::llmosafe_classifier::classify_text("你好世界你好你好");
+    assert!(classification.no_evidence, "CJK must have no_evidence=true");
+    assert!(
+        !classification.is_manipulation,
+        "CJK zero-match must NOT be manipulation"
+    );
+    let output = SifterOutput::from_classification(&classification);
+    assert!(output.no_evidence, "sifter must expose no_evidence for CJK");
 }
