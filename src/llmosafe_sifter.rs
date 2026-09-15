@@ -683,7 +683,7 @@ pub fn sift_observation(
 ///
 /// ```
 /// use llmosafe::sift_perceptions;
-/// let (sifted, proof) = sift_perceptions(&["Observation 1", "Observation 2"], "safety");
+/// let (sifted, proof) = sift_perceptions(&["Observation 1", "Observation 2"], "safety").expect("sift should succeed");
 /// ```
 /// Multi-observation batch entry for processing multiple texts through the
 /// dual-path sifter (classifier + keyword bias). Selects the observation with

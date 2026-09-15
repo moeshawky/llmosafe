@@ -146,7 +146,7 @@ impl<const SIZE: usize> WorkingMemory<SIZE> {
     /// ```
     /// use llmosafe::{WorkingMemory, sift_perceptions};
     /// let mut memory = WorkingMemory::<64>::new(65535);
-    /// let (sifted, proof) = sift_perceptions(&["the weather is nice today"], "test");
+    /// let (sifted, proof) = sift_perceptions(&["the weather is nice today"], "test").expect("sift should succeed");
     /// let result = memory.update(sifted, proof);
     /// assert!(result.is_ok());
     /// ```

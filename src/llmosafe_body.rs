@@ -971,6 +971,14 @@ impl ResourceGuard {
         value
     }
 
+    /// Pure content parser for cgroup v2 `memory.current` (bytes).
+    /// Deterministic seam: unit-testable without host cgroup I/O.
+    #[cfg(target_os = "linux")]
+    fn parse_cgroup_memory_current_content(content: &str) -> Option<usize> {
+        // memory.current is in bytes on cgroup v2
+        content.trim().parse::<usize>().ok()
+    }
+
     /// R3/R4: Read cgroup v2 memory.current (current usage).
     ///
     /// Returns `Some(bytes)` when an active cgroup v2 memory.current
@@ -981,9 +989,21 @@ impl ResourceGuard {
             Ok(c) => c,
             Err(_) => return None,
         };
-        let bytes = content.trim().parse::<usize>().ok()?;
-        // memory.current is in bytes on cgroup v2
-        Some(bytes)
+        Self::parse_cgroup_memory_current_content(&content)
+    }
+
+    /// Pure content parser for cgroup v2 `memory.max`.
+    /// `"max"` (unlimited) → `None` (no trustworthy limit, i.e. inactive
+    /// constraint); numeric content → `Some(bytes)`.
+    /// Deterministic seam: unit-testable without host cgroup I/O.
+    #[cfg(target_os = "linux")]
+    fn parse_cgroup_memory_max_content(content: &str) -> Option<usize> {
+        let trimmed = content.trim();
+        if trimmed == "max" {
+            // No limit — return None (unconstrained)
+            return None;
+        }
+        trimmed.parse::<usize>().ok()
     }
 
     /// R4: Read cgroup v2 memory.max (limit).
@@ -999,13 +1019,7 @@ impl ResourceGuard {
             Ok(c) => c,
             Err(_) => return None,
         };
-        let trimmed = content.trim();
-        if trimmed == "max" {
-            // No limit — return None (unconstrained)
-            return None;
-        }
-        let bytes = trimmed.parse::<usize>().ok()?;
-        Some(bytes)
+        Self::parse_cgroup_memory_max_content(&content)
     }
 
     /// R4: Returns host memory in bytes (from /proc/meminfo).
@@ -1957,6 +1971,105 @@ mod tests {
         );
         assert_eq!(value, Some(0), "zero cgroup.current must be chosen");
         assert_eq!(domain, "cgroup");
+    }
+
+    // ── LT2: deterministic cgroup-content parser + cache-heavy seam tests ──
+    // All inputs are injected fixture values — no host cgroup/RSS I/O.
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_parse_cgroup_memory_max_numeric_active() {
+        // Numeric memory.max content means an ACTIVE constraint.
+        assert_eq!(
+            ResourceGuard::parse_cgroup_memory_max_content("1073741824\n"),
+            Some(1073741824),
+            "numeric memory.max must parse to an active limit"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_parse_cgroup_memory_max_unlimited_inactive() {
+        // memory.max = "max" means unlimited → inactive constraint (None).
+        assert_eq!(
+            ResourceGuard::parse_cgroup_memory_max_content("max\n"),
+            None,
+            "'max' must parse to None (unconstrained)"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_parse_cgroup_memory_max_malformed_fails_closed() {
+        // Unparseable content is fail-closed (None), never a fabricated limit.
+        assert_eq!(
+            ResourceGuard::parse_cgroup_memory_max_content(""),
+            None,
+            "empty content must parse to None"
+        );
+        assert_eq!(
+            ResourceGuard::parse_cgroup_memory_max_content("not-a-number\n"),
+            None,
+            "garbage content must parse to None"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_parse_cgroup_memory_current_numeric() {
+        // memory.current is raw bytes; whitespace-tolerant.
+        assert_eq!(
+            ResourceGuard::parse_cgroup_memory_current_content("536870912\n"),
+            Some(536870912),
+            "numeric memory.current must parse correctly"
+        );
+        assert_eq!(
+            ResourceGuard::parse_cgroup_memory_current_content(""),
+            None,
+            "empty memory.current must parse to None"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_choose_rss_domain_cache_heavy_prefers_cgroup() {
+        // Cache-heavy fixture: memory.current (RSS + page cache) dwarfs the
+        // process VmRSS. Under an ACTIVE constraint the OOM boundary applies
+        // to the cgroup domain, so cgroup.current is still preferred.
+        let (value, domain) = ResourceGuard::choose_rss_domain(
+            Some(1073741824), // cgroup_max = 1GB (active constraint)
+            Some(52428800),   // vmrss = 50MB (small process footprint)
+            Some(943718400),  // cgroup_current = 900MB (cache-inflated)
+        );
+        assert_eq!(
+            value,
+            Some(943718400),
+            "cache-inflated cgroup.current must be chosen under active constraint"
+        );
+        assert_eq!(domain, "cgroup", "domain tag must be 'cgroup'");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_choose_rss_domain_inactive_ignores_cache_inflated_current() {
+        // Same cache-heavy numbers but cgroup_max parses to inactive
+        // ("max" → None): VmRSS is primary, cache-inflated current ignored.
+        let cgroup_max = ResourceGuard::parse_cgroup_memory_max_content("max\n");
+        assert_eq!(
+            cgroup_max, None,
+            "fixture precondition: inactive constraint"
+        );
+        let (value, domain) = ResourceGuard::choose_rss_domain(
+            cgroup_max,
+            Some(52428800),  // vmrss = 50MB
+            Some(943718400), // cgroup_current = 900MB (cache-inflated, ignored)
+        );
+        assert_eq!(
+            value,
+            Some(52428800),
+            "unconstrained must prefer vmrss over cache-inflated current"
+        );
+        assert_eq!(domain, "proc", "domain tag must be 'proc'");
     }
 
     #[test]

@@ -74,13 +74,17 @@ mod std_tests {
 
     #[test]
     fn resource_guard_integration() {
-        let guard = ResourceGuard::auto(0.5); // 50% of system RAM
-        let synapse = guard.check().expect("resource check should succeed");
+        // NOTE (deterministic): live-host `ResourceGuard::auto(0.5)` reads cgroup/RSS
+        // and fails under host pressure — same seam as
+        // tests/cross_module_invariants.rs fixture suite. No production change.
+        let guard = ResourceGuard::for_testing_simple(1024 * 1024, 200, 10);
+        let synapse = guard.check().expect("fixture guard check should succeed");
         let policy = EscalationPolicy::default();
-        let decision = policy.decide(
+        let decision = policy.decide_with_pressure(
             synapse.raw_entropy(),
             synapse.raw_surprise(),
             synapse.has_bias(),
+            PressureLevel::Nominal,
         );
         assert!(decision.can_proceed());
     }

@@ -13,7 +13,8 @@
 #![cfg_attr(test, allow(clippy::shadow_same))]
 #![cfg_attr(test, allow(clippy::shadow_unrelated))]
 
-use llmosafe::sift_text;
+use llmosafe::llmosafe_classifier::classify_text;
+use llmosafe::{sift_text, CognitivePipeline, SafetyDecision};
 
 #[test]
 fn test_sift_text_keyword_bias_or_path() {
@@ -110,4 +111,86 @@ fn test_sift_text_empty_input() {
     let _ = sifted.raw_surprise();
     let _ = sifted.has_bias();
     let _ = proof;
+}
+
+// ── LT1 contract: fail-closed OOD + classifier-path halts (locked behavior,
+// NO policy change — these tests document current enforcement, not new rules) ──
+
+#[test]
+fn zero_match_ood_inputs_fail_closed_documented() {
+    // Zero-match (all-OOV) inputs are unknown/OOD: the classifier reports
+    // no_evidence=true / is_manipulation=false, the sifter sets
+    // has_bias=false, and the pipeline still Halts fail-closed via the
+    // high-entropy intercept path (entropy ~61400 ≥ halt 50000).
+    for input in ["你好", "?", "CPU"] {
+        let classification = classify_text(input);
+        assert!(
+            classification.no_evidence,
+            "{input:?} must yield no_evidence=true"
+        );
+        assert!(
+            !classification.is_manipulation,
+            "{input:?} must not set is_manipulation"
+        );
+        let (sifted, _proof) = sift_text(input).expect("sift_text should succeed");
+        assert!(!sifted.has_bias(), "{input:?} must not set has_bias");
+        let mut pipeline: CognitivePipeline<64, 10> = CognitivePipeline::new("objective");
+        let result = pipeline.process(input);
+        assert!(
+            matches!(result.decision, SafetyDecision::Halt(..)),
+            "{input:?} must Halt fail-closed, got {:?}",
+            result.decision
+        );
+    }
+}
+
+#[test]
+fn single_unigram_vocab_short_inputs_fail_closed_documented() {
+    // Designed fail-closed: single-token inputs matching one vocab unigram
+    // with a positive coefficient classify as manipulation via the classifier
+    // path (has_bias=true) and Halt at the kernel bias gate. Locked as
+    // documented behavior — NOT a threshold to weaken.
+    for input in ["the", "a"] {
+        let classification = classify_text(input);
+        assert!(
+            !classification.no_evidence,
+            "{input:?} must match vocab (no_evidence=false)"
+        );
+        assert!(
+            classification.is_manipulation,
+            "{input:?} must set is_manipulation via classifier path"
+        );
+        let (sifted, _proof) = sift_text(input).expect("sift_text should succeed");
+        assert!(sifted.has_bias(), "{input:?} must set has_bias");
+        let mut pipeline: CognitivePipeline<64, 10> = CognitivePipeline::new("objective");
+        let result = pipeline.process(input);
+        assert!(
+            matches!(result.decision, SafetyDecision::Halt(..)),
+            "{input:?} must Halt via classifier path, got {:?}",
+            result.decision
+        );
+    }
+}
+
+#[test]
+fn benign_dilution_controls_proceed() {
+    // Medium benign controls: matched vocab dilutes the intercept below
+    // threshold, so these proceed — the fail-closed rule above fires only on
+    // zero-match or manipulation-score inputs, not on ordinary prose.
+    for input in ["the sky is blue", "the weather is nice today"] {
+        let classification = classify_text(input);
+        assert!(
+            !classification.is_manipulation,
+            "{input:?} must not set is_manipulation"
+        );
+        let (sifted, _proof) = sift_text(input).expect("sift_text should succeed");
+        assert!(!sifted.has_bias(), "{input:?} must not set has_bias");
+        let mut pipeline: CognitivePipeline<64, 10> = CognitivePipeline::new("objective");
+        let result = pipeline.process(input);
+        assert!(
+            matches!(result.decision, SafetyDecision::Proceed),
+            "{input:?} must Proceed, got {:?}",
+            result.decision
+        );
+    }
 }

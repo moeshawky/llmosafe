@@ -225,6 +225,7 @@ use ::llmosafe::llmosafe_body::ResourceGuard;
 use ::llmosafe::llmosafe_kernel::{KernelError, SiftedProof, SiftedSynapse, Synapse};
 #[allow(deprecated)]
 use ::llmosafe::llmosafe_sifter::{sift_text as rust_sift_text, get_bias_breakdown as rust_get_bias_breakdown, calculate_halo_signal, BiasBreakdown, sift_perceptions};
+use ::llmosafe::llmosafe_classifier::classify_text;
 use ::llmosafe::llmosafe_body::llmosafe_get_environmental_entropy;
 use ::llmosafe::llmosafe_memory::cognitive_memory::{process_state_update, get_memory_stats};
 use ::llmosafe::c_abi::{
@@ -307,7 +308,9 @@ fn calculate_utility(obs: &str, objective: &str) -> u16 {
 /// Detailed per-category bias breakdown for text.
 ///
 /// Returns a dict with keys for the 8 bias categories plus `total` and
-/// `has_bias`.
+/// `has_bias`. `has_bias` mirrors the Rust sifter (`is_manipulation ||
+/// hard_total() > 0`): typographic `emphasis` is soft evidence included in
+/// `total` but never sets `has_bias` alone.
 #[pyfunction]
 fn get_bias_breakdown(text: &str, py: Python<'_>) -> PyResult<PyObject> {
     let breakdown: BiasBreakdown = rust_get_bias_breakdown(text);
@@ -322,7 +325,10 @@ fn get_bias_breakdown(text: &str, py: Python<'_>) -> PyResult<PyObject> {
     dict.set_item("template_fitting", breakdown.template_fitting)?;
     dict.set_item("emphasis", breakdown.emphasis)?;
     dict.set_item("total", breakdown.total())?;
-    dict.set_item("has_bias", breakdown.total() > 0)?;
+    // Hard-bias semantics (src/llmosafe_sifter.rs): `is_manipulation ||
+    // hard_total() > 0` — emphasis is soft-only and never sets has_bias.
+    let has_bias = classify_text(text).is_manipulation || breakdown.hard_total() > 0;
+    dict.set_item("has_bias", has_bias)?;
     Ok(dict.into())
 }
 
