@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Oracle verdicts**: All findings verified against source code before application; no source-logic changes applied
 - **S3**: Filed for sifter audit (out of scope for this pass)
 - **F3**: Closed
+- **Sifter release v1.0**: Single 20k TF-IDF classifier, count-based TF. C1: migrate to 20k model (0955b7b2...). C2: unify no-evidence and sentinel semantics (preflight -9→-5, halo u16::MAX). C3: parity, OOD, and release gate tests (witness vectors, zero-match CJK/Arabic/Cyrillic). C4: SIFTER_RELEASE_GATE_V1.md, PROJECT-ROADMAP.md update, TRAINING_MANIFEST.md. Sealed holdout F1 = 0.9527. READY_WITH_DOCUMENTED_RESIDUAL.
 
 ## [0.7.7] — 2026-06-18
 
