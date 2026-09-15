@@ -176,7 +176,8 @@ mod tests {
     // Non-empty batches always return a real result, never the 0xFFFF fallback.
     #[test]
     fn test_sift_perceptions_empty_still_fails_closed() {
-        let (synapse, _) = sift_perceptions(&[], "objective");
+        let (synapse, _) =
+            sift_perceptions(&[], "objective").expect("sift_perceptions should succeed");
         assert_eq!(
             synapse.raw_entropy(),
             0xFFFF,
@@ -189,7 +190,8 @@ mod tests {
         // Any non-empty batch must produce a synapse with entropy != 0xFFFF.
         // This would fail under the old `best_entropy=0` + strict `>` logic
         // if all observations produced zero entropy (theoretically).
-        let (synapse, _) = sift_perceptions(&["hello world"], "objective");
+        let (synapse, _) = sift_perceptions(&["hello world"], "objective")
+            .expect("sift_perceptions should succeed");
         assert_ne!(
             synapse.raw_entropy(),
             0xFFFF,

@@ -13,6 +13,7 @@
 // per the same file-level allow header other examples carry.
 #![allow(clippy::print_stdout)]
 #![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 #![allow(clippy::arithmetic_side_effects)]
 // Probe markers intentionally use Debug representation so oracle specs match
 // Rust variant spelling (e.g. `Halt(CognitiveInstability, 30000)`).
@@ -117,8 +118,9 @@ fn main() {
 
     // BUG6 — 0xFFFF fallback reachability: empty list (documented) vs a
     // benign batch (must NOT return 0xFFFF).
-    let (empty, _) = sift_perceptions(&[], "objective");
-    let (benign, _) = sift_perceptions(&["hello world, nice day"], "objective");
+    let (empty, _) = sift_perceptions(&[], "objective").expect("sift_perceptions should succeed");
+    let (benign, _) = sift_perceptions(&["hello world, nice day"], "objective")
+        .expect("sift_perceptions should succeed");
     println!(
         "BUG6 empty_entropy={} benign_entropy={} fallback_on_benign={}",
         empty.raw_entropy(),
@@ -131,8 +133,10 @@ fn main() {
     // punctuation, single-char), so the `best_entropy=0` + strict `>`
     // fallback path is UNREACHABLE in practice. Structural fix still
     // applied: seed from first item; empty slice is sole fail-closed sentinel.
-    let (zero_e1, _) = sift_perceptions(&[""], "objective");
-    let (zero_e2, _) = sift_perceptions(&["   "], "objective");
+    let (zero_e1, _) =
+        sift_perceptions(&[""], "objective").expect("sift_perceptions should succeed");
+    let (zero_e2, _) =
+        sift_perceptions(&["   "], "objective").expect("sift_perceptions should succeed");
     println!(
         "S2 empty_str_entropy={} ws_entropy={} floor_reachable={}",
         zero_e1.raw_entropy(),

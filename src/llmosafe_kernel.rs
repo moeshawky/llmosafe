@@ -351,7 +351,7 @@ impl<const MAX_STEPS: usize> ReasoningLoop<MAX_STEPS> {
     /// ```
     /// use llmosafe::{sift_perceptions, WorkingMemory, ReasoningLoop};
     ///
-    /// let (sifted, sifted_proof) = sift_perceptions(&["the weather is nice today"], "test");
+    /// let (sifted, sifted_proof) = sift_perceptions(&["the weather is nice today"], "test").expect("sift should succeed");
     /// let mut memory = WorkingMemory::<64>::new(65535);
     /// let (validated, validated_proof) = memory.update(sifted, sifted_proof).unwrap();
     ///

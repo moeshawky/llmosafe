@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] — 2026-09-15
 
 ### Fixed (P0 corrective pass)
 - **Decision architecture**: F-01–F-14 corrections across docs, invariants, examples, and README:
@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Oracle verdicts**: All findings verified against source code before application; no source-logic changes applied
 - **S3**: Filed for sifter audit (out of scope for this pass)
 - **F3**: Closed
+- **Sifter release v1.0**: Single 20k TF-IDF classifier, count-based TF. C1: migrate to 20k model (0955b7b2...). C2: unify no-evidence and sentinel semantics (preflight -9→-5, halo u16::MAX). C3: parity, OOD, and release gate tests (witness vectors, zero-match CJK/Arabic/Cyrillic). C4: SIFTER_RELEASE_GATE_V1.md, PROJECT-ROADMAP.md update, TRAINING_MANIFEST.md. Historical release holdout v1 (consumed once, F1=0.9527 — must not be reused for tuning). READY_WITH_DOCUMENTED_RESIDUAL.
+- **Residual — short-neutral fail-closed (DOCUMENTED_DEFERRED):** 8/10 short-neutral halts; INTERCEPT=2.673815 + single-unigram vocab overlap, zero downstream-only escalation; pending product safety-policy decision; behavior locked by contract tests `zero_match_ood_inputs_fail_closed_documented`, `single_unigram_vocab_short_inputs_fail_closed_documented`, `benign_dilution_controls_proceed` (`tests/sifter_unified_tests.rs`).
+- **Residual — halo `u16::MAX` ambiguity (DOCUMENTED_DEFERRED):** caller-must-validate; regression at `src/lib.rs:1193-1223,1236-1239,2161-2173`.
 
 ## [0.7.7] — 2026-06-18
 

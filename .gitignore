@@ -42,6 +42,8 @@ tools/train_tfidf_classifier.py
 tools/download_hf_datasets.py
 tools/generate_training_data.py
 tools/generate_sifter_data/
+tools/*.sha256
+tools/training_artifacts/
 # tools/vocab_model.bin is the single exception — it is the compiled
 # classifier embedded into the Rust crate at build time.  Without it
 # the crate falls back to a fail-closed no-op model.  Tracked.
@@ -140,3 +142,22 @@ training_metrics.jsonl
 .maat/
 .workflows/
 MAAT_REPORT.md
+
+# --- Publish hygiene (local-only, never committed) ---
+# ls -ld verified 2026-09-15: PUBLISHING.md and .pypi-env are both plain files
+/PUBLISHING.md
+/.pypi-env
+
+# --- Archived artifacts from /tmp/opencode (local-only, never committed) ---
+.archive/
+
+# --- Local infra / operator docs (untracked, never published) ---
+.codegraph/
+.opencode/
+deploy/
+docs/
+sync_codegraph.sh
+.codegraphinclude
+.codeqlignore
+.githooks/
+.ixd.toml

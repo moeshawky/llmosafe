@@ -53,7 +53,7 @@ proptest! {
     #[test]
     fn sift_always_produces_synapse(observations in prop::collection::vec(".*", 0..10)) {
         let text = observations.join(" ");
-        let (_sifted, _proof) = sift_text(&text);
+        let (_sifted, _proof) = sift_text(&text).expect("sift_text should succeed");
 
         // Should always produce some entropy value
     }

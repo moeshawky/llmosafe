@@ -169,12 +169,13 @@ pub use llmosafe_sifter::SifterOutput;
 #[allow(deprecated)]
 pub use llmosafe_sifter::{
     calculate_halo_signal, calculate_utility, get_bias_breakdown, sift_perceptions, sift_text,
-    BiasBreakdown,
+    BiasBreakdown, SiftError,
 };
 
 /// Maximum number of tokens (whitespace-delimited words) allowed per
 /// pipeline invocation as a work budget. Inputs exceeding this limit
-/// fail predictably with -9 (sift_and_process/process_with_pressure)
+/// fail predictably with -5 (ResourceExhaustion)
+/// (sift_and_process/process_with_pressure)
 /// or u16::MAX (calculate_halo) instead of pressuring the allocator.
 /// Empirically: 10MiB of 1-char tokens = ~10M tokens; 100K cap
 /// covers normal prose (~5-20K tokens) while rejecting adversarial
@@ -408,9 +409,10 @@ pub mod c_abi {
         };
         // F2: Work budget check — count tokens before processing.
         // Prevents working-set amplification from adversarial whitespace/token
-        // shapes. Fails predictably with -9 instead of pressuring the allocator.
+        // shapes. Fails predictably with -5 (ResourceExhaustion) instead of
+        // pressuring the allocator.
         if crate::count_tokens(text) > crate::MAX_WORK_TOKENS {
-            return -9;
+            return -5;
         }
         // Arena lock: find slot and clone Arc (metadata/lookup only).
         let mut arena = PIPELINE_ARENA
@@ -609,7 +611,10 @@ pub mod c_abi {
         }
         // Dual-path: classifier + keyword bias (sift_text), not keyword-only.
         // Returns the combined entropy [0, 65535] from both pathways.
-        let (sifted, _proof) = crate::llmosafe_sifter::sift_text(&text);
+        let sifted = match crate::llmosafe_sifter::sift_text(&text) {
+            Ok((sifted, _proof)) => sifted,
+            Err(_) => return u16::MAX,
+        };
         sifted.raw_entropy()
     }
 
@@ -1058,9 +1063,10 @@ pub mod c_abi {
         };
         // F2: Work budget check — count tokens before processing.
         // Prevents working-set amplification from adversarial whitespace/token
-        // shapes. Fails predictably with -9 instead of pressuring the allocator.
+        // shapes. Fails predictably with -5 (ResourceExhaustion) instead of
+        // pressuring the allocator.
         if crate::count_tokens(text) > crate::MAX_WORK_TOKENS {
-            return -9;
+            return -5;
         }
         // Arena lock: find slot and clone Arc (metadata/lookup only).
         let mut arena = PIPELINE_ARENA
@@ -2141,9 +2147,9 @@ mod tests {
             pathological_text.as_ptr(),
             pathological_text.len(),
         );
-        // Must fail with the documented error sentinel (-9), not process
-        // and pressuring the allocator.
-        assert_eq!(code, -9, "token-pathological input must fail with -9");
+        // Must fail with ResourceExhaustion sentinel (-5), not process
+        // and pressure the allocator.
+        assert_eq!(code, -5, "token-pathological input must fail with -5");
         crate::c_abi::llmosafe_destroy(handle);
     }
 
@@ -2220,7 +2226,8 @@ mod tests {
         let budget = crate::MAX_WORK_TOKENS;
         let input = vec!["a "; budget - 1].concat();
         assert_eq!(count_tokens(&input), budget - 1);
-        let (sifted, _proof) = crate::llmosafe_sifter::sift_text(&input);
+        let (sifted, _proof) = crate::llmosafe_sifter::sift_text(&input)
+            .expect("sift_text should succeed within budget");
         // Should return a valid sifted synapse, not a sentinel.
         assert!(sifted.raw_entropy() > 0 || sifted.raw_entropy() == 0);
         // sift_text always returns a valid result; the budget check
@@ -2235,11 +2242,12 @@ mod tests {
         let budget = crate::MAX_WORK_TOKENS;
         let input = vec!["a "; budget].concat();
         assert_eq!(count_tokens(&input), budget);
-        let (sifted, _proof) = crate::llmosafe_sifter::sift_text(&input);
+        let (sifted, _proof) = crate::llmosafe_sifter::sift_text(&input)
+            .expect("sift_text should succeed at exact budget");
         assert!(sifted.raw_entropy() > 0 || sifted.raw_entropy() == 0);
     }
 
-    /// MAX+1 tokens should trigger budget sentinel in sift_text.
+    /// MAX+1 tokens should trigger ResourceExhaustion error from sift_text.
     #[cfg(feature = "std")]
     #[test]
     fn test_sift_text_boundary_max_plus_one() {
@@ -2248,9 +2256,12 @@ mod tests {
         // MAX+1 tokens.
         let input = vec!["a "; budget + 1].concat();
         assert_eq!(count_tokens(&input), budget + 1);
-        let (sifted, _proof) = crate::llmosafe_sifter::sift_text(&input);
-        // Should return zero-entropy sentinel synapse (fail-closed).
-        assert_eq!(sifted.raw_entropy(), 0);
+        let result = crate::llmosafe_sifter::sift_text(&input);
+        // Should return ResourceExhaustion error.
+        assert!(matches!(
+            result,
+            Err(crate::llmosafe_sifter::SiftError::ResourceExhaustion)
+        ));
     }
 
     /// MAX+1 pathological "a a a..." input via CognitivePipeline::process should halt.
