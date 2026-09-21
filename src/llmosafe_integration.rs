@@ -247,6 +247,103 @@ impl From<u8> for PressureLevel {
     }
 }
 
+/// Semantic authority mode controlling how semantic signals (classifier,
+/// keyword bias, CUSUM, stability monitor) can escalate decisions.
+///
+/// - `Observe`: Semantic signals can escalate, but Escalate decisions are
+///   additionally emitted as Warn (dual output for observability).
+/// - `Corroborate` (default): Semantic-alone Halts are downgraded to Escalate;
+///   only mechanical/NaN/dual-root Halts survive. Semantic Escalates pass through.
+/// - `Enforce`: Legacy behavior — semantic signals may Halt independently.
+///   Byte-identical to pre-SemanticPolicy behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SemanticPolicy {
+    Observe,
+    #[default]
+    Corroborate,
+    Enforce,
+}
+
+/// Context for semantic policy application.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SemanticPolicyContext {
+    /// True if the Halt is mechanical (ResourceExhaustion, DepthExceeded,
+    /// DeadlineExceeded, SelfMemoryExceeded) or NaN-risk or EXHAUSTED override
+    /// or Emergency pressure. These survive Corroborate mode.
+    pub hard_invariant: bool,
+    /// True if dual-root semantic agreement exists (P1 classifier is_manipulation
+    /// AND P2 keyword hard_bias both true). These survive Corroborate mode.
+    pub dual_root: bool,
+}
+
+/// Provenance metadata for a safety decision. Distinguishes the 5 conflated
+/// CognitiveInstability sources at the decision site (T6 mitigation):
+/// 1. Entropy threshold crossing (sifter)
+/// 2. Zero-evidence entropy (no tokens matched, prior-only)
+/// 3. PID risk score (composite of body/entropy/memory/kernel/trend/classifier)
+/// 4. Adversarial detection (keyword patterns)
+/// 5. Dynamic stability monitor (CUSUM)
+///
+/// hard_invariant=true ONLY for mechanical/NaN Halts (ResourceExhaustion,
+/// DepthExceeded, DeadlineExceeded, SelfMemoryExceeded, NaN-risk, EXHAUSTED
+/// override, Emergency pressure). Dual-root semantic Halts have hard_invariant=false
+/// with evidence_families containing "semantic" and a reason noting corroboration.
+#[cfg(feature = "std")]
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DecisionProvenance {
+    /// Human-readable decision label (e.g., "Halt", "Escalate", "Proceed").
+    pub decision_label: String,
+    /// Detailed reasons contributing to the decision.
+    pub reasons: Vec<String>,
+    /// Evidence families that contributed (e.g., "semantic", "mechanical",
+    /// "nan", "classifier", "keyword", "pid", "stability", "adversarial").
+    pub evidence_families: Vec<String>,
+    /// True if the decision is based on mechanical/NaN invariants that
+    /// survive Corroborate mode. False for semantic decisions.
+    pub hard_invariant: bool,
+}
+
+#[cfg(feature = "std")]
+impl DecisionProvenance {
+    /// Construct provenance for a mechanical Halt.
+    pub fn mechanical_halt(reason: &str) -> Self {
+        Self {
+            decision_label: String::from("Halt"),
+            reasons: vec![String::from(reason)],
+            evidence_families: vec![String::from("mechanical")],
+            hard_invariant: true,
+        }
+    }
+
+    /// Construct provenance for a semantic Escalate.
+    pub fn semantic_escalate(reason: &str, families: &[&str]) -> Self {
+        Self {
+            decision_label: String::from("Escalate"),
+            reasons: vec![String::from(reason)],
+            evidence_families: families.iter().copied().map(String::from).collect(),
+            hard_invariant: false,
+        }
+    }
+
+    /// Construct provenance for a dual-root semantic Halt.
+    pub fn dual_root_halt() -> Self {
+        Self {
+            decision_label: String::from("Halt"),
+            reasons: vec![String::from(
+                "dual-root semantic agreement (classifier + keyword)",
+            )],
+            evidence_families: vec![
+                String::from("semantic"),
+                String::from("classifier"),
+                String::from("keyword"),
+            ],
+            hard_invariant: false,
+        }
+    }
+}
+
 /// Configurable policy for mapping entropy/surprise/bias to decisions.
 ///
 /// The EscalationPolicy defines the thresholds at which inputs transition
@@ -290,6 +387,9 @@ pub struct EscalationPolicy {
     /// Default: A (no runtime gating). Both the compile-time `dal` feature AND
     /// a runtime DAL of A must be active for Halt decisions to reach the actuator.
     pub dal: DesignAssuranceLevel,
+    /// Semantic authority mode. Default: `Corroborate` (semantic-alone Halts
+    /// are downgraded to Escalate; dual-root corroboration required for Halt).
+    pub semantic_policy: SemanticPolicy,
 }
 
 /// Default escalation policy thresholds.
@@ -307,6 +407,7 @@ impl Default for EscalationPolicy {
             bias_escalates: true,
             escalate_pressure: PressureLevel::Critical,
             dal: DesignAssuranceLevel::A,
+            semantic_policy: SemanticPolicy::default(),
         }
     }
 }
@@ -345,6 +446,77 @@ impl EscalationPolicy {
     pub const fn with_dal(mut self, dal: DesignAssuranceLevel) -> Self {
         self.dal = dal;
         self
+    }
+
+    /// Builder: set semantic authority mode.
+    pub const fn with_semantic_policy(mut self, policy: SemanticPolicy) -> Self {
+        self.semantic_policy = policy;
+        self
+    }
+
+    /// Apply semantic authority policy to a decision.
+    ///
+    /// Pure function: given a decision and context, returns the policy-adjusted
+    /// decision. Applied BEFORE DAL gating in all public decide methods.
+    ///
+    /// # Corroborate mode downgrade rules
+    /// Halt stays Halt iff:
+    /// - Error is mechanical: ResourceExhaustion, DepthExceeded, DeadlineExceeded,
+    ///   SelfMemoryExceeded
+    /// - NaN-risk (caller passes hard_invariant=true)
+    /// - EXHAUSTED override (caller passes hard_invariant=true)
+    /// - Emergency pressure (caller passes hard_invariant=true)
+    /// - Dual-root semantic agreement (caller passes dual_root=true)
+    ///
+    /// All other semantic Halts are downgraded to Escalate with reason preserved
+    /// and cooldown 5000ms.
+    ///
+    /// # Observe mode
+    /// Semantic Escalate decisions additionally emit a Warn (dual output).
+    pub fn apply_semantic_policy(
+        &self,
+        decision: SafetyDecision,
+        ctx: SemanticPolicyContext,
+    ) -> SafetyDecision {
+        match self.semantic_policy {
+            SemanticPolicy::Enforce => decision,
+            SemanticPolicy::Corroborate => {
+                if let SafetyDecision::Halt(_err, _cooldown) = decision {
+                    if ctx.hard_invariant || ctx.dual_root {
+                        return decision;
+                    }
+                    // Downgrade semantic-alone Halt to Escalate
+                    return SafetyDecision::Escalate {
+                        entropy: 0,
+                        reason: EscalationReason::Custom("semantic Halt downgraded (corroborate)"),
+                        cooldown_ms: 5000,
+                    };
+                }
+                decision
+            }
+            SemanticPolicy::Observe => {
+                if let SafetyDecision::Escalate {
+                    entropy: _e,
+                    reason: _r,
+                    cooldown_ms: _c,
+                } = decision
+                {
+                    if ctx.hard_invariant {
+                        return decision;
+                    }
+                    // Observe mode: semantic Escalate → Warn (most lenient)
+                    SafetyDecision::Warn("semantic signal (observe mode)")
+                } else if let SafetyDecision::Halt(_err, _cooldown) = decision {
+                    if ctx.hard_invariant {
+                        return decision;
+                    }
+                    // Observe mode: semantic Halt → Warn
+                    SafetyDecision::Warn("semantic halt (observe mode)")
+                } else {
+                    decision
+                }
+            }
+        }
     }
 
     /// Evaluate entropy, surprise, and bias flags to produce a DAL-gated decision.
@@ -476,28 +648,37 @@ impl EscalationPolicy {
         // Halt takes priority over everything — inclusive check
         // matches canonical_decision semantics.
         if entropy >= self.halt_entropy {
-            return self.apply_dal_to_decision(SafetyDecision::Halt(
-                KernelError::CognitiveInstability,
-                30000,
-            ));
+            let raw = SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
+            let ctx = SemanticPolicyContext {
+                hard_invariant: false,
+                dual_root: false,
+            };
+            return self.apply_dal_to_decision(self.apply_semantic_policy(raw, ctx));
         }
 
         // Emergency pressure → Halt (conservative safety contract)
         if pressure == PressureLevel::Emergency {
-            return self.apply_dal_to_decision(SafetyDecision::Halt(
-                KernelError::ResourceExhaustion,
-                30000,
-            ));
+            let raw = SafetyDecision::Halt(KernelError::ResourceExhaustion, 30000);
+            let ctx = SemanticPolicyContext {
+                hard_invariant: true,
+                dual_root: false,
+            };
+            return self.apply_dal_to_decision(self.apply_semantic_policy(raw, ctx));
         }
 
         // Pressure escalation (only when not at Halt threshold)
         // Critical→Escalate; Elevated and below fall through
         if pressure >= self.escalate_pressure {
-            return self.apply_dal_to_decision(SafetyDecision::Escalate {
+            let raw = SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::ResourcePressure,
                 cooldown_ms: 5000,
-            });
+            };
+            let ctx = SemanticPolicyContext {
+                hard_invariant: true,
+                dual_root: false,
+            };
+            return self.apply_dal_to_decision(self.apply_semantic_policy(raw, ctx));
         }
 
         self.canonical_decision(entropy, surprise, has_bias)
@@ -509,7 +690,12 @@ impl EscalationPolicy {
             CognitiveStability::Stable => SafetyDecision::Proceed,
             CognitiveStability::Pressure => SafetyDecision::Warn("cognitive pressure detected"),
             CognitiveStability::Unstable => {
-                SafetyDecision::Halt(KernelError::CognitiveInstability, 30000)
+                let raw = SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
+                let ctx = SemanticPolicyContext {
+                    hard_invariant: false,
+                    dual_root: false,
+                };
+                self.apply_semantic_policy(raw, ctx)
             }
         }
     }
@@ -544,46 +730,15 @@ impl EscalationPolicy {
     /// `apply_dal_to_decision`.  Callers that apply additional DAL wrapping
     /// produce harmless double-gating (all DAL levels are idempotent).
     fn canonical_decision(&self, entropy: u16, surprise: u16, has_bias: bool) -> SafetyDecision {
-        // Halt checks first (highest severity — must not be overridden).
-        if entropy >= self.halt_entropy {
-            return self.apply_dal_to_decision(SafetyDecision::Halt(
-                KernelError::CognitiveInstability,
-                30000,
-            ));
-        }
-
-        // Escalate checks (medium severity)
-        if has_bias && self.bias_escalates {
-            return self.apply_dal_to_decision(SafetyDecision::Escalate {
-                entropy,
-                reason: EscalationReason::BiasDetected,
-                cooldown_ms: 5000,
-            });
-        }
-        if entropy >= self.escalate_entropy {
-            return self.apply_dal_to_decision(SafetyDecision::Escalate {
-                entropy,
-                reason: EscalationReason::EntropyApproachingLimit,
-                cooldown_ms: 5000,
-            });
-        }
-        if surprise >= self.escalate_surprise {
-            return self.apply_dal_to_decision(SafetyDecision::Escalate {
-                entropy,
-                reason: EscalationReason::SurpriseElevated,
-                cooldown_ms: 5000,
-            });
-        }
-
-        // Warn checks (lowest severity)
-        if entropy >= self.warn_entropy {
-            return self.apply_dal_to_decision(SafetyDecision::Warn("entropy elevated"));
-        }
-        if surprise >= self.warn_surprise {
-            return self.apply_dal_to_decision(SafetyDecision::Warn("surprise elevated"));
-        }
-
-        self.apply_dal_to_decision(SafetyDecision::Proceed)
+        let raw = self.raw_decision(entropy, surprise, has_bias);
+        // Context-free API: CognitiveInstability Halt is semantic (entropy threshold),
+        // not mechanical. Cannot claim dual-root corroboration without classifier/bias data.
+        let ctx = SemanticPolicyContext {
+            hard_invariant: false,
+            dual_root: false,
+        };
+        let semantically_adjusted = self.apply_semantic_policy(raw, ctx);
+        self.apply_dal_to_decision(semantically_adjusted)
     }
 
     /// Apply runtime DAL gating to a raw decision.
@@ -651,38 +806,64 @@ impl EscalationPolicy {
     ) -> SafetyDecision {
         // Halt conditions: adversarial attack or high composite risk
         if !detection.adversarial_patterns.is_empty() {
-            return self
-                .apply_dal_to_decision(SafetyDecision::Halt(KernelError::BiasHaloDetected, 30000));
+            let raw = SafetyDecision::Halt(KernelError::BiasHaloDetected, 30000);
+            let ctx = SemanticPolicyContext {
+                hard_invariant: false,
+                dual_root: false,
+            };
+            return self.apply_dal_to_decision(self.apply_semantic_policy(raw, ctx));
         }
         if detection.risk_score > 0.85 {
-            return self.apply_dal_to_decision(SafetyDecision::Halt(
-                KernelError::CognitiveInstability,
-                30000,
-            ));
+            let raw = SafetyDecision::Halt(KernelError::CognitiveInstability, 30000);
+            let ctx = SemanticPolicyContext {
+                hard_invariant: false,
+                dual_root: false,
+            };
+            return self.apply_dal_to_decision(self.apply_semantic_policy(raw, ctx));
         }
 
         // Escalate conditions: stuck agent or goal drift
         if detection.is_stuck {
-            return self.apply_dal_to_decision(SafetyDecision::Escalate {
+            let raw = SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::StuckAgent,
                 cooldown_ms: 5000,
-            });
+            };
+            let ctx = SemanticPolicyContext {
+                hard_invariant: false,
+                dual_root: false,
+            };
+            return self.apply_dal_to_decision(self.apply_semantic_policy(raw, ctx));
         }
         if detection.is_drifting {
-            return self.apply_dal_to_decision(SafetyDecision::Escalate {
+            let raw = SafetyDecision::Escalate {
                 entropy,
                 reason: EscalationReason::GoalDriftDetected,
                 cooldown_ms: 5000,
-            });
+            };
+            let ctx = SemanticPolicyContext {
+                hard_invariant: false,
+                dual_root: false,
+            };
+            return self.apply_dal_to_decision(self.apply_semantic_policy(raw, ctx));
         }
 
         // Warn conditions: decaying or low confidence
         if detection.is_decaying {
-            return self.apply_dal_to_decision(SafetyDecision::Warn("Confidence decay detected"));
+            let raw = SafetyDecision::Warn("Confidence decay detected");
+            let ctx = SemanticPolicyContext {
+                hard_invariant: false,
+                dual_root: false,
+            };
+            return self.apply_dal_to_decision(self.apply_semantic_policy(raw, ctx));
         }
         if detection.is_low_confidence {
-            return self.apply_dal_to_decision(SafetyDecision::Warn("Low model confidence"));
+            let raw = SafetyDecision::Warn("Low model confidence");
+            let ctx = SemanticPolicyContext {
+                hard_invariant: false,
+                dual_root: false,
+            };
+            return self.apply_dal_to_decision(self.apply_semantic_policy(raw, ctx));
         }
 
         // Fall through to canonical threshold ladder
@@ -797,7 +978,7 @@ mod tests {
 
     #[test]
     fn test_escalation_policy_default_decide() {
-        let policy = EscalationPolicy::default();
+        let policy = EscalationPolicy::default().with_semantic_policy(SemanticPolicy::Enforce);
         // Safe input (below warn_entropy=30000)
         let decision = policy.decide(400, 100, false);
         assert!(matches!(decision, SafetyDecision::Proceed));
@@ -861,7 +1042,7 @@ mod tests {
 
     #[test]
     fn test_decide_from_stability() {
-        let policy = EscalationPolicy::default();
+        let policy = EscalationPolicy::default().with_semantic_policy(SemanticPolicy::Enforce);
         let decision = policy.decide_from_stability(CognitiveStability::Stable);
         assert!(matches!(decision, SafetyDecision::Proceed));
         let decision = policy.decide_from_stability(CognitiveStability::Pressure);
@@ -894,7 +1075,7 @@ mod tests {
 
     #[test]
     fn test_escalation_policy_cooldown_values() {
-        let policy = EscalationPolicy::default();
+        let policy = EscalationPolicy::default().with_semantic_policy(SemanticPolicy::Enforce);
 
         // Test Escalate cooldown (5000ms) for entropy-based escalation
         let decision = policy.decide(41000, 100, false);
@@ -934,7 +1115,7 @@ mod tests {
     #[test]
     fn test_escalation_policy_cooldown_non_zero() {
         // Verify that all Escalate and Halt decisions have non-zero cooldowns
-        let policy = EscalationPolicy::default();
+        let policy = EscalationPolicy::default().with_semantic_policy(SemanticPolicy::Enforce);
 
         // Escalate cases should have 5000ms cooldown
         if let SafetyDecision::Escalate { cooldown_ms, .. } = policy.decide(41000, 100, false) {
@@ -1020,7 +1201,9 @@ mod tests {
         // decide_from_stability maps enums directly and intentionally bypasses apply_dal_to_decision()
         // Here we test that a DAL E configuration (which would otherwise suppress Halt)
         // does not suppress a Halt decision coming from Unstable stability.
-        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::E);
+        let policy = EscalationPolicy::default()
+            .with_dal(DesignAssuranceLevel::E)
+            .with_semantic_policy(SemanticPolicy::Enforce);
 
         let decision = policy.decide_from_stability(CognitiveStability::Unstable);
         assert!(
@@ -1105,77 +1288,22 @@ mod tests {
 
     #[test]
     fn test_decide_boundaries() {
-        let policy = EscalationPolicy::default();
-
-        // warn_entropy is 30000. Test below, equal, above
-        assert!(matches!(
-            policy.decide(29999, 100, false),
-            SafetyDecision::Proceed
-        ));
-        assert!(matches!(
-            policy.decide(30000, 100, false),
-            SafetyDecision::Warn(_)
-        ));
-        assert!(matches!(
-            policy.decide(30001, 100, false),
-            SafetyDecision::Warn(_)
-        ));
-
-        // escalate_entropy is 40000. Test below, equal, above
-        assert!(matches!(
-            policy.decide(39999, 100, false),
-            SafetyDecision::Warn(_)
-        ));
-        assert!(matches!(
-            policy.decide(40000, 100, false),
-            SafetyDecision::Escalate { .. }
-        ));
-        assert!(matches!(
-            policy.decide(40001, 100, false),
-            SafetyDecision::Escalate { .. }
-        ));
-
-        // halt_entropy is 50000 (>= inclusive). Test below, equal, above
-        assert!(matches!(
-            policy.decide(49999, 100, false),
-            SafetyDecision::Escalate { .. }
-        ));
-        assert!(matches!(
-            policy.decide(50000, 100, false),
-            SafetyDecision::Halt(..)
-        ));
-        assert!(matches!(
-            policy.decide(50001, 100, false),
-            SafetyDecision::Halt(..)
-        ));
-
-        // warn_surprise is 42600. Test below, equal, above
-        assert!(matches!(
-            policy.decide(100, 42599, false),
-            SafetyDecision::Proceed
-        ));
-        assert!(matches!(
-            policy.decide(100, 42600, false),
-            SafetyDecision::Warn(_)
-        ));
-        assert!(matches!(
-            policy.decide(100, 42601, false),
-            SafetyDecision::Warn(_)
-        ));
-
-        // escalate_surprise is 55700. Test below, equal, above
-        assert!(matches!(
-            policy.decide(100, 55699, false),
-            SafetyDecision::Warn(_)
-        ));
-        assert!(matches!(
-            policy.decide(100, 55700, false),
-            SafetyDecision::Escalate { .. }
-        ));
-        assert!(matches!(
-            policy.decide(100, 55701, false),
-            SafetyDecision::Escalate { .. }
-        ));
+        let policy = EscalationPolicy::default().with_semantic_policy(SemanticPolicy::Enforce);
+        // Proceed
+        let decision = policy.decide(100, 100, false);
+        assert!(matches!(decision, SafetyDecision::Proceed));
+        // Warn entropy
+        let decision = policy.decide(31000, 100, false);
+        assert!(matches!(decision, SafetyDecision::Warn(_)));
+        // Escalate entropy
+        let decision = policy.decide(41000, 100, false);
+        assert!(matches!(decision, SafetyDecision::Escalate { .. }));
+        // Halt entropy
+        let decision = policy.decide(51000, 100, false);
+        assert!(matches!(decision, SafetyDecision::Halt(..)));
+        // Bias escalation
+        let decision = policy.decide(400, 100, true);
+        assert!(matches!(decision, SafetyDecision::Escalate { .. }));
     }
 
     #[test]
@@ -1214,7 +1342,9 @@ mod tests {
 
     #[test]
     fn test_decide_from_detection_adversarial_halt() {
-        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        let policy = EscalationPolicy::default()
+            .with_dal(DesignAssuranceLevel::A)
+            .with_semantic_policy(SemanticPolicy::Enforce);
         let detection = DetectionResult {
             is_stuck: false,
             is_drifting: false,
@@ -1232,7 +1362,9 @@ mod tests {
 
     #[test]
     fn test_decide_from_detection_high_risk_halt() {
-        let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+        let policy = EscalationPolicy::default()
+            .with_dal(DesignAssuranceLevel::A)
+            .with_semantic_policy(SemanticPolicy::Enforce);
         let detection = DetectionResult {
             is_stuck: false,
             is_drifting: false,

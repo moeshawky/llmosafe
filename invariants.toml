@@ -98,6 +98,42 @@ chain = ["policy", "body"]
 description = "pressure >= escalate_pressure triggers escalation when no Halt present"
 check = "if pressure >= escalate_pressure && entropy < halt_entropy: decision == Escalate"
 
+[[invariant]]
+name = "semantic_alone_no_halt_default"
+chain = ["policy"]
+description = "Under Corroborate policy (default), a semantic-alone Halt (entropy threshold, adversarial, stability) must be downgraded to Escalate. Only mechanical/NaN/dual-root Halts survive."
+check = "if semantic_policy == Corroborate && !hard_invariant && !dual_root: Halt → Escalate"
+
+[[invariant]]
+name = "zero_evidence_no_halt_default"
+chain = ["policy", "sift"]
+description = "Zero-evidence entropy (no tokens matched, prior-only score) must not Halt under Corroborate policy — it is the canonical false-authority case."
+check = "if classification.tokens_matched == 0 && semantic_policy == Corroborate: no Halt"
+
+[[invariant]]
+name = "dual_root_may_halt"
+chain = ["policy", "sift"]
+description = "Dual-root semantic agreement (P1 classifier is_manipulation AND P2 keyword hard_bias) may Halt under Corroborate policy."
+check = "if is_manipulation && hard_bias && semantic_policy == Corroborate: Halt permitted"
+
+[[invariant]]
+name = "same_root_not_independent"
+chain = ["policy"]
+description = "Two Halts from the same root (e.g., entropy threshold and kernel stability monitor, both sifter-derived) are not independent corroboration."
+check = "same evidence_families entry → not dual_root"
+
+[[invariant]]
+name = "mechanical_may_halt_alone"
+chain = ["policy"]
+description = "Mechanical Halts (ResourceExhaustion, DepthExceeded, DeadlineExceeded, SelfMemoryExceeded, NaN-risk, EXHAUSTED override, Emergency pressure) may Halt under any policy, including Corroborate."
+check = "if hard_invariant: Halt preserved regardless of semantic_policy"
+
+[[invariant]]
+name = "enforce_preserves_legacy"
+chain = ["policy"]
+description = "Under Enforce policy, behavior must be byte-identical to pre-SemanticPolicy behavior — all semantic Halts pass through unchanged."
+check = "if semantic_policy == Enforce: apply_semantic_policy returns input unchanged"
+
 # ── Typestate Chain: sifted → validated ─────────────────────────
 
 [[invariant]]

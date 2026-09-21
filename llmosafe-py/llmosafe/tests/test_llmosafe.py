@@ -483,5 +483,74 @@ class TestPipelineGetters:
             llmosafe.get_step_count(pipeline.instance_id)
 
 
+class TestSemanticPolicy:
+    """Tests for semantic authority policy: default, switching, enforce semantics, provenance."""
+
+    def test_default_policy_is_corroborate(self) -> None:
+        """Default pipeline uses Corroborate mode (value 1)."""
+        pipeline = llmosafe.CognitivePipeline()
+        result = pipeline.process("The expert official recommendation is certified")
+        # Corroborate mode: semantic Halts are downgraded to Escalate (code 1), not Halt (code 2)
+        # Unless dual-root corroboration exists.
+        prov = result.get("provenance")
+        assert prov is not None, "process() result must include provenance dict"
+        assert prov["semantic_policy"] == "Corroborate", f"default must be Corroborate, got {prov['semantic_policy']}"
+
+    def test_set_enforce_policy(self) -> None:
+        """Enforce mode (value 2) restores Halt on semantic input."""
+        pipeline = llmosafe.CognitivePipeline(semantic_policy=2)
+        result = pipeline.process("The expert official recommendation is certified")
+        prov = result.get("provenance")
+        assert prov is not None
+        assert prov["semantic_policy"] == "Enforce", f"expected Enforce, got {prov['semantic_policy']}"
+
+    def test_set_semantic_policy_method(self) -> None:
+        """set_semantic_policy() method switches policy on existing instance."""
+        pipeline = llmosafe.CognitivePipeline()
+        pipeline.set_semantic_policy(0)  # Observe
+        result = pipeline.process("The expert official recommendation is certified")
+        prov = result.get("provenance")
+        assert prov is not None
+        assert prov["semantic_policy"] == "Observe"
+        # Switch back to Enforce
+        pipeline.set_semantic_policy(2)
+        result = pipeline.process("The expert official recommendation is certified")
+        prov = result.get("provenance")
+        assert prov["semantic_policy"] == "Enforce"
+
+    def test_provenance_hard_invariant_field(self) -> None:
+        """provenance.hard_invariant is present and boolean."""
+        pipeline = llmosafe.CognitivePipeline()
+        result = pipeline.process("normal text without bias keywords")
+        prov = result.get("provenance")
+        assert prov is not None
+        assert "hard_invariant" in prov
+        assert isinstance(prov["hard_invariant"], bool)
+        # Normal text → Proceed → not a mechanical invariant Halt
+        assert prov["hard_invariant"] is False
+
+    def test_provenance_evidence_families_field(self) -> None:
+        """provenance.evidence_families is a list of strings."""
+        pipeline = llmosafe.CognitivePipeline()
+        result = pipeline.process("The expert official recommendation is certified")
+        prov = result.get("provenance")
+        assert prov is not None
+        assert "evidence_families" in prov
+        assert isinstance(prov["evidence_families"], list)
+        for fam in prov["evidence_families"]:
+            assert isinstance(fam, str)
+
+    def test_invalid_policy_in_constructor(self) -> None:
+        """Invalid policy value in constructor raises LLMOSafeError."""
+        with pytest.raises(llmosafe.LLMOSafeError, match="semantic_policy"):
+            llmosafe.CognitivePipeline(semantic_policy=5)
+
+    def test_invalid_policy_in_method(self) -> None:
+        """Invalid policy value in set_semantic_policy() raises LLMOSafeError."""
+        pipeline = llmosafe.CognitivePipeline()
+        with pytest.raises(llmosafe.LLMOSafeError, match="semantic_policy"):
+            pipeline.set_semantic_policy(99)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

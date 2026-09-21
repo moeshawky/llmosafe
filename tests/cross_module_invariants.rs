@@ -90,7 +90,7 @@ proptest! {
         surprise in 0u16..65535,
         bias in proptest::bool::ANY,
     ) {
-        let policy = EscalationPolicy::default();
+        let policy = EscalationPolicy::default().with_semantic_policy(SemanticPolicy::Enforce);
         if entropy >= policy.halt_entropy {
             let decision = policy.decide(entropy, surprise, bias);
             prop_assert!(
@@ -340,7 +340,9 @@ fn fault_injection_zero_ceiling_always_exhausted() {
 
 #[test]
 fn fault_injection_entropy_interaction_ordering() {
-    let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+    let policy = EscalationPolicy::default()
+        .with_dal(DesignAssuranceLevel::A)
+        .with_semantic_policy(SemanticPolicy::Enforce);
     // entropy > halt_entropy (50000) → Halt regardless of bias
     let decision = policy.decide(50001, 0, true);
     assert!(
@@ -481,7 +483,7 @@ fn pid_config_with_pid_validates() {
 #[test]
 fn pid_reset_full_clears_integrators() {
     let mut pipeline = CognitivePipeline::<64, 10>::new("test");
-    let _ = pipeline.process("some input for testing purposes here");
+    let _unused = pipeline.process("some input for testing purposes here");
     pipeline.reset_full();
     // After reset, the pipeline should produce valid results again
     let result = pipeline.process("ordinary text without manipulation");

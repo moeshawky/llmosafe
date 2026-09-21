@@ -1369,7 +1369,7 @@ mod tests {
         let mut state_clean = PidState::new();
         let mut state_lc = PidState::new();
         // Use classifier_prob=0.5 to give kf a non-zero F-term (kf * p).
-        // BUG 5 FIX (v0.8.1): F-term was previously inverted as kf * (1-p);
+        // BUG 5 FIX (v0.9.0): F-term was previously inverted as kf * (1-p);
         // now uses kf * p directly — higher classifier_prob → MORE risk.
         let risk_clean = compute_pid_score(
             &PidInput::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.5, false, 0, 0),

@@ -531,6 +531,11 @@ pub struct PipelineResult {
     /// Unbounded f32 — negative = safe, positive = manipulation signal.
     /// Set to 0.0 in error-path results where no classification was performed.
     pub classifier_score: f32,
+    /// Decision provenance metadata: label, reasons, evidence families,
+    /// and hard_invariant flag. Enables post-hoc audit of why a decision
+    /// was made and whether it was mechanical or semantic.
+    #[cfg(feature = "std")]
+    pub provenance: crate::llmosafe_integration::DecisionProvenance,
 }
 
 impl PipelineResult {
@@ -743,11 +748,19 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
                 entropy: body_entropy,
                 surprise: 0,
                 monitor_state: crate::llmosafe_kernel::StabilityResult::Stable,
+
                 #[cfg(feature = "std")]
                 body_pressure: Some(pressure),
                 step_count: self.step_count,
                 kernel_output: None,
                 classifier_score: 0.0,
+
+                provenance: crate::llmosafe_integration::DecisionProvenance {
+                    decision_label: format!("{:?}", decision),
+                    reasons: vec![String::from("body pressure")],
+                    evidence_families: vec![String::from("mechanical")],
+                    hard_invariant: true,
+                },
             };
         }
 
@@ -899,12 +912,22 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         // Single canonical entry point. Keyword-bias (innate layer) OR-s into
         // the classifier result. One synapse, one proof, no duplicate compute.
         stages |= STAGE_SIFT;
-        let (sifted, sifted_proof, classifier_score, classifier_probability) =
-            crate::llmosafe_sifter::sift_text_with_score(observation);
+        let (
+            sifted,
+            sifted_proof,
+            classifier_score,
+            classifier_probability,
+            is_manipulation,
+            hard_bias,
+            tokens_matched,
+        ) = crate::llmosafe_sifter::sift_text_with_score(observation);
         let entropy = sifted.raw_entropy();
         let surprise_val = sifted.raw_surprise();
         let oov_ratio = sifted.oov_ratio();
         let has_bias = sifted.has_bias();
+        // Dual-root corroboration (spec c): P1 classifier is_manipulation AND
+        // P2 keyword hard_bias AND at least one token matched (not OOD).
+        let dual_root = is_manipulation && hard_bias && tokens_matched > 0;
 
         // ── ADVERSARY_CHECK (pre-KERNEL) ──
         // D1: Run adversarial detection BEFORE Stage 3 (KERNEL) so that
@@ -916,6 +939,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         // custom patterns. detect_substrings provides substring-level
         // detection (std-only).
         let adversarial_detected = self.adversarial.is_adversarial(observation);
+
         #[cfg(feature = "std")]
         let adversarial_substrings = self.adversarial.detect_substrings(observation);
         #[cfg(not(feature = "std"))]
@@ -928,7 +952,14 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         let validated = match mem_result {
             Ok((v, _p)) => v,
             Err(err) => {
-                return self.ctrl_result_from_error(
+                let hard_invariant = matches!(
+                    err,
+                    KernelError::ResourceExhaustion
+                        | KernelError::DepthExceeded
+                        | KernelError::SelfMemoryExceeded
+                        | KernelError::DeadlineExceeded
+                );
+                let mut result = self.ctrl_result_from_error(
                     err,
                     stages,
                     oov_ratio,
@@ -936,6 +967,14 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
                     surprise_val,
                     adversarial_detected,
                 );
+                let semantic_ctx = crate::llmosafe_integration::SemanticPolicyContext {
+                    hard_invariant,
+                    dual_root,
+                };
+                result.decision = self
+                    .esc_policy
+                    .apply_semantic_policy(result.decision, semantic_ctx);
+                return result;
             }
         };
 
@@ -961,7 +1000,14 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
                 validated.into_inner()
             }
             Err(err) => {
-                return self.ctrl_result_from_kernel_error(
+                let hard_invariant = matches!(
+                    err,
+                    KernelError::ResourceExhaustion
+                        | KernelError::DepthExceeded
+                        | KernelError::SelfMemoryExceeded
+                        | KernelError::DeadlineExceeded
+                );
+                let mut result = self.ctrl_result_from_kernel_error(
                     err,
                     stages,
                     oov_ratio,
@@ -969,6 +1015,14 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
                     surprise_val,
                     adversarial_detected,
                 );
+                let semantic_ctx = crate::llmosafe_integration::SemanticPolicyContext {
+                    hard_invariant,
+                    dual_root,
+                };
+                result.decision = self
+                    .esc_policy
+                    .apply_semantic_policy(result.decision, semantic_ctx);
+                return result;
             }
         };
 
@@ -1023,6 +1077,7 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         // Avoids PID integrator state entirely. Returns the DAL-adjusted
         // gate decision directly for ALL severities — no PID computation,
         // no pid_state mutation. A DAL-downgraded Halt stays downgraded.
+
         #[cfg(feature = "std")]
         if self.use_detection_gate {
             let detection_result = DetectionResult {
@@ -1057,11 +1112,19 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
                 entropy,
                 surprise: surprise_val,
                 monitor_state,
+
                 #[cfg(feature = "std")]
                 body_pressure: Some(pressure),
                 step_count: self.step_count,
                 kernel_output,
                 classifier_score,
+
+                provenance: crate::llmosafe_integration::DecisionProvenance {
+                    decision_label: format!("{:?}", gate_decision),
+                    reasons: vec![String::from("detection gate")],
+                    evidence_families: vec![String::from("adversarial")],
+                    hard_invariant: false,
+                },
             };
         }
 
@@ -1128,6 +1191,10 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         let pid_decision =
             crate::llmosafe_pid::pid_risk_to_decision(limited_risk, &self.pid_config);
 
+        // NaN sensor fail-safe: if PID risk is NaN (sensor fault), treat as
+        // hard invariant that survives Corroborate mode — never depends on bias context.
+        let nan_risk = pure_risk.is_nan() || limited_risk.is_nan();
+
         // Select the more severe decision: PID may escalate beyond policy,
         // but never downgrades it. Severity ordering: Proceed(0) < Warn(1) < Escalate(2) < Halt(3) < Exit(4).
         let merged_decision = if pid_decision.severity() >= policy_decision.severity() {
@@ -1136,8 +1203,20 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             policy_decision
         };
 
+        // Apply semantic authority policy with full dual-root context
+        // BEFORE DAL gating. In Corroborate mode, semantic-alone Halts are
+        // downgraded to Escalate; dual-root agreement preserves Halt.
+        let semantic_ctx = crate::llmosafe_integration::SemanticPolicyContext {
+            hard_invariant: override_flags.contains(crate::control_types::OverrideFlags::EXHAUSTED)
+                || nan_risk,
+            dual_root,
+        };
+        let semantically_adjusted = self
+            .esc_policy
+            .apply_semantic_policy(merged_decision, semantic_ctx);
+
         // Apply runtime DAL ONCE to the merged decision.
-        let decision = self.esc_policy.apply_dal_to_decision(merged_decision);
+        let decision = self.esc_policy.apply_dal_to_decision(semantically_adjusted);
 
         let kernel_output = Some(KernelOutput {
             error_kernel: f32::from(kernel_entropy) / U16_MAX_F32,
@@ -1145,6 +1224,60 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
                 < crate::llmosafe_kernel::STABILITY_THRESHOLD as u32,
             depth: self.step_count,
         });
+
+        // Build decision provenance for T6 mitigation — distinguishes
+        // the 5 conflated CognitiveInstability sources.
+        #[cfg(feature = "std")]
+        let mut reasons: Vec<String> = Vec::new();
+        #[cfg(feature = "std")]
+        let mut evidence_families: Vec<String> = Vec::new();
+        #[cfg_attr(not(feature = "std"), allow(unused_variables))]
+        let hard_invariant =
+            override_flags.contains(crate::control_types::OverrideFlags::EXHAUSTED);
+        #[cfg(feature = "std")]
+        if dual_root {
+            reasons.push(String::from(
+                "dual-root corroboration (classifier + keyword bias)",
+            ));
+        }
+        #[cfg(feature = "std")]
+        if is_manipulation {
+            evidence_families.push(String::from("classifier"));
+        }
+        #[cfg(feature = "std")]
+        if hard_bias {
+            evidence_families.push(String::from("keyword"));
+        }
+        #[cfg(feature = "std")]
+        if has_bias {
+            evidence_families.push(String::from("semantic"));
+        }
+        #[cfg(feature = "std")]
+        if override_flags.contains(crate::control_types::OverrideFlags::EXHAUSTED) {
+            reasons.push(String::from("body exhausted"));
+            evidence_families.push(String::from("mechanical"));
+        }
+        #[cfg(feature = "std")]
+        if override_flags.contains(crate::control_types::OverrideFlags::KERNEL_UNSTABLE) {
+            reasons.push(String::from("kernel unstable"));
+            evidence_families.push(String::from("stability"));
+        }
+        #[cfg(feature = "std")]
+        if adversarial_detected {
+            reasons.push(String::from("adversarial patterns detected"));
+            evidence_families.push(String::from("adversarial"));
+        }
+        #[cfg(feature = "std")]
+        if evidence_families.is_empty() {
+            evidence_families.push(String::from("threshold"));
+        }
+        #[cfg(feature = "std")]
+        let provenance = crate::llmosafe_integration::DecisionProvenance {
+            decision_label: format!("{:?}", decision),
+            reasons,
+            evidence_families,
+            hard_invariant,
+        };
 
         PipelineResult {
             decision,
@@ -1160,6 +1293,9 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             step_count: self.step_count,
             kernel_output,
             classifier_score,
+            #[cfg(feature = "std")]
+            #[cfg(feature = "std")]
+            provenance,
         }
     }
 
@@ -1225,6 +1361,27 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         if adversarial_detected {
             flags |= FLAG_ADVERSARIAL;
         }
+
+        #[cfg_attr(not(feature = "std"), allow(unused_variables))]
+        let hard_invariant = matches!(
+            err,
+            KernelError::ResourceExhaustion
+                | KernelError::DepthExceeded
+                | KernelError::SelfMemoryExceeded
+                | KernelError::DeadlineExceeded
+        );
+
+        #[cfg(feature = "std")]
+        let provenance = crate::llmosafe_integration::DecisionProvenance {
+            decision_label: format!("{:?}", decision),
+            reasons: vec![format!("error: {:?}", err)],
+            evidence_families: if hard_invariant {
+                vec![String::from("mechanical")]
+            } else {
+                vec![String::from("semantic")]
+            },
+            hard_invariant,
+        };
         PipelineResult {
             decision,
             synapse,
@@ -1239,6 +1396,9 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             step_count: self.step_count,
             kernel_output: None,
             classifier_score: 0.0,
+            #[cfg(feature = "std")]
+            #[cfg(feature = "std")]
+            provenance,
         }
     }
 
@@ -1285,6 +1445,27 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
         if adversarial_detected {
             flags |= FLAG_ADVERSARIAL;
         }
+
+        #[cfg_attr(not(feature = "std"), allow(unused_variables))]
+        let hard_invariant = matches!(
+            err,
+            KernelError::ResourceExhaustion
+                | KernelError::DepthExceeded
+                | KernelError::SelfMemoryExceeded
+                | KernelError::DeadlineExceeded
+        );
+
+        #[cfg(feature = "std")]
+        let provenance = crate::llmosafe_integration::DecisionProvenance {
+            decision_label: format!("{:?}", decision),
+            reasons: vec![format!("kernel error: {:?}", err)],
+            evidence_families: if hard_invariant {
+                vec![String::from("mechanical")]
+            } else {
+                vec![String::from("semantic")]
+            },
+            hard_invariant,
+        };
         PipelineResult {
             decision,
             synapse: err_synapse,
@@ -1299,6 +1480,9 @@ impl<'a, const MEM_SIZE: usize, const MAX_STEPS: usize> CognitivePipeline<'a, ME
             step_count: self.step_count,
             kernel_output: None,
             classifier_score: 0.0,
+            #[cfg(feature = "std")]
+            #[cfg(feature = "std")]
+            provenance,
         }
     }
 }
@@ -1389,6 +1573,8 @@ mod tests {
             step_count: 1,
             kernel_output: None,
             classifier_score: 0.0,
+            #[cfg(feature = "std")]
+            provenance: Default::default(),
         };
         assert!(result.is_safe());
         assert!(result.halt_reason().is_none());
@@ -1411,6 +1597,8 @@ mod tests {
             step_count: 0,
             kernel_output: None,
             classifier_score: 0.0,
+            #[cfg(feature = "std")]
+            provenance: Default::default(),
         };
         assert!(!result.is_safe());
         assert_eq!(
@@ -1467,8 +1655,8 @@ mod tests {
     #[test]
     fn test_reset_detectors_preserves_step_count() {
         let mut pipeline = CognitivePipeline::<64, 10>::new("test");
-        let _ = pipeline.process("step one");
-        let _ = pipeline.process("step two");
+        let _unused4 = pipeline.process("step one");
+        let _unused5 = pipeline.process("step two");
         let before = pipeline.step_count;
         pipeline.reset_detectors();
         assert_eq!(pipeline.step_count, before);
@@ -1477,8 +1665,8 @@ mod tests {
     #[test]
     fn test_reset_full_clears_everything() {
         let mut pipeline = CognitivePipeline::<64, 10>::new("test");
-        let _ = pipeline.process("this is a normal observation about weather");
-        let _ = pipeline.process("another normal sentence for testing");
+        let _unused1 = pipeline.process("this is a normal observation about weather");
+        let _unused2 = pipeline.process("another normal sentence for testing");
         pipeline.reset_full();
         assert_eq!(pipeline.step_count, 0);
         let result = pipeline.process("completely normal text after reset");
@@ -2006,7 +2194,7 @@ mod tests {
         let mut pipeline_a = CognitivePipeline::<64, 10>::with_config("test", config_a).unwrap();
         let result_a = pipeline_a.process_ctrl("test input for DAL", 0.0, 0);
         // With DAL A, the decision is not downgraded.
-        let _ = result_a;
+        let _unused3 = result_a;
 
         // DAL C: Halt→Warn, Escalate→Warn, Warn/Proceed pass through
         let config_c = PipelineConfig {

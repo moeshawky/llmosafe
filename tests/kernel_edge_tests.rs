@@ -216,7 +216,7 @@ mod tests {
     /// a baseline (lo_idx=3, k=5), an idx=0 drop must NOT trigger Low — premature
     /// "silent agent" detection during warm-up is a false positive.
     ///
-    /// BUG 6 FIX (v0.8.1): The guard `self.lo_idx > self.k` was added to prevent
+    /// BUG 6 FIX (v0.9.0): The guard `self.lo_idx > self.k` was added to prevent
     /// spurious low-side anomalies before the monitor has gathered enough low-value
     /// history. Without it, idx=0 with lo_idx=3 would trigger Low when k=5, even
     /// though the monitor hadn't seen enough data to calibrate.

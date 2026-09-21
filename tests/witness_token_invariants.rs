@@ -196,7 +196,7 @@ fn test_proof_not_clone_across_threads() {
 /// the second update succeeds with entropy=200, overwriting the same ring
 /// buffer slot (WorkingMemory does not enforce single-update-per-synapse).
 ///
-/// BUG 8 FINDING (v0.8.1): The original test name asserted a "cannot update
+/// BUG 8 FINDING (v0.9.0): The original test name asserted a "cannot update
 /// twice" invariant that doesn't exist. WorkingMemory is a ring buffer — it
 /// intentionally allows overwrites (including of the same logical synapse)
 /// because:

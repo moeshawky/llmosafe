@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 274779e5becd1f7161de9a23348cdc09e942585a1bc07a58d8e80e468eeeacca # shrinks to high_bits = 0
+cc 92322da654d5a2de29b52f3915753e0f189cb08df5708d72c0a57b0acd83fb70 # shrinks to entropy = 50000, surprise = 0, bias = false

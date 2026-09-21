@@ -553,7 +553,9 @@ pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
 /// The classifier_probability is the pure classifier output [0.0, 1.0],
 /// distinct from entropy-derived values that may include keyword-bias boosting.
 #[allow(deprecated)]
-pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedProof, f32, f32) {
+pub(crate) fn sift_text_with_score(
+    observation: &str,
+) -> (SiftedSynapse, SiftedProof, f32, f32, bool, bool, u32) {
     let classification = classify_text(observation);
     let bias = get_bias_breakdown(observation);
 
@@ -566,7 +568,8 @@ pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedP
     let entropy = classifier_entropy.max(keyword_boost);
 
     let surprise = (U16_MAX_F32 * classification.oov_ratio.clamp(0.0, 1.0)) as u16;
-    let has_bias = classification.is_manipulation || bias.hard_total() > 0;
+    let hard_bias = bias.hard_total() > 0;
+    let has_bias = classification.is_manipulation || hard_bias;
 
     let mut synapse = Synapse::new();
     synapse.set_raw_entropy(entropy);
@@ -585,6 +588,9 @@ pub(crate) fn sift_text_with_score(observation: &str) -> (SiftedSynapse, SiftedP
         proof,
         classification.score,
         classification.probability,
+        classification.is_manipulation,
+        hard_bias,
+        classification.tokens_matched,
     )
 }
 
@@ -623,7 +629,8 @@ pub fn sift_text(observation: &str) -> Result<(SiftedSynapse, SiftedProof), Sift
     if crate::count_tokens(observation) > crate::MAX_WORK_TOKENS {
         return Err(SiftError::ResourceExhaustion);
     }
-    let (sifted, proof, _score, _classifier_probability) = sift_text_with_score(observation);
+    let (sifted, proof, _score, _classifier_probability, _is_manipulation, _hard_bias, _tokens) =
+        sift_text_with_score(observation);
     Ok((sifted, proof))
 }
 

@@ -14,7 +14,9 @@
 #![cfg_attr(test, allow(clippy::shadow_unrelated))]
 
 use llmosafe::llmosafe_classifier::classify_text;
-use llmosafe::{sift_text, CognitivePipeline, SafetyDecision};
+use llmosafe::{
+    sift_text, CognitivePipeline, EscalationPolicy, PipelineConfig, SafetyDecision, SemanticPolicy,
+};
 
 #[test]
 fn test_sift_text_keyword_bias_or_path() {
@@ -134,7 +136,10 @@ fn zero_match_ood_inputs_fail_closed_documented() {
         );
         let (sifted, _proof) = sift_text(input).expect("sift_text should succeed");
         assert!(!sifted.has_bias(), "{input:?} must not set has_bias");
-        let mut pipeline: CognitivePipeline<64, 10> = CognitivePipeline::new("objective");
+        let mut config = PipelineConfig::default();
+        config.policy = EscalationPolicy::default().with_semantic_policy(SemanticPolicy::Enforce);
+        let mut pipeline: CognitivePipeline<64, 10> =
+            CognitivePipeline::with_config("objective", config).unwrap();
         let result = pipeline.process(input);
         assert!(
             matches!(result.decision, SafetyDecision::Halt(..)),
@@ -162,7 +167,10 @@ fn single_unigram_vocab_short_inputs_fail_closed_documented() {
         );
         let (sifted, _proof) = sift_text(input).expect("sift_text should succeed");
         assert!(sifted.has_bias(), "{input:?} must set has_bias");
-        let mut pipeline: CognitivePipeline<64, 10> = CognitivePipeline::new("objective");
+        let mut config = PipelineConfig::default();
+        config.policy = EscalationPolicy::default().with_semantic_policy(SemanticPolicy::Enforce);
+        let mut pipeline: CognitivePipeline<64, 10> =
+            CognitivePipeline::with_config("objective", config).unwrap();
         let result = pipeline.process(input);
         assert!(
             matches!(result.decision, SafetyDecision::Halt(..)),

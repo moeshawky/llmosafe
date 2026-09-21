@@ -148,6 +148,36 @@ impl DesignAssuranceLevel {
     }
 }
 
+/// Semantic authority policy: how the pipeline treats semantic-vs-mechanical decisions.
+/// Mirrors Rust `SemanticPolicy` enum. Values: 0=Observe, 1=Corroborate (default), 2=Enforce.
+#[pyclass]
+struct SemanticPolicy {
+    #[pyo3(get)]
+    value: u8,
+}
+
+#[pymethods]
+impl SemanticPolicy {
+    #[staticmethod]
+    fn from_u8(v: u8) -> PyResult<Self> {
+        match v {
+            0 | 1 | 2 => Ok(Self { value: v }),
+            _ => Err(LLMOSafeError::new_err(format!(
+                "invalid SemanticPolicy value: {} (must be 0=Observe, 1=Corroborate, 2=Enforce)", v
+            ))),
+        }
+    }
+
+    fn __str__(&self) -> String {
+        match self.value {
+            0 => String::from("Observe"),
+            1 => String::from("Corroborate"),
+            2 => String::from("Enforce"),
+            _ => String::from("Unknown"),
+        }
+    }
+}
+
 /// The 128-bit Synapse (Binary Cognitive Protocol).
 ///
 /// Full mirror of the Rust `Synapse` bitfield.
@@ -237,6 +267,8 @@ use ::llmosafe::c_abi::{
     llmosafe_get_oov_ratio, llmosafe_get_stages_executed, llmosafe_get_step_count,
     llmosafe_process_with_pressure, llmosafe_reset_detectors, llmosafe_reset_full,
     llmosafe_configure,
+    llmosafe_set_semantic_policy,
+    llmosafe_get_provenance, llmosafe_get_provenance_family, llmosafe_free_string,
 };
 
 // ── Bias Detection (dual-path + helpers) ───────────────────────
@@ -925,12 +957,13 @@ struct CognitivePipeline {
 #[pymethods]
 impl CognitivePipeline {
     #[new]
-    #[pyo3(signature = (objective=None, dal_level=None, use_detection_gate=None, memory_depth=None))]
+    #[pyo3(signature = (objective=None, dal_level=None, use_detection_gate=None, memory_depth=None, semantic_policy=None))]
     fn new(
         objective: Option<String>,
         dal_level: Option<u8>,
         use_detection_gate: Option<bool>,
         memory_depth: Option<usize>,
+        semantic_policy: Option<u8>,
     ) -> PyResult<Self> {
         // Mirror Rust CognitivePipeline::new(objective) — objective is now accepted.
         // Default "safety" preserves backward compatibility for old callers.
@@ -947,6 +980,13 @@ impl CognitivePipeline {
         let gate = if use_detection_gate.unwrap_or(false) { 1u32 } else { 0u32 };
         let mem = memory_depth.unwrap_or(10) as u32;
         llmosafe_configure(instance_id, dal, gate, mem);
+        // Default semantic policy: Corroborate (1)
+        let sp = semantic_policy.unwrap_or(1);
+        if llmosafe_set_semantic_policy(instance_id, sp) != 0 {
+            return Err(LLMOSafeError::new_err(format!(
+                "invalid semantic_policy value: {} (must be 0=Observe, 1=Corroborate, 2=Enforce)", sp
+            )));
+        }
         Ok(Self { instance_id })
     }
 
@@ -954,6 +994,21 @@ impl CognitivePipeline {
     #[getter]
     fn instance_id(&self) -> usize {
         self.instance_id
+    }
+
+    /// Set the semantic authority policy on this pipeline instance.
+    /// policy: 0=Observe, 1=Corroborate (default), 2=Enforce.
+    fn set_semantic_policy(&self, policy: u8) -> PyResult<()> {
+        match llmosafe_set_semantic_policy(self.instance_id, policy) {
+            0 => Ok(()),
+            1 => Err(LLMOSafeError::new_err("invalid pipeline instance")),
+            2 => Err(LLMOSafeError::new_err(format!(
+                "invalid semantic_policy value: {} (must be 0=Observe, 1=Corroborate, 2=Enforce)", policy
+            ))),
+            other => Err(LLMOSafeError::new_err(format!(
+                "set_semantic_policy failed with code {}", other
+            ))),
+        }
     }
 
     /// Process text through the full 5-stage pipeline.
@@ -1189,6 +1244,41 @@ impl CognitivePipeline {
                 dict.set_item("kernel_is_stable", s != 0)?;
                 dict.set_item("kernel_depth", d)?;
             }
+            // Provenance metadata for the last decision
+            let prov_dict = pyo3::types::PyDict::new(py);
+            let mut hard_inv: u8 = 0;
+            let mut policy_applied: u8 = 0;
+            let mut families_count: u32 = 0;
+            let rc = llmosafe_get_provenance(
+                self.instance_id,
+                &mut hard_inv,
+                &mut policy_applied,
+                &mut families_count,
+            );
+            if rc == 0 {
+                prov_dict.set_item("hard_invariant", hard_inv != 0)?;
+                let policy_names = ["Observe", "Corroborate", "Enforce"];
+                let policy_name = policy_names.get(policy_applied as usize).unwrap_or(&"Unknown");
+                prov_dict.set_item("semantic_policy", *policy_name)?;
+                let families_list = pyo3::types::PyList::empty(py);
+                for i in 0..families_count {
+                    let ptr = llmosafe_get_provenance_family(self.instance_id, i);
+                    if !ptr.is_null() {
+                        let s = unsafe { std::ffi::CStr::from_ptr(ptr) }
+                            .to_str()
+                            .unwrap_or("<invalid utf8>")
+                            .to_string();
+                        llmosafe_free_string(ptr);
+                        families_list.append(s)?;
+                    }
+                }
+                prov_dict.set_item("evidence_families", families_list)?;
+            } else {
+                prov_dict.set_item("hard_invariant", false)?;
+                prov_dict.set_item("semantic_policy", "Unknown")?;
+                prov_dict.set_item("evidence_families", pyo3::types::PyList::empty(py))?;
+            }
+            dict.set_item("provenance", prov_dict)?;
             Ok(dict.into())
         })
     }
@@ -1268,6 +1358,7 @@ fn _llmosafe(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<SafetyDecision>()?;
     m.add_class::<PressureLevel>()?;
     m.add_class::<DesignAssuranceLevel>()?;
+    m.add_class::<SemanticPolicy>()?;
     m.add_class::<PySynapse>()?;
 
     // Public constants (mirror of Rust)

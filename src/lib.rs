@@ -145,7 +145,10 @@ pub use llmosafe_detection::{
 };
 #[cfg(feature = "std")]
 pub use llmosafe_integration::SafetyContext;
-pub use llmosafe_integration::{EscalationPolicy, EscalationReason, PressureLevel, SafetyDecision};
+pub use llmosafe_integration::{
+    EscalationPolicy, EscalationReason, PressureLevel, SafetyDecision, SemanticPolicy,
+    SemanticPolicyContext,
+};
 pub use llmosafe_kernel::KernelOutput;
 pub use llmosafe_kernel::{
     CognitiveEntropy, CognitiveStability, DynamicStabilityMonitor, KernelError, ReasoningLoop,
@@ -1165,6 +1168,110 @@ pub mod c_abi {
         contents.pipeline.esc_policy.dal = dal;
         contents.pipeline.use_detection_gate = use_detection_gate != 0;
         0
+    }
+    /// Set the semantic authority policy on an existing instance.
+    /// policy: 0=Observe, 1=Corroborate, 2=Enforce. Returns 0=ok, 1=bad handle, 2=unknown policy.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_set_semantic_policy(instance_id: usize, policy: u8) -> u32 {
+        let sp = match policy {
+            0 => crate::llmosafe_integration::SemanticPolicy::Observe,
+            1 => crate::llmosafe_integration::SemanticPolicy::Corroborate,
+            2 => crate::llmosafe_integration::SemanticPolicy::Enforce,
+            _ => return 2,
+        };
+        let mut arena = lock_arena();
+        let slot_index_gen = match get_validated_slot(&mut arena, instance_id) {
+            Some(pair) => pair,
+            None => return 1,
+        };
+        let slot_contents = arena[slot_index_gen.0].as_ref().unwrap().contents.clone();
+        drop(arena);
+        let mut contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        contents.pipeline.esc_policy.semantic_policy = sp;
+        0
+    }
+    /// Get provenance metadata for the last decision on an instance.
+    /// Outputs: hard_invariant (1/0), policy_applied (0=Observe,1=Corroborate,2=Enforce), families_count.
+    /// Returns 0=ok, 1=bad handle, 2=no last result, 3=null out pointer.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_get_provenance(
+        instance_id: usize,
+        hard_invariant: *mut u8,
+        policy_applied: *mut u8,
+        families_count: *mut u32,
+    ) -> u32 {
+        if hard_invariant.is_null() || policy_applied.is_null() || families_count.is_null() {
+            return 3;
+        }
+        let mut arena = lock_arena();
+        let slot_index_gen = match get_validated_slot(&mut arena, instance_id) {
+            Some(pair) => pair,
+            None => return 1,
+        };
+        let slot_contents = arena[slot_index_gen.0].as_ref().unwrap().contents.clone();
+        drop(arena);
+        let contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let result = match contents.last_result.as_ref() {
+            Some(r) => r,
+            None => return 2,
+        };
+        unsafe {
+            *hard_invariant = if result.provenance.hard_invariant {
+                1
+            } else {
+                0
+            };
+            *policy_applied = match contents.pipeline.esc_policy.semantic_policy {
+                crate::llmosafe_integration::SemanticPolicy::Observe => 0,
+                crate::llmosafe_integration::SemanticPolicy::Corroborate => 1,
+                crate::llmosafe_integration::SemanticPolicy::Enforce => 2,
+            };
+            *families_count = result.provenance.evidence_families.len() as u32;
+        }
+        0
+    }
+    /// Get a single evidence family string by index. Returns a heap-allocated
+    /// C string (caller must free with llmosafe_free_string) or null if out of range.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_get_provenance_family(
+        instance_id: usize,
+        index: u32,
+    ) -> *mut std::ffi::c_char {
+        let mut arena = lock_arena();
+        let slot_index_gen = match get_validated_slot(&mut arena, instance_id) {
+            Some(pair) => pair,
+            None => return std::ptr::null_mut(),
+        };
+        let slot_contents = arena[slot_index_gen.0].as_ref().unwrap().contents.clone();
+        drop(arena);
+        let contents = slot_contents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let result = match contents.last_result.as_ref() {
+            Some(r) => r,
+            None => return std::ptr::null_mut(),
+        };
+        let fam = match result.provenance.evidence_families.get(index as usize) {
+            Some(s) => s,
+            None => return std::ptr::null_mut(),
+        };
+        std::ffi::CString::new(fam.as_str())
+            .ok()
+            .map(std::ffi::CString::into_raw)
+            .unwrap_or_else(|| std::ptr::null_mut())
+    }
+    /// Free a string returned by llmosafe_get_provenance_family.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub extern "C" fn llmosafe_free_string(s: *mut std::ffi::c_char) {
+        if !s.is_null() {
+            unsafe {
+                drop(std::ffi::CString::from_raw(s));
+            }
+        }
     }
     /// Resets the arena to empty state (all slots None) for test support.
     /// Only safe to call when no other threads are concurrently using the arena.
