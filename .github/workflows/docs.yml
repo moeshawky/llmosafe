@@ -25,7 +25,7 @@ jobs:
           components: rust-docs
       
       - name: Build documentation
-        run: cargo doc --no-deps --all-features -D warnings
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
       
       - name: Add redirect
         run: |
