@@ -2,7 +2,7 @@
 # Contributor: Arch Linux support
 
 pkgname=llmosafe
-pkgver=0.6.2
+pkgver=0.9.0
 pkgrel=1
 pkgdesc="Safety-critical cognitive safety library — runtime guardrails with entropy/surprise/bias gauges"
 arch=('x86_64')

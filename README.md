@@ -51,7 +51,7 @@ The `CognitivePipeline` wires sifter, working memory, kernel, escalation policy,
 
 ```toml
 [dependencies]
-llmosafe = "0.8.0"
+llmosafe = "0.9.0"
 ```
 
 **Arch Linux (AUR):**
@@ -204,6 +204,7 @@ if guard.pressure() > 80 {
 let mut pipeline = CognitivePipeline::<64, 10>::new("market safety");
 let result = pipeline.process(market_news);
 if !result.is_safe() {
+    // Recommend human review; llmosafe flags risk, trader decides
     return Err("Manipulation detected in market signals");
 }
 ```
@@ -214,6 +215,7 @@ if !result.is_safe() {
 let mut pipeline = CognitivePipeline::<64, 10>::new("treatment safety");
 let result = pipeline.process(sensor_reading);
 if result.decision.must_halt() || result.entropy > 50000 {
+    // Flag for clinician review; llmosafe provides signal, human confirms
     return Err("Sensor readings unstable, require human confirmation");
 }
 ```
@@ -224,6 +226,7 @@ if result.decision.must_halt() || result.entropy > 50000 {
 let mut pipeline = CognitivePipeline::<64, 10>::new("process safely");
 let result = pipeline.process(user_input);
 if !result.is_safe() {
+    // Reject or flag for review; llmosafe scores risk, service decides action
     return Err("Manipulation patterns detected in input");
 }
 ```
@@ -234,9 +237,7 @@ if !result.is_safe() {
 
 ### 1. Entropy Gauge (The "Temperature Gauge")
 
-Entropy measures cognitive uncertainty using **binary entropy**: H(p) = 4p(1-p), scaled to 0–65535.
-
-Here p is the classifier manipulation probability (the same p feeding PidInput as the F-term), distinct from certainty abs(2p−1) which feeds ConfidenceTracker. The formula peaks at p=0.5 (maximum uncertainty — classifier can't decide) and drops to 0 at both extremes (p=0 = confident it's safe, p=1 = confident it's dangerous). Unlike the old linear complement (1-p), binary entropy correctly treats both safety-confidence and danger-confidence as **low-entropy states**.
+Entropy measures cognitive uncertainty using **linear scaling**: `entropy = p * 65535`, where p is the classifier manipulation probability [0, 1]. At p=0 (classifier confident input is safe), entropy is 0. At p=1 (classifier confident input is dangerous), entropy is 65535. At p=0.5 (maximum classifier uncertainty), entropy is ~32768. The STABILITY_THRESHOLD of 50000 corresponds to p ≈ 0.76 — the classifier must be at least 76% confident the input is manipulation for a semantic Halt under the default threshold.
 
 ```ignore
 // STABILITY_THRESHOLD = 50000, PRESSURE_THRESHOLD = 40000
@@ -249,7 +250,7 @@ Catches: genuine classifier uncertainty, distribution shift, out-of-domain input
 
 ### 2. Surprise Gauge (The "Spam Filter")
 
-Classifies how "surprising" an input is — high probability of manipulation → high surprise. Scaled to 0–65535.
+Surprise measures **out-of-vocabulary ratio**: `surprise = oov_ratio * 65535`. When all tokens are recognized, surprise is 0. When all tokens are OOV (unfamiliar to the model's vocabulary), surprise is 65535. This is not a manipulation score — it's a novelty signal. OOD inputs (e.g., foreign language text) produce high surprise even without bias.
 
 ```ignore
 let (sifted, sifted_proof) = sift_text("observation text");
@@ -260,7 +261,7 @@ match memory.update(sifted, sifted_proof) {
 }
 ```
 
-Catches: anomaly injection, adversarial inputs, distribution shift.
+Catches: anomaly injection, adversarial inputs, distribution shift, OOD inputs.
 
 ### 3. Bias Gauge (The "Bullshit Detector")
 
@@ -284,12 +285,12 @@ Catches: jailbreaks, prompt injection, role-switching, authority appeals, and ot
 
 ```ignore
 let policy = EscalationPolicy::default();
-// Calibrated for classifier [0,65535] range:
-//   warn_entropy:     30000  (p ≈ 0.12)
-//   escalate_entropy: 40000  (p ≈ 0.35)
-//   halt_entropy:     50000  (p ≈ 0.50, maximum uncertainty)
-//   warn_surprise:    42600  (p > 0.65 manipulation probability)
-//   escalate_surprise: 55700 (p > 0.85 manipulation probability)
+// Calibrated for classifier [0,65535] range (linear: entropy = p * 65535):
+//   warn_entropy:     30000  (p >= 0.46)
+//   escalate_entropy: 40000  (p >= 0.61)
+//   halt_entropy:     50000  (p >= 0.76)
+//   warn_surprise:    42600  (oov_ratio >= 0.65)
+//   escalate_surprise: 55700 (oov_ratio >= 0.85)
 
 let decision = policy.decide(entropy, surprise, has_bias);
 ```
@@ -412,6 +413,8 @@ gcc -o my_app main.c -L./target/release -lllmosafe
 
 ## What llmosafe Is NOT
 
+**A deterministic runtime guardrail toolkit.** llmosafe provides probabilistic safety signals (entropy, surprise, bias) that feed a PID control loop and escalation policy. It is not a theorem prover, not a formal verification tool, and not a substitute for domain-specific validation. It answers "should I stop?" with calibrated uncertainty, not absolute certainty.
+
 **NOT an AI safety library.** The name came from an LLM hallucination conflating "cognitive entropy" with "AI cognition." llmosafe is runtime guardrails for any system processing untrusted data: trading bots, medical devices, autopilots, cloud services.
 
 **NOT a substitute for input validation.** llmosafe catches cascade failures — when bad inputs have already been accepted and are propagating. You still need proper validation at entry points.
@@ -419,6 +422,24 @@ gcc -o my_app main.c -L./target/release -lllmosafe
 **NOT a static analysis tool.** This runs at runtime. It can't prevent bugs. It can only halt execution when runtime state becomes unsafe.
 
 **NOT for toy projects.** If cascade failures don't matter for your use case, you don't need this.
+
+### Terminology Notes
+
+- **"Cognitive entropy"** is a misnomer. It's the classifier's manipulation probability scaled to [0, 65535]. The term "cognitive" is historical; no cognition is involved.
+- **"Surprise"** is the out-of-vocabulary ratio, not a manipulation score. OOD inputs produce high surprise.
+- **"Bias"** in `has_bias` means the classifier thinks the input is manipulation OR keyword patterns matched. It's not statistical bias.
+- **SemanticPolicy `Corroborate`** (default since v0.9.0) downgrades semantic-alone Halts to Escalate. Mechanical Halts (resource exhaustion, depth exceeded, deadline exceeded) are unaffected.
+
+### Migration from v0.7.x / v0.8.x to v0.9.0
+
+If your code relied on semantic Halts for OOD or low-confidence inputs, those now Escalate under the default `Corroborate` policy. To restore legacy behavior:
+
+```rust
+use llmosafe::{PipelineConfig, EscalationPolicy, SemanticPolicy, CognitivePipeline};
+let mut config = PipelineConfig::default();
+config.policy = EscalationPolicy::default().with_semantic_policy(SemanticPolicy::Enforce);
+let mut pipe = CognitivePipeline::<64, 10>::with_config("objective", config).unwrap();
+```
 
 ---
 
@@ -453,10 +474,10 @@ Binary entropy maps classifier probability into concentric stability containers 
 
 ```toml
 # Embedded / no_std
-llmosafe = { version = "0.7", default-features = false }
+llmosafe = { version = "0.9", default-features = false }
 
 # Full integration
-llmosafe = { version = "0.7", features = ["full"] }
+llmosafe = { version = "0.9", features = ["full"] }
 ```
 
 ---
@@ -470,7 +491,7 @@ Entropy threshold exceeded. The classifier may be uncertain about unusual but be
 use llmosafe::llmosafe_classifier::classify_text;
 let result = classify_text("your text here");
 println!("probability: {}, entropy: {:.0}", result.probability,
-    65535.0 * 4.0 * result.probability * (1.0 - result.probability));
+    65535.0 * result.probability);
 ```
 
 ### Working memory rejects all updates
@@ -490,4 +511,4 @@ let mut adv = AdversarialDetector::new();
 
 ---
 
-*llmosafe v0.8.0 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*
+*llmosafe v0.9.0 • MIT licensed • [Documentation](https://docs.rs/llmosafe) • [Source](https://github.com/moeshawky/llmosafe)*

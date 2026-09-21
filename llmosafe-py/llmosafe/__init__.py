@@ -38,6 +38,7 @@ from llmosafe._llmosafe import (
     PySynapse,
     ResourceExhaustedError,
     SafetyDecision,
+    SemanticPolicy,
     SiftError,
     calculate_halo,
     calculate_halo_signal_legacy,
@@ -65,7 +66,7 @@ from llmosafe._llmosafe import (
     sift_text,
 )
 
-__version__: str = "0.8.0"
+__version__: str = "0.9.0"
 
 # Nice names for Python users
 Synapse = PySynapse
@@ -95,6 +96,7 @@ __all__ = [
     "ResourceExhaustedError",
     "SiftError",
     "SafetyDecision",
+    "SemanticPolicy",
     "Synapse",
     "calculate_halo",
     "calculate_halo_signal_legacy",

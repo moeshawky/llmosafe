@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-09-21
+
+### ADDED
+- **SemanticPolicy** enum with three modes: `Observe` (0), `Corroborate` (1, default), `Enforce` (2) — controls how the pipeline treats semantic evidence versus mechanical invariants
+- **DecisionProvenance** struct: decision label, detailed reasons, evidence families list, hard-invariant flag
+- Evidence-family and provenance handling in `CognitivePipeline` output
+- Dual-root corroboration: classifier manipulation detection AND keyword-bias hard signal must both fire for a semantic Halt under Corroborate mode
+- Python exposure: `SemanticPolicy` class, `CognitivePipeline(semantic_policy=...)` constructor parameter, `set_semantic_policy()` method, provenance dict in result objects
+- `llmosafe_set_semantic_policy` C-ABI setter and provenance getters (`llmosafe_get_provenance`, `llmosafe_get_provenance_family`, `llmosafe_free_string`)
+
+### CHANGED
+- Default semantic policy is now `Corroborate` (was implicit Enforce/legacy behavior)
+- Semantic-only Halts (no dual-root corroboration) are downgraded to Escalate under Corroborate mode
+- Structural separation: mechanical invariants (resource exhaustion, depth exceeded, deadline exceeded, NaN risk, self-memory exceeded, emergency pressure) are independent of semantic policy — they always produce their configured decision
+- Classifier descendants (e.g., OOD detection via classifier probability) are not independent corroboration sources — dual-root requires the keyword-bias path
+- Terminology corrections: "cognitive safety library" → "deterministic runtime guardrail/control toolkit"; "safety-critical" → "deterministic runtime"
+
+### COMPATIBILITY
+- Callers requiring legacy behavior (all semantic Halts preserved) must set `Enforce` mode (value 2) or `SemanticPolicy::Enforce` in Python
+- OOD-Halt callers: Out-Of-Distribution inputs no longer auto-Halt under Corroborate; they Escalate. Set Enforce to restore.
+- Mechanical Halts (resource exhaustion, depth exceeded, deadline exceeded, NaN risk, self-memory exceeded, emergency pressure) are intact and unaffected by semantic policy
+- C-ABI: new functions added; no existing signatures changed; existing symbols stable
+
 ## [0.8.0] — 2026-09-15
 
 ### Fixed (P0 corrective pass)

@@ -1,8 +1,8 @@
 [package]
 name = "llmosafe"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
-description = "Safety-critical cognitive safety library for AI agents. 4-tier architecture (Resource Body, Kernel, Working Memory, Sifter) with formal verification primitives, detection layer, and integration primitives."
+description = "Deterministic runtime guardrail/control toolkit for systems processing untrusted or machine-generated inputs and workloads; combines runtime, behavioral, and optional semantic evidence under configurable enforcement policy."
 license = "MIT"
 repository = "https://github.com/moeshawky/llmosafe"
 rust-version = "1.85"

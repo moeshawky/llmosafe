@@ -125,6 +125,7 @@ references/
 .env.*
 *.pem
 *.key
+.pypirc
 
 # --- Wheel distributions (never committed, published via CI) ---
 llmosafe-py/dist/
