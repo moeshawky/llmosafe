@@ -23,7 +23,7 @@
 //! 4. **KERNEL** (Tier 1) — `ReasoningLoop::next_step()` advances reasoning.
 //!    Gate: depth, bias, entropy stability.
 //! 5. **DETECTION** — CUSUM monitors normalized manipulation risk
-//!    (entropy/65535, domain [0,1]) relative to a warmup baseline.
+//!    (entropy/65535, domain `[0,1]`) relative to a warmup baseline.
 //!    Repetition, drift, confidence observed. Flags packed into synapse reserved bits.
 //! 6. **PID** — `compute_pid_score_pure()` + `apply_safety_overrides()` produce
 //!    a risk score mapped to `SafetyDecision` via thresholds.

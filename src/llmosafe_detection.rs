@@ -200,7 +200,7 @@ impl DriftDetector {
     /// Create a new drift detector with the given goal.
     /// Returns a detector with drift_score=0.0 (no drift possible) if goal is empty.
     /// Deduplicates goal word hashes so overlap is computed against the distinct
-    /// goal set, keeping drift_score ∈ [0,1] by construction.
+    /// goal set, keeping drift_score ∈ `[0,1]` by construction.
     pub fn new(goal: &str, drift_threshold: f32) -> Self {
         let mut goal_hashes = ArrayVec::new();
         for word in goal.split_whitespace().take(MAX_CONTEXT_LEN) {

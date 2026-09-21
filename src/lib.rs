@@ -316,7 +316,7 @@ pub mod c_abi {
     /// generation counter (upper bits) for stale-handle detection.
     /// The arena holds 16 concurrent pipeline slots protected by a
     /// `std::sync::Mutex`. Metadata/lookup is protected by the arena
-    /// lock; pipeline execution serializes per-slot (Arc<Mutex<SlotContents>>).
+    /// lock; pipeline execution serializes per-slot (`Arc<Mutex<SlotContents>>`).
     ///
     /// The objective is stored in a fixed-size buffer per slot
     /// (MAX_OBJECTIVE_LEN = 1024 bytes), avoiding heap leaks.
@@ -1039,7 +1039,7 @@ pub mod c_abi {
     }
 
     /// Runs text through the pipeline with body pressure gating.
-    /// Uses per-slot locking (Arc<Mutex<SlotContents>>) so that
+    /// Uses per-slot locking (`Arc<Mutex<SlotContents>>`) so that
     /// pipeline execution serializes per-slot, not globally.
     /// Uses str::from_utf8 instead of String::from_utf8_lossy to avoid
     /// the temporary String allocation for valid UTF-8 inputs.
