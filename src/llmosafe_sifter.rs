@@ -534,7 +534,8 @@ pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
     for word_a in observation.split_whitespace() {
         let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
 
-        for word_b in obj_words.iter().take(obj_len) {
+        // OPTIMIZATION: Use direct slice iteration instead of `.iter().take(obj_len)` to avoid iterator overhead in hot loops.
+        for word_b in &obj_words[..obj_len] {
             if trimmed_a.eq_ignore_ascii_case(word_b) {
                 count += 1;
                 break;
