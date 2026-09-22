@@ -155,10 +155,10 @@ MAAT_REPORT.md
 # --- Local infra / operator docs (untracked, never published) ---
 .codegraph/
 .opencode/
-deploy/
-docs/
-sync_codegraph.sh
 .codegraphinclude
 .codeqlignore
 .githooks/
+deploy/
+docs/
 .ixd.toml
+sync_codegraph.sh
