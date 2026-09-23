@@ -222,9 +222,12 @@ impl DriftDetector {
             return;
         }
 
-        let mut obs_words = ArrayVec::<u32, MAX_CONTEXT_LEN>::new();
+        // Optimization: Replace ArrayVec with a simple stack-allocated array and manual length counter to reduce initialization, insertion, and iterator overhead in this hot loop, and use slice .contains() for primitive lookups.
+        let mut obs_words = [0u32; MAX_CONTEXT_LEN];
+        let mut obs_count = 0;
         for word in observation.split_whitespace().take(MAX_CONTEXT_LEN) {
-            obs_words.push(RepetitionDetector::hash_str(word));
+            obs_words[obs_count] = RepetitionDetector::hash_str(word);
+            obs_count += 1;
         }
 
         // Count distinct goal hashes present in obs_words.
@@ -233,7 +236,7 @@ impl DriftDetector {
         // overlap = matched / total ∈ [0, 1] by construction.
         let mut matched_goals = 0usize;
         for &goal_hash in self.goal_hashes.iter() {
-            if obs_words.iter().any(|&obs| obs == goal_hash) {
+            if obs_words[..obs_count].contains(&goal_hash) {
                 matched_goals += 1;
             }
         }
