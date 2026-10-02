@@ -1,8 +1,14 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 # MASTER: Unified Python Wheel Build + Publish (ix / sniper / llmosafe)
 # ═══════════════════════════════════════════════════════════════════════════════
-# This is the CANONICAL workflow. All three projects use identical copies.
-# Only the PROJECT env var below differs. Do NOT diverge from this template.
+# This is the CANONICAL workflow. ix and sniper use identical copies.
+# llmosafe DIVERGES deliberately — do NOT "restore" uniformity here:
+#   ix / sniper : cp310-abi3 wheels (pyo3 abi3-py310)
+#   llmosafe    : cp38-abi3 wheels  (pyo3 abi3-py38, valid CPython 3.8–3.13+)
+# llmosafe previously built cp312-cp312 (version-specific) wheels, which left
+# CPython 3.13 users with NO installable artifact and no sdist fallback.
+# That defect and its next-release remediation are tracked in
+# PROJECT-ROADMAP.md under the "Python wheel ABI" gate.
 #
 # Canonical source: /workspace/.github/workflows/wheels.yml
 # Local build:      /workspace/.github/scripts/build-wheels.sh
@@ -21,11 +27,22 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish_pypi:
+        description: >-
+          Also publish to PRODUCTION PyPI on a manual dispatch. Leave false for
+          a dry run (TestPyPI only). Only set true when appending NEW wheel
+          filenames to an EXISTING version (Path A hotfix); releases must still
+          go through a v* tag push.
+        type: boolean
+        default: false
 
 # ── Project identity (ONLY line that differs between projects) ──────────────
 env:
   PROJECT: llmosafe                          # ← CHANGE THIS: ix | sniper | llmosafe
-  PYTHON_VERSION: "3.12"
+  # NOTE: llmosafe builds abi3 wheels, so this is NOT part of the wheel tag
+  # (maturin emits cp38-abi3 regardless of -i). It only selects the runner's
+  # interpreter. Safe to leave at 3.12 even though the wheel serves 3.8–3.13+.
 
 # ── Concurrency: cancel in-progress on re-push ──────────────────────────────
 concurrency:
@@ -61,7 +78,9 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: ${{ env.PROJECT }}-py
-          args: --release --out dist -i python${{ env.PYTHON_VERSION }}
+          # abi3-py38 in Cargo.toml makes maturin emit cp38-abi3-* regardless
+          # of -i; the interpreter arg is retained for template parity.
+          args: --release --out dist -i python3.12
           manylinux: ${{ matrix.manylinux }}
           before-script-linux: ${{ matrix.pre-build }}
 
@@ -107,7 +126,7 @@ jobs:
       always() &&
       !cancelled() &&
       !failure() &&
-      startsWith(github.ref, 'refs/tags/v')
+      (startsWith(github.ref, 'refs/tags/v') || inputs.publish_pypi == true)
     runs-on: ubuntu-latest
     environment:
       name: pypi

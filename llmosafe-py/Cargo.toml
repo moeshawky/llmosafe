@@ -11,4 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 llmosafe = { path = "..", features = ["std", "dal"] }
-pyo3 = { version = "0.20", features = ["extension-module"] }
+# abi3-py38 → maturin emits ONE cp38-abi3 wheel valid for CPython 3.8–3.13+
+# instead of a version-specific cp312-cp312 wheel (which had no installable
+# artifact on 3.13). Keep in lockstep with the roadmap "Python wheel ABI" gate.
+pyo3 = { version = "0.20", features = ["extension-module", "abi3-py38"] }

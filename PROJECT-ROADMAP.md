@@ -34,6 +34,33 @@ sifter remediation. No main merge before all next gates clear.
 2. **deterministic resource test** — Make `resource_to_decision_chain_integrity`
    pass deterministically across cgroup environments.
 3. **P7 formalization** — Formalize P7 bars in invariants or source code.
+4. **Python wheel ABI** (NEW 2026-09-23) — `llmosafe-py` ships
+   CPython-version-specific wheels (`cp312-cp312`), not `abi3`, because
+   `llmosafe-py/Cargo.toml` pyo3 0.20 lacked the `abi3-pyXX` feature and
+   `wheels.yml` built with `-i python3.12`. Consequence: **zero
+   installable artifact on CPython 3.13 (`cp313`)** — no cp313 wheel and
+   no sdist to fall back on. NEXT RELEASE must: (a) enable `abi3-py38`
+   (one wheel covers 3.8–3.13+); (b) bump pyo3 to ≥0.23 so 3.13 can be
+   built and tested (0.20 cannot target 3.13); (c) add the 3.13 classifier;
+   (d) publish an sdist (`maturin sdist`) as a source fallback; (e) add a
+   3.13 CI cell; (f) reconcile the `wheels.yml` + `PUBLISHING.md`
+   "all three projects use identical copies" claim that concealed this
+   divergence from ix/sniper.
+   - **INTERIM (Path A, shipped 2026-09-23):** `cp38-abi3` wheels appended
+     to the existing `0.9.0` on PyPI with no version bump. Known cost:
+     mixed-ABI release (cp312-cp312 + cp38-abi3 coexist) and cache /
+     lockfile staleness — consumers holding a `uv.lock` or pip cache must
+     `uv lock --upgrade` / refresh to see the new file.
+   - **NOT YET DONE — CI coverage gap:** `ci.yml` has zero Python jobs
+     (no maturin / pytest / mypy / ruff). Nothing detects an ABI or
+     classifier divergence from the template, and no 3.13 runtime test
+     exists. The cp38-abi3 wheel is VERIFIED to build and import on 3.12;
+     its install+import on **3.13 is INFERRED** (abi3 forward-compatibility
+     is a packaging-standard guarantee, but no 3.13 runtime has executed
+     it). Closing this verdict is part of this gate.
+   - **Never resolved by:** re-uploading the same 0.9.0 filename (PyPI
+     rejects it) or an sdist-only fix (pyo3 0.20 cannot compile against
+     3.13).
 
 ## Residuals (DOCUMENTED_DEFERRED, release-scoped)
 
