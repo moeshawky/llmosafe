@@ -54,10 +54,16 @@ sifter remediation. No main merge before all next gates clear.
    - **NOT YET DONE — CI coverage gap:** `ci.yml` has zero Python jobs
      (no maturin / pytest / mypy / ruff). Nothing detects an ABI or
      classifier divergence from the template, and no 3.13 runtime test
-     exists. The cp38-abi3 wheel is VERIFIED to build and import on 3.12;
-     its install+import on **3.13 is INFERRED** (abi3 forward-compatibility
-     is a packaging-standard guarantee, but no 3.13 runtime has executed
-     it). Closing this verdict is part of this gate.
+     exists in CI. This remains the real open risk of the abi3 switch.
+   - **VERIFIED 2026-10-02, end-to-end:** `cp38-abi3` wheels appended to
+     production PyPI `0.9.0` for both arches — measured by installing from
+     live PyPI under real CPython 3.13.13 (`cpython-313`):
+     `uv run --python 3.13 --with llmosafe==0.9.0` → `import llmosafe` OK,
+     `calculate_halo` = 53939 (identical to the 3.12 result), `process_synapse`
+     = 0, `get_environmental_entropy` = 2. Resolution for 3.8 / 3.12 / 3.13
+     all succeed. `0.9.0` on PyPI now carries four files: the two pre-existing
+     `cp312-cp312` plus `cp38-abi3` for x86_64 and aarch64, all
+     `manylinux_2_17`.
    - **Never resolved by:** re-uploading the same 0.9.0 filename (PyPI
      rejects it) or an sdist-only fix (pyo3 0.20 cannot compile against
      3.13).
