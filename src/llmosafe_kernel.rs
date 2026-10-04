@@ -1207,7 +1207,7 @@ impl ValidatedSynapse {
 /// `Copy` and `Clone` are intentional: the proof attests to sifter execution,
 /// not to uniqueness. It is safe to reuse.
 #[derive(Debug, Clone, Copy)]
-pub struct SiftedProof(());
+pub struct SiftedProof(pub(crate) ());
 
 impl SiftedProof {
     /// Mint a SiftedProof. Only the sifter module should call this.
