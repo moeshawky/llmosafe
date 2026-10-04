@@ -1,0 +1,3 @@
+## 2024-05-18 - Replacing `split_whitespace` with `split_ascii_whitespace` for Performance
+**Learning:** In Rust, when parsing system files guaranteed to contain only ASCII data (such as Linux system metrics in `/proc/stat` or `/proc/loadavg`), using `str::split_ascii_whitespace()` instead of `str::split_whitespace()` yields a significant performance improvement. It bypasses full Unicode property checks.
+**Action:** Always prefer `split_ascii_whitespace()` over `split_whitespace()` when processing files with strict ASCII layouts (like `/proc/` metrics or network protocols) to reduce parsing overhead in hot paths.
