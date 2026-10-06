@@ -109,7 +109,8 @@ impl EnvironmentalVitals {
                 return None;
             }
         };
-        let iowait_str = match line.split_whitespace().nth(5) {
+        // Optimization: Use split_ascii_whitespace() to bypass full Unicode property checks on ASCII system files for faster parsing in hot paths
+        let iowait_str = match line.split_ascii_whitespace().nth(5) {
             Some(s) => s,
             None => {
                 tracing::warn!(
@@ -169,7 +170,8 @@ impl EnvironmentalVitals {
                 return None;
             }
         };
-        let first_part = match line.split_whitespace().next() {
+        // Optimization: Use split_ascii_whitespace() to bypass full Unicode property checks on ASCII system files for faster parsing in hot paths
+        let first_part = match line.split_ascii_whitespace().next() {
             Some(s) => s,
             None => {
                 tracing::warn!(
@@ -889,7 +891,8 @@ impl ResourceGuard {
         };
         for line in BufReader::new(file).lines().map_while(Result::ok) {
             if line.starts_with("VmRSS:") {
-                if let Some(size_str) = line.split_whitespace().nth(1) {
+                // Optimization: Use split_ascii_whitespace() to bypass full Unicode property checks on ASCII system files for faster parsing in hot paths
+                if let Some(size_str) = line.split_ascii_whitespace().nth(1) {
                     if let Ok(kb) = size_str.parse::<usize>() {
                         return Some(kb.saturating_mul(1024));
                     }
@@ -1129,7 +1132,8 @@ impl ResourceGuard {
                 return None;
             }
         };
-        let mut parts = line.split_whitespace().skip(1);
+        // Optimization: Use split_ascii_whitespace() to bypass full Unicode property checks on ASCII system files for faster parsing in hot paths
+        let mut parts = line.split_ascii_whitespace().skip(1);
 
         let user = match parts.next() {
             Some(s) => match s.parse::<u64>() {
@@ -1229,7 +1233,8 @@ impl ResourceGuard {
                 return None;
             }
         };
-        let mut parts = line.split_whitespace().skip(1);
+        // Optimization: Use split_ascii_whitespace() to bypass full Unicode property checks on ASCII system files for faster parsing in hot paths
+        let mut parts = line.split_ascii_whitespace().skip(1);
 
         let user = match parts.next() {
             Some(s) => match s.parse::<u64>() {
