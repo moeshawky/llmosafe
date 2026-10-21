@@ -159,14 +159,9 @@ impl RepetitionDetector {
         let mut seen: [u32; MAX_CONTEXT_LEN] = [0; MAX_CONTEXT_LEN];
         let mut count = 0;
         for &hash in self.history.iter() {
-            let mut found = false;
-            for &s in seen.iter().take(count) {
-                if s == hash {
-                    found = true;
-                    break;
-                }
-            }
-            if !found && count < MAX_CONTEXT_LEN {
+            // ⚡ Bolt: Use slice .contains() instead of manual iteration with .iter().take(count)
+            // to leverage direct CPU instructions and avoid iterator overhead.
+            if !seen[..count].contains(&hash) && count < MAX_CONTEXT_LEN {
                 seen[count] = hash;
                 count += 1;
             }
