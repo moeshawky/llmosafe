@@ -24,7 +24,7 @@
 #![allow(deprecated)]
 
 use llmosafe::*;
-use llmosafe::{sift_text, SiftedProof, SiftedSynapse, WorkingMemory};
+use llmosafe::{sift_text, SiftedSynapse, WorkingMemory};
 use proptest::prelude::*;
 
 #[test]
@@ -44,7 +44,7 @@ fn memory_shadow_validator_fires_on_overflow() {
     synapse.set_raw_entropy(500);
     synapse.set_has_bias(false);
     let sifted = SiftedSynapse::from_synapse(synapse);
-    let _ = memory.update(sifted, SiftedProof::for_testing());
+    let _ = memory.update(sifted::for_testing());
 }
 
 // ── Chain Monotonicity: entropy increases → severity increases ──
@@ -307,7 +307,7 @@ fn fault_injection_max_u16_entropy() {
 
     // WorkingMemory must not panic on max-value input
     let mut memory = WorkingMemory::<64>::new(500);
-    let result = memory.update(sifted, SiftedProof::for_testing());
+    let result = memory.update(sifted::for_testing());
     // Should fail with CognitiveInstability (0xFFFF > 50000)
     assert!(result.is_err());
 }
@@ -451,7 +451,7 @@ fn trend_respects_temporal_order_after_wraparound() {
         let mut synapse = Synapse::new();
         synapse.set_raw_entropy(i * 100);
         let sifted = SiftedSynapse::from_synapse(synapse);
-        let _ = memory.update(sifted, SiftedProof::for_testing());
+        let _ = memory.update(sifted::for_testing());
     }
 
     let trend = memory.trend();
