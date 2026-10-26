@@ -24,6 +24,7 @@
 #![allow(deprecated)]
 
 use llmosafe::*;
+#[allow(unused_imports)]
 use llmosafe::{sift_text, SiftedProof, SiftedSynapse, WorkingMemory};
 use proptest::prelude::*;
 
