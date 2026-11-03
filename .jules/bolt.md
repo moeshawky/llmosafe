@@ -1,0 +1,3 @@
+## 2024-11-03 - Fast-path ASCII Case Insensitive Substring Search
+**Learning:** In Rust's `no_std` slice searching, using `.windows(N).any(|w| w.eq_ignore_ascii_case(pattern))` is slow because it compares the entire window every time. For adversarial substring matching, pre-filtering by matching the first character (`window[0].to_ascii_lowercase() == pattern[0].to_ascii_lowercase()`) before checking the rest (`window[1..].eq_ignore_ascii_case(&pattern[1..])`) speeds up negative paths significantly (~50% faster).
+**Action:** Use a fast-path first-character check for naive substring searching in hot loops before invoking full slice-based case-insensitive comparisons.
