@@ -1,0 +1,3 @@
+## 2024-11-04 - split_ascii_whitespace optimization for procfs
+**Learning:** In Rust, parsing system files like `/proc/stat` or `/proc/loadavg` which are guaranteed to contain only ASCII data can be optimized by using `split_ascii_whitespace()` instead of `split_whitespace()`. The latter performs full Unicode property checks, yielding a significant performance overhead in hot paths (around 2x slower for simple lines).
+**Action:** Replace `split_whitespace()` with `split_ascii_whitespace()` when processing guaranteed ASCII system files in Linux `/proc` system files. Do not blindly apply it to general string processing modules (e.g. `llmosafe_detection.rs`, `llmosafe_sifter.rs`) where the input encoding is not mathematically guaranteed.
