@@ -356,9 +356,15 @@ impl ConfidenceTracker {
 
 #[cfg(feature = "std")]
 fn contains_ignore_ascii_case(text: &str, pattern: &str) -> bool {
-    text.as_bytes()
-        .windows(pattern.len())
-        .any(|window| window.eq_ignore_ascii_case(pattern.as_bytes()))
+    let p_bytes = pattern.as_bytes();
+    if p_bytes.is_empty() {
+        return true;
+    }
+    // ⚡ Bolt: Fast-path first byte check for performance
+    let first = p_bytes[0].to_ascii_lowercase();
+    text.as_bytes().windows(p_bytes.len()).any(|window| {
+        window[0].to_ascii_lowercase() == first && window.eq_ignore_ascii_case(p_bytes)
+    })
 }
 
 /// Adversarial pattern detector.
