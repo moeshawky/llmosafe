@@ -1,0 +1,3 @@
+## 2024-11-07 - Optimize guaranteed ASCII system file parsing
+**Learning:** When parsing system files guaranteed to contain only ASCII data (such as Linux system metrics in `/proc/stat`, `/proc/loadavg`, `/proc/self/status`, or `/proc/meminfo`), using `str::split_ascii_whitespace()` instead of `str::split_whitespace()` bypasses full Unicode property checks, yielding a significant performance improvement in hot paths.
+**Action:** Use `str::split_ascii_whitespace()` for data sources definitively confirmed as guaranteed ASCII to bypass full Unicode property checks and improve performance in hot paths.
