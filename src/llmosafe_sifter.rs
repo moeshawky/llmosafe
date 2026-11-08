@@ -529,16 +529,20 @@ pub fn calculate_utility(observation: &str, objective: &str) -> u16 {
         }
     }
 
+    // ⚡ Bolt: Fast-path by pre-calculating the active slice
+    let active_obj_words = &obj_words[..obj_len];
+
     let mut count = 0usize;
 
     for word_a in observation.split_whitespace() {
         let trimmed_a = word_a.trim_matches(|c: char| c.is_ascii_punctuation());
 
-        for word_b in obj_words.iter().take(obj_len) {
-            if trimmed_a.eq_ignore_ascii_case(word_b) {
-                count += 1;
-                break;
-            }
+        // ⚡ Bolt: Use explicit fast-path character matching by directly using the active slice iter()
+        if active_obj_words
+            .iter()
+            .any(|word_b| trimmed_a.eq_ignore_ascii_case(word_b))
+        {
+            count += 1;
         }
     }
 
